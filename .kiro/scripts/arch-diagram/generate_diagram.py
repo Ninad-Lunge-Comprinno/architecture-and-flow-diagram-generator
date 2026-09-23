@@ -579,7 +579,10 @@ def _validate_services(elements: list[tuple[str, dict]], default_provider: str) 
         provider = _validate_provider(node.get("provider") or default_provider)
         try:
             shapes.get_shape(provider, service)
+            # For AWS: get_shape_dynamic() is called automatically on unknown keys
+            # and never raises, so any AWS service key is accepted.
         except shapes.UnknownServiceError as exc:
+            # Only Azure/GCP catalog misses raise here; AWS uses dynamic fallback.
             raise SpecError(str(exc)) from exc
 
 
@@ -679,9 +682,12 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
                 # across, then DOWN into the target — no sibling-icon crossings.
                 row_top = src_row[0]     # top of this AZ row in abs coords
                 clear_y = row_top - 30   # 30px above the AZ row top (above subnets)
-                exit_xy = (0.5, 0.0)     # exit TOP of source
-                entry_xy = (0.5, 0.0)    # enter TOP of target
-                waypoints = [(scx, clear_y), (tcx, clear_y)]
+                # exitX=0.75 (top-right of source) shifts this vertical segment
+                # right of center so it doesn't overlap ECR->ECS which uses x=0.5
+                exit_src_x = sx + sw * 0.75
+                exit_xy = (0.75, 0.0)    # exit top-right of source
+                entry_xy = (0.5, 0.0)    # enter top-center of target
+                waypoints = [(exit_src_x, clear_y), (tcx, clear_y)]
                 return exit_xy, entry_xy, _dedup(waypoints)
             # Adjacent icons in same row: fall through to simple side-exit.
 
@@ -696,9 +702,14 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
             if src_row_idx is not None and tgt_row_idx is not None:
                 n_gaps_crossed = abs(tgt_row_idx - src_row_idx)
         if n_gaps_crossed >= 2 and az_rows:
-            # Multi-AZ skip: route via a right-side corridor to avoid
-            # overlapping intermediate AZ rows.
-            right_x = max(sx + sw, tx + tw) + 60  # corridor right of both icons
+            # Multi-AZ skip: route via a right-side corridor.
+            # Use a staggered x offset based on the target y so multiple
+            # replication edges (to different AZs) don't share the same
+            # vertical segment and cause visual overlap.
+            base_right_x = max(sx + sw, tx + tw) + 40
+            # Stagger: each target gets a unique corridor x based on its y position
+            stagger = int(abs(tcy - scy) / 200) * 20  # 20px extra per AZ apart
+            right_x = base_right_x + stagger
             exit_xy, entry_xy = (1.0, 0.5), (1.0, 0.5)
             waypoints = [(right_x, scy), (right_x, tcy)]
             return exit_xy, entry_xy, _dedup(waypoints)
@@ -790,6 +801,35 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     if _overlap_warnings:
         for w in _overlap_warnings:
             print(f"  ⚠  {w}", flush=True)
+
+    # Warn about regional/global AWS services placed inside VPC subnets.
+    # These services are not VPC-bound and should live in region.services.
+    _REGIONAL_ONLY = {
+        "dynamodb", "sqs", "sns", "s3", "s3_glacier", "cloudfront",
+        "route_53", "ses", "pinpoint", "eventbridge", "step_functions",
+        "athena", "glue", "emr", "quicksight", "lake_formation",
+        "bedrock", "sagemaker", "lambda", "api_gateway", "cloudwatch_2",
+        "cloudtrail", "config", "systems_manager", "organizations",
+        "identity_and_access_management", "iam", "codepipeline",
+        "codebuild", "codedeploy", "codecommit", "kinesis",
+        "kinesis_data_streams", "kinesis_data_firehose",
+        "kinesis_data_analytics", "redshift", "timestream", "keyspaces",
+    }
+    region_spec = page.get("region", {}) or {}
+    for az in (region_spec.get("vpc", {}) or {}).get("azs", []) or []:
+        for tier in ("public_subnet", "app_subnet", "db_subnet"):
+            subnet = az.get(tier)
+            if not subnet:
+                continue
+            for res in subnet.get("resources", []) or []:
+                svc = res.get("service", "")
+                if svc in _REGIONAL_ONLY:
+                    print(
+                        f"  ⚠  REGIONAL-SERVICE-IN-VPC: {res.get('id')!r} "
+                        f"(service={svc!r}) is a regional AWS service and should "
+                        f"be in region.services, not inside a VPC subnet.",
+                        flush=True
+                    )
 
     # Title block: position from the layout's __title node (top-left).
     title_node = next((n for n in lo.nodes if n.node_id == "__title"), None)

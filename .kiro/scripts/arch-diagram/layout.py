@@ -42,7 +42,7 @@ SUBNET_MIN_W = 300
 SUBNET_PAD_X = 40
 SUBNET_PAD_TOP = 50
 SUBNET_PAD_BOTTOM = 40
-SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM   # compact — 210px
+SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM + 40  # 250px — extra 40px so compute lanes sit inside app_subnet vertically
 
 TIER_GAP = 80
 AZ_INNER_PAD_X = 35
@@ -51,8 +51,8 @@ AZ_INNER_PAD_BOTTOM = 40
 AZ_GAP = 120
 
 LANE_W = ICON + 2 * 30
-LANE_GAP = 40
-LANE_OVERHANG = 20
+LANE_GAP = 50       # gap between vertical lane columns
+LANE_OVERHANG = 50   # = AZ_INNER_PAD_TOP: lane label sits in the AZ top padding band, above app_subnet label
 
 VPC_PAD_X = 65
 VPC_PAD_TOP = 80
@@ -64,6 +64,7 @@ REGION_SERVICES_Y = 65    # top of services icon row within region
 REGION_PAD_TOP = 240
 REGION_PAD_BOTTOM = 80
 REGION_RES_GAP = 45
+REGION_ROW_ICONS = 12   # max icons per row in region/global service rows
 
 CLOUD_PAD_X = 85
 CLOUD_GLOBAL_Y = 65       # top of global icon row within cloud
@@ -116,13 +117,32 @@ class Layout:
         self.abs_boxes[node.node_id] = (abs_x, abs_y, node.width, node.height)
 
 
-def _subnet_width(n_resources: int) -> float:
+def _subnet_width(n_resources: int, cols: int = 0) -> float:
+    """Compute subnet width for n icons in a grid.
+
+    If cols==0, auto-select: 1 for <=2 icons, 2 for more (matching _emit_subnet).
+    The effective per-icon footprint uses max(ICON, LABEL_WIDTH) so wrapped
+    labels never overflow the subnet box.
+    """
     n = max(1, n_resources)
-    # A wrapped label (labelWidth=160) can be wider than the 120px icon, so the
-    # effective per-resource footprint is max(ICON, LABEL_WIDTH). This prevents
-    # 2-line labels (e.g. "RDS Primary") from overflowing the subnet box.
+    if cols == 0:
+        cols = 1 if n <= 2 else 2
     effective_w = max(ICON, LABEL_WIDTH)
-    content = n * effective_w + (n - 1) * ICON_GAP
+    grid_cols = min(cols, n)
+    content = grid_cols * effective_w + (grid_cols - 1) * ICON_GAP
+    return max(SUBNET_MIN_W, content + 2 * SUBNET_PAD_X)
+
+
+def _subnet_height(n_resources: int, cols: int = 0) -> float:
+    """Compute subnet height for n icons in a grid with auto-cols."""
+    n = max(0, n_resources)
+    if n == 0:
+        return SUBNET_H  # empty subnet uses the default compact height
+    if cols == 0:
+        cols = 1 if n <= 2 else 2
+    rows = (n + cols - 1) // cols
+    grid_h = rows * ICON + (rows - 1) * ICON_GAP
+    return max(SUBNET_H, grid_h + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM)
     return max(SUBNET_MIN_W, content + 2 * SUBNET_PAD_X)
 
 
@@ -139,11 +159,28 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     groups = vpc.get("compute_groups", []) or []
     az_ids = [az["id"] for az in azs]
 
-    # ---- tier widths (uniform per tier) ----------------------------------
-    pub_w = max((_subnet_width(len((az.get("public_subnet") or {}).get("resources", [])))
+    # ---- tier widths (uniform) and per-AZ heights -----------------------
+    def _az_res(az, tier):
+        return (az.get(tier) or {}).get("resources", []) or []
+
+    pub_w = max((_subnet_width(len(_az_res(az, "public_subnet")))
                  for az in azs), default=SUBNET_MIN_W)
-    db_w = max((_subnet_width(len((az.get("db_subnet") or {}).get("resources", [])))
+    db_w = max((_subnet_width(len(_az_res(az, "db_subnet")))
                 for az in azs), default=SUBNET_MIN_W)
+
+    # Per-AZ row height: max of all subnet heights in that AZ (uniform across AZs)
+    def _az_row_height(az):
+        pub_h = _subnet_height(len(_az_res(az, "public_subnet")))
+        app_h = _subnet_height(len(_az_res(az, "app_subnet")))
+        db_h  = _subnet_height(len(_az_res(az, "db_subnet")))
+        return AZ_INNER_PAD_TOP + max(pub_h, app_h, db_h) + AZ_INNER_PAD_BOTTOM
+
+    # Use the tallest AZ row height as the uniform height (keeps grid alignment)
+    az_row_h = max((_az_row_height(az) for az in azs), default=AZ_INNER_PAD_TOP + SUBNET_H + AZ_INNER_PAD_BOTTOM)
+    # Compute subnet height for each tier as max across AZs
+    pub_h_uniform = max((_subnet_height(len(_az_res(az, "public_subnet"))) for az in azs), default=SUBNET_H)
+    app_h_uniform = max((_subnet_height(len(_az_res(az, "app_subnet"))) for az in azs), default=SUBNET_H)
+    db_h_uniform  = max((_subnet_height(len(_az_res(az, "db_subnet"))) for az in azs), default=SUBNET_H)
     lanes_w = (len(groups) * LANE_W + max(0, len(groups) - 1) * LANE_GAP) if groups else 0
     app_res_w = max((_subnet_width(len((az.get("app_subnet") or {}).get("resources", [])))
                      for az in azs), default=SUBNET_MIN_W)
@@ -154,7 +191,14 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     col_app_x = col_pub_x + pub_w + TIER_GAP
     col_db_x = col_app_x + app_w + TIER_GAP
     az_content_w = col_db_x + db_w + AZ_INNER_PAD_X
-    az_row_h = AZ_INNER_PAD_TOP + SUBNET_H + AZ_INNER_PAD_BOTTOM
+    # az_row_h computed dynamically above
+
+    # ---- Dynamic region top padding (accounts for multi-row services) ------
+    services = region.get("services", []) or []  # define here for padding calc
+    n_service_rows = max(1, (len(services) + REGION_ROW_ICONS - 1) // REGION_ROW_ICONS) if services else 1
+    # Each row occupies ICON + LABEL_BAND height + gap
+    services_block_h = n_service_rows * (ICON + LABEL_BAND) + (n_service_rows - 1) * REGION_RES_GAP
+    dynamic_region_pad_top = REGION_SERVICES_Y + services_block_h + REGION_RES_GAP
 
     # ---- VPC geometry ----------------------------------------------------
     vpc_content_x = VPC_LEFT_MARGIN
@@ -169,23 +213,28 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 
     # ---- region / cloud dimensions ---------------------------------------
     region_x = REGION_PAD_X
-    region_y = REGION_PAD_TOP
+    region_y = dynamic_region_pad_top
     # Region must be wide enough for BOTH the VPC and its shared-services row.
     services_list = region.get("services", []) or []
     n_services = len(services_list)
-    services_row_w = (n_services * ICON + max(0, n_services - 1) * REGION_RES_GAP
-                      if n_services else 0)
+    # Use the width of ONE wrapped row (max REGION_ROW_ICONS icons), not all services.
+    # The multi-row layout stacks rows vertically, so width is determined by the
+    # widest single row, not the total icon count.
+    icons_per_row = min(n_services, REGION_ROW_ICONS) if n_services else 0
+    services_row_w = (icons_per_row * ICON + max(0, icons_per_row - 1) * REGION_RES_GAP
+                      if icons_per_row else 0)
     region_width = max(vpc_width + 2 * REGION_PAD_X,
                        services_row_w + 2 * REGION_PAD_X)
-    region_height = REGION_PAD_TOP + vpc_height + REGION_PAD_BOTTOM
+    region_height = dynamic_region_pad_top + vpc_height + REGION_PAD_BOTTOM
 
     cloud_region_x = CLOUD_LEFT_EDGE
     cloud_region_y = CLOUD_PAD_TOP
-    # Cloud must be wide enough for BOTH the region and its global-services row.
+    # Cloud width: wide enough for the region and global-services row (also one row).
     global_row_list = page.get("global", []) or []
     n_global = len(global_row_list)
-    global_row_w = (n_global * ICON + max(0, n_global - 1) * REGION_RES_GAP
-                    if n_global else 0)
+    icons_per_global_row = min(n_global, REGION_ROW_ICONS) if n_global else 0
+    global_row_w = (icons_per_global_row * ICON + max(0, icons_per_global_row - 1) * REGION_RES_GAP
+                    if icons_per_global_row else 0)
     cloud_width = max(cloud_region_x + region_width + CLOUD_PAD_X,
                       CLOUD_LEFT_EDGE + global_row_w + CLOUD_PAD_X)
     cloud_height = CLOUD_PAD_TOP + region_height + CLOUD_PAD_BOTTOM
@@ -222,18 +271,22 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     region_abs_x = cloud_x + cloud_region_x
     region_abs_y = cloud_y + cloud_region_y
 
-    # ---- region-shared services row (centred within region) --------------
+    # ---- region-shared services rows (auto-wraps at REGION_ROW_ICONS per row) --
     services = region.get("services", []) or []
     if services:
-        row_w = len(services) * ICON + (len(services) - 1) * REGION_RES_GAP
         content_w_r = region_width - 2 * REGION_PAD_X
-        rx = REGION_PAD_X + max(0, (content_w_r - row_w) / 2)
-        for res in services:
-            n = Node(res["id"], "resource", "region", rx, REGION_SERVICES_Y, ICON, ICON,
-                     provider=res.get("provider", default_provider),
-                     service=res["service"], label=res.get("label"))
-            lo.add(n, region_abs_x + rx, region_abs_y + REGION_SERVICES_Y)
-            rx += ICON + REGION_RES_GAP
+        row_y = REGION_SERVICES_Y
+        for row_start in range(0, len(services), REGION_ROW_ICONS):
+            row = services[row_start:row_start + REGION_ROW_ICONS]
+            row_w = len(row) * ICON + (len(row) - 1) * REGION_RES_GAP
+            rx = REGION_PAD_X + max(0, (content_w_r - row_w) / 2)
+            for res in row:
+                n = Node(res["id"], "resource", "region", rx, row_y, ICON, ICON,
+                         provider=res.get("provider", default_provider),
+                         service=res["service"], label=res.get("label"))
+                lo.add(n, region_abs_x + rx, region_abs_y + row_y)
+                rx += ICON + REGION_RES_GAP
+            row_y += ICON + LABEL_BAND + REGION_RES_GAP
 
     # ---- VPC -------------------------------------------------------------
     lo.add(Node("vpc", "vpc", "region", region_x, region_y, vpc_width, vpc_height,
@@ -251,14 +304,18 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                vpc_abs_x + vpc_content_x, vpc_abs_y + ay)
         az_abs_x = vpc_abs_x + vpc_content_x
         az_abs_y = vpc_abs_y + ay
+        tier_heights = {"public_subnet": pub_h_uniform,
+                        "app_subnet": app_h_uniform,
+                        "db_subnet": db_h_uniform}
         for tier, col_x, w in (("public_subnet", col_pub_x, pub_w),
                                ("app_subnet", col_app_x, app_w),
                                ("db_subnet", col_db_x, db_w)):
             subnet = az.get(tier)
             if subnet:
+                th = tier_heights[tier]
                 _emit_subnet(lo, subnet, tier, parent=az["id"],
                              rel_x=col_x, rel_y=AZ_INNER_PAD_TOP,
-                             width=w, height=SUBNET_H,
+                             width=w, height=th,
                              abs_x=az_abs_x + col_x,
                              abs_y=az_abs_y + AZ_INNER_PAD_TOP,
                              default_provider=default_provider)
@@ -284,7 +341,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     # ---- compute-group vertical lanes ------------------------------------
     if groups and azs:
         first_y = az_y[az_ids[0]] + AZ_INNER_PAD_TOP
-        last_y = az_y[az_ids[-1]] + AZ_INNER_PAD_TOP + SUBNET_H
+        last_y = az_y[az_ids[-1]] + AZ_INNER_PAD_TOP + app_h_uniform
         lane_top = first_y - LANE_OVERHANG
         # Ensure the lane bottom does not overlap the last AZ's bottom border
         az_last_bottom = az_y[az_ids[-1]] + az_row_h - AZ_INNER_PAD_BOTTOM
@@ -400,16 +457,23 @@ def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
     n = len(resources)
     if n == 0:
         return
-    # centre the icon row horizontally within the subnet
-    row_w = n * ICON + (n - 1) * ICON_GAP
-    start_x = max(SUBNET_PAD_X, (width - row_w) / 2)
-    x = start_x
-    for res in resources:
-        node = Node(res["id"], "resource", subnet["id"], x, SUBNET_PAD_TOP, ICON, ICON,
+    # Auto-apply grid layout: use cols=1 for <=2 icons, cols=2 for more
+    # (can be overridden by subnet.get("cols")), keeping subnets compact.
+    default_cols = 1 if n <= 2 else 2
+    cols = int(subnet.get("cols", default_cols))
+    rows = (n + cols - 1) // cols
+    grid_w = cols * ICON + (cols - 1) * ICON_GAP
+    grid_h = rows * ICON + (rows - 1) * ICON_GAP
+    start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
+    for idx, res in enumerate(resources):
+        col_i = idx % cols
+        row_i = idx // cols
+        rx = start_x + col_i * (ICON + ICON_GAP)
+        ry = SUBNET_PAD_TOP + row_i * (ICON + ICON_GAP)
+        node = Node(res["id"], "resource", subnet["id"], rx, ry, ICON, ICON,
                     provider=res.get("provider", default_provider),
                     service=res["service"], label=res.get("label"))
-        lo.add(node, abs_x + x, abs_y + SUBNET_PAD_TOP)
-        x += ICON + ICON_GAP
+        lo.add(node, abs_x + rx, abs_y + ry)
 
 
 def all_ids(lo: Layout) -> set:

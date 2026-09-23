@@ -48,10 +48,18 @@ def test_gcp_lookup():
     assert s.provider == "gcp"
 
 
-def test_unknown_service_raises():
+def test_unknown_service_returns_dynamic_shape():
+    """AWS unknown service keys now return a dynamically-derived Shape (never raise)."""
+    s = shapes.get_shape("aws", "does_not_exist_in_catalog")
+    assert isinstance(s, shapes.Shape)
+    assert s.stencil == "mxgraph.aws4.does_not_exist_in_catalog"
+
+
+def test_unknown_azure_service_raises():
+    """Azure/GCP services without a catalog entry still raise UnknownServiceError."""
     with pytest.raises(shapes.UnknownServiceError) as exc:
-        shapes.get_shape("aws", "does_not_exist")
-    assert "does_not_exist" in str(exc.value)
+        shapes.get_shape("azure", "not_a_real_azure_service_xyz")
+    assert "not_a_real_azure_service_xyz" in str(exc.value)
 
 
 def test_unknown_provider_raises():

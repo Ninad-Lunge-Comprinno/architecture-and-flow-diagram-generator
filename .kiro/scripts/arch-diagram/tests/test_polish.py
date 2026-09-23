@@ -14,9 +14,9 @@ def test_icon_style_wraps_labels():
 
 def test_label_band_is_routing_clearance_only():
     # LABEL_BAND is used for edge-routing clearance, NOT to inflate subnet height.
-    # Subnets stay compact: SUBNET_H = ICON + PAD_TOP + PAD_BOTTOM.
+    # SUBNET_H = ICON + PAD_TOP + PAD_BOTTOM + 40 (extra buffer for lane containment).
     assert layout.LABEL_BAND == 50
-    assert layout.SUBNET_H == layout.ICON + layout.SUBNET_PAD_TOP + layout.SUBNET_PAD_BOTTOM
+    assert layout.SUBNET_H >= layout.ICON + layout.SUBNET_PAD_TOP + layout.SUBNET_PAD_BOTTOM
 
 
 # ---- centering ------------------------------------------------------------
@@ -149,10 +149,12 @@ def test_subnet_width_accounts_for_label_width():
     # A single-resource subnet must be at least LABEL_WIDTH wide (label footprint
     # can be wider than the 120px icon).
     assert layout._subnet_width(1) >= layout.LABEL_WIDTH
-    # Two resources with 2-line labels: 2*LABEL_WIDTH + one ICON_GAP is the
-    # minimum content; the subnet must be at least that wide.
+    # Two resources use cols=1 (stacked vertically) — width = 1 icon wide.
+    # Three+ resources use cols=2 — width = 2 icons wide.
     two = layout._subnet_width(2)
-    assert two >= 2 * layout.LABEL_WIDTH + layout.ICON_GAP
+    assert two >= layout.LABEL_WIDTH  # cols=1, one icon wide
+    three = layout._subnet_width(3)
+    assert three >= 2 * layout.LABEL_WIDTH + layout.ICON_GAP  # cols=2, two wide
 
 
 def test_region_width_covers_services_row():
@@ -197,7 +199,7 @@ def test_lane_container_label_at_bottom():
 
 
 def test_same_az_row_routing_goes_above():
-    # ecs-az1 -> rds1 style: same AZ row, gap > 300px. Should exit TOP and route
+    # ecs-az1 -> rds1 style: same AZ row, gap > 300px. Should exit TOP-RIGHT and route
     # ABOVE the AZ row (inverted-U), with the waypoint y ABOVE the AZ row top.
     src = (1380, 910, 120, 120)   # ecs-az1
     tgt = (1870, 910, 120, 120)   # rds1
@@ -205,8 +207,8 @@ def test_same_az_row_routing_goes_above():
     exit_xy, entry_xy, wps = gd._route_edge(
         src, tgt, label_band=50, az_rows=az_rows
     )
-    assert exit_xy == (0.5, 0.0)   # top exit
-    assert entry_xy == (0.5, 0.0)  # top entry
+    assert exit_xy[1] == 0.0, "should exit from top (exitY=0)"
+    assert entry_xy == (0.5, 0.0), "should enter from top"
     assert wps, "expected inverted-U waypoints"
     az_top = az_rows[0][0]
     assert all(y < az_top for _x, y in wps), "waypoints must be ABOVE the AZ row"

@@ -1,0 +1,224 @@
+provider: aws
+metadata:
+  project: "DataForge"
+  version: "1.0"
+  date: "2026-09-23"
+  creator: "Ninad"
+  reviewer: "TBD"
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53, service: route_53, label: "Route 53" }
+      - { id: cf, service: cloudfront, label: "CloudFront" }
+      - { id: ga, service: global_accelerator, label: "Global Accelerator" }
+      - { id: s3, service: s3, label: "S3 Data Lake" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+      - { id: org, service: organizations, label: "Organizations" }
+
+    edge:
+      - { id: users, service: users, label: "Users" }
+      - { id: mobile, service: mobile_client, label: "Mobile Client" }
+      - { id: waf, service: waf, label: "WAF" }
+      - { id: shield, service: shield, label: "Shield" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: apigw, service: api_gateway, label: "API Gateway" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+
+    region:
+      label: "us-east-1"
+      services:
+        # edge auth / api
+        - { id: cognito, service: cognito, label: "Cognito" }
+        - { id: appsync, service: appsync, label: "AppSync" }
+        - { id: acm, service: certificate_manager_3, label: "ACM" }
+        # networking extras
+        - { id: tgw, service: transit_gateway, label: "Transit Gateway" }
+        - { id: dx, service: direct_connect, label: "Direct Connect" }
+        - { id: vpn, service: vpn, label: "VPN" }
+        - { id: vpce, service: endpoints, label: "VPC Endpoints" }
+        - { id: privatelink, service: vpc_privatelink, label: "PrivateLink" }
+        - { id: netfw, service: network_firewall, label: "Network Firewall" }
+        # serverless / event compute
+        - { id: lambda, service: lambda, label: "Lambda" }
+        - { id: batch, service: batch, label: "Batch" }
+        - { id: apprunner, service: app_runner, label: "App Runner" }
+        - { id: beanstalk, service: elastic_beanstalk, label: "Elastic Beanstalk" }
+        # registry / cicd
+        - { id: ecr, service: ecr, label: "ECR" }
+        - { id: codepipeline, service: codepipeline, label: "CodePipeline" }
+        - { id: codebuild, service: codebuild, label: "CodeBuild" }
+        - { id: codedeploy, service: codedeploy, label: "CodeDeploy" }
+        - { id: codecommit, service: codecommit, label: "CodeCommit" }
+        - { id: codeartifact, service: codeartifact, label: "CodeArtifact" }
+        - { id: amplify, service: amplify, label: "Amplify" }
+        # streaming / integration
+        - { id: kds, service: kinesis_data_streams, label: "Kinesis Data Streams" }
+        - { id: kdf, service: kinesis_data_firehose, label: "Kinesis Firehose" }
+        - { id: kda, service: kinesis_data_analytics, label: "Kinesis Analytics" }
+        - { id: msk, service: managed_streaming_for_kafka, label: "MSK" }
+        - { id: sqs, service: sqs, label: "SQS" }
+        - { id: sns, service: sns, label: "SNS" }
+        - { id: eventbridge, service: eventbridge, label: "EventBridge" }
+        - { id: mq, service: mq, label: "MQ" }
+        - { id: sfn, service: step_functions, label: "Step Functions" }
+        - { id: ses, service: ses, label: "SES" }
+        - { id: pinpoint, service: pinpoint, label: "Pinpoint" }
+        - { id: appflow, service: appflow, label: "AppFlow" }
+        # analytics / big data
+        - { id: glue, service: glue, label: "Glue" }
+        - { id: emr, service: emr, label: "EMR" }
+        - { id: athena, service: athena, label: "Athena" }
+        - { id: quicksight, service: quicksight, label: "QuickSight" }
+        - { id: lakeformation, service: lake_formation, label: "Lake Formation" }
+        - { id: datapipeline, service: data_pipeline, label: "Data Pipeline" }
+        - { id: opensearch, service: elasticsearch_service, label: "OpenSearch" }
+        - { id: cleanrooms, service: clean_rooms, label: "Clean Rooms" }
+        # ai / ml
+        - { id: bedrock, service: bedrock, label: "Bedrock" }
+        - { id: sagemaker, service: sagemaker, label: "SageMaker" }
+        - { id: comprehend, service: comprehend, label: "Comprehend" }
+        - { id: textract, service: textract, label: "Textract" }
+        - { id: rekognition, service: rekognition_2, label: "Rekognition" }
+        - { id: transcribe, service: transcribe, label: "Transcribe" }
+        - { id: polly, service: polly, label: "Polly" }
+        - { id: translate, service: translate, label: "Translate" }
+        - { id: kendra, service: kendra, label: "Kendra" }
+        - { id: lex, service: lex_v2, label: "Lex" }
+        - { id: forecast, service: forecast, label: "Forecast" }
+        - { id: personalize, service: personalize, label: "Personalize" }
+        # iot
+        - { id: iotcore, service: iot_core, label: "IoT Core" }
+        - { id: greengrass, service: iot_greengrass, label: "IoT Greengrass" }
+        - { id: sitewise, service: iot_sitewise, label: "IoT SiteWise" }
+        - { id: iotevents, service: iot_events, label: "IoT Events" }
+        - { id: iotanalytics, service: iot_analytics, label: "IoT Analytics" }
+        # storage extras
+        - { id: efs, service: efs, label: "EFS" }
+        - { id: fsx, service: fsx, label: "FSx" }
+        - { id: glacier, service: s3_glacier, label: "S3 Glacier" }
+        - { id: sgw, service: storage_gateway, label: "Storage Gateway" }
+        - { id: datasync, service: datasync, label: "DataSync" }
+        - { id: backup, service: backup, label: "Backup" }
+        - { id: snow, service: snow_family, label: "Snow Family" }
+        - { id: dms, service: database_migration_service, label: "DMS" }
+        - { id: redshift, service: redshift, label: "Redshift" }
+        # security & compliance
+        - { id: sso, service: single_sign_on, label: "IAM Identity Center" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: guardduty, service: guardduty, label: "GuardDuty" }
+        - { id: securityhub, service: security_hub, label: "Security Hub" }
+        - { id: inspector, service: inspector, label: "Inspector" }
+        - { id: macie, service: macie, label: "Macie" }
+        - { id: detective, service: detective, label: "Detective" }
+        - { id: fwmanager, service: firewall_manager, label: "Firewall Manager" }
+        # management / governance / observability
+        - { id: cloudwatch, service: cloudwatch_2, label: "CloudWatch" }
+        - { id: cloudtrail, service: cloudtrail, label: "CloudTrail" }
+        - { id: config, service: config, label: "Config" }
+        - { id: ssm, service: systems_manager, label: "Systems Manager" }
+        - { id: cfn, service: cloudformation, label: "CloudFormation" }
+        - { id: controltower, service: control_tower, label: "Control Tower" }
+        - { id: servicecatalog, service: service_catalog, label: "Service Catalog" }
+        - { id: autoscaling, service: auto_scaling2, label: "Auto Scaling" }
+        - { id: trustedadvisor, service: trusted_advisor, label: "Trusted Advisor" }
+        - { id: xray, service: x_ray, label: "X-Ray" }
+        - { id: grafana, service: managed_grafana, label: "Managed Grafana" }
+
+      vpc:
+        label: "DataForge VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources: [ { id: nat1, service: nat_gateway, label: "NAT Gateway" } ]
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+                - { id: aurora1, service: aurora, label: "Aurora" }
+                - { id: rds1, service: rds, label: "RDS" }
+                - { id: ddb1, service: dynamodb, label: "DynamoDB" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: cache2, service: memorydb, label: "MemoryDB" }
+                - { id: aurora2, service: aurora, label: "Aurora Replica" }
+                - { id: docdb2, service: documentdb, label: "DocumentDB" }
+                - { id: neptune2, service: neptune, label: "Neptune" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: timestream3, service: timestream, label: "Timestream" }
+                - { id: keyspaces3, service: keyspaces, label: "Keyspaces" }
+                - { id: aurora3, service: aurora, label: "Aurora Replica" }
+        compute_groups:
+          - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group (EC2)" }
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Cluster" }
+
+    edges:
+      - { source: users, target: waf, label: "https" }
+      - { source: waf, target: alb, label: "filtered" }
+      - { source: alb, target: ecs-az1, label: "route" }
+      - { source: ecs-az1, target: cache1, label: "cache" }
+      - { source: ecs-az1, target: aurora1, label: "sql" }
+      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
+      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
+      - { source: ecr, target: ecs-az1, label: "deploy", dashed: true }
+      - { source: eks-az2, target: rds1, label: "sql" }
+
+  - name: "Flow Diagram"
+    type: flow
+    nodes:
+      - { id: f_devices, service: iot_core, label: "1. Smart shelves / IoT" }
+      - { id: f_stream, service: kinesis_data_streams, label: "2. Kinesis ingest" }
+      - { id: f_firehose, service: kinesis_data_firehose, label: "3. Firehose" }
+      - { id: f_s3, service: s3, label: "4. S3 raw zone" }
+      - { id: f_glue, service: glue, label: "5. Glue ETL" }
+      - { id: f_athena, service: athena, label: "6. Athena query" }
+      - { id: f_sagemaker, service: sagemaker, label: "7. SageMaker train" }
+      - { id: f_bedrock, service: bedrock, label: "8. Bedrock inference" }
+      - { id: f_quicksight, service: quicksight, label: "9. QuickSight" }
+    edges:
+      - { source: f_devices, target: f_stream, label: "telemetry" }
+      - { source: f_stream, target: f_firehose, label: "buffer" }
+      - { source: f_firehose, target: f_s3, label: "land" }
+      - { source: f_s3, target: f_glue, label: "crawl" }
+      - { source: f_glue, target: f_athena, label: "catalog" }
+      - { source: f_glue, target: f_sagemaker, label: "features" }
+      - { source: f_sagemaker, target: f_bedrock, label: "model" }
+      - { source: f_athena, target: f_quicksight, label: "visualize" }
+      - { source: f_bedrock, target: f_quicksight, label: "recommendations" }

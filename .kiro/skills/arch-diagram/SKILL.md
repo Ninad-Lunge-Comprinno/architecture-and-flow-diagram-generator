@@ -153,6 +153,13 @@ The engine detects:
 6. **Don't declare CloudFront in both `global` and `edge`** — pick one; `global` is preferred for CloudFront unless you need a WAF edge-strip ordering.
 7. **Don't connect every service to every other service** — only primary traffic flows and key dependencies; monitoring (CloudWatch) and security (GuardDuty) are implied.
 8. **Don't declare more than one IGW** — one IGW per VPC.
+9. **Don't place regional/global services inside VPC subnets.** These are NOT VPC-bound:
+   - DynamoDB, SQS, SNS, S3, SES, EventBridge, Step Functions, Lambda (default mode), API Gateway
+   - Kinesis, Athena, Glue, EMR, Redshift, QuickSight, Bedrock, SageMaker
+   - CloudWatch, CloudTrail, IAM, CodePipeline, Timestream, Keyspaces
+   They all belong in `region.services`. Only EC2, Fargate, EKS nodes, RDS, Aurora, ElastiCache, MemoryDB, Neptune, and DocumentDB belong in VPC subnets.
+10. **Don't put too many icons in one subnet** — the engine auto-applies a 2-column grid when a subnet has >2 icons (taller, not wider). Keep db_subnet to 2 icons max per AZ (e.g. ElastiCache + Aurora) for readability.
+11. **For large architectures with many region services** — the engine wraps them into rows of 12 automatically. Include only services directly relevant to the architecture.
 9. **Don't draw direct edges from compute nodes to global services (S3, CloudFront) on the architecture page** — these are structural access patterns (via NAT/VPC endpoint), not traffic-flow arrows. They belong on the Flow Diagram page only.
 10. **Don't draw users → CloudFront on the architecture page.** Users connect to WAF. CloudFront sits in the `global` row for informational/CDN context only. The path User → CloudFront → WAF → ALB is implied; you only need `users → waf` on the diagram.
 
@@ -229,7 +236,28 @@ Tell the user:
 
 ## Extending the shape catalog
 
-If a service the user needs isn't in the catalog:
-1. Add to `_AWS` / `_AZURE` / `_GCP` in `shapes.py`
-2. Add matching row to `references/shapes-<provider>.md`
-3. Run `pytest` to confirm no drift
+The generator now handles **any AWS service key** without crashing:
+
+- **Known services** (120+ in catalog): exact stencil + verified color.
+- **Unknown AWS services**: the engine automatically derives:
+  - stencil name = `mxgraph.aws4.<key>` (matches draw.io's naming convention)
+  - category color = inferred from keyword patterns in the key name
+  - label = human-readable from the key
+
+This means you can use any AWS service key directly in the spec — e.g.
+`service: timestream`, `service: clean_rooms`, `service: verified_access` —
+and the generator will produce a reasonable icon. draw.io will render it using
+the built-in stencil if it exists, or fall back to a generic shape.
+
+### For brand-new or unusual services
+If you need to confirm the exact draw.io stencil name for a service just
+announced by AWS:
+
+1. Use the **AWS Documentation MCP** (available as `awslabs.aws-documentation-mcp-server`):
+   ```
+   search_documentation("AWS <ServiceName> draw.io architecture icon")
+   ```
+2. Or search the [draw.io AWS stencil list](https://github.com/jgraph/drawio/tree/dev/src/main/webapp/stencils/aws4)
+   for the exact stencil suffix.
+3. Add it permanently: add to `_AWS` in `shapes.py` + matching row in
+   `references/shapes-aws.md` + run `pytest` to confirm no drift.

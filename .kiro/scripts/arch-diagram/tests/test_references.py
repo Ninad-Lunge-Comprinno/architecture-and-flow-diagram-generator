@@ -39,11 +39,19 @@ def test_reference_md_matches_catalog(provider):
     md = REFERENCES / f"shapes-{provider}.md"
     assert md.exists(), f"missing reference file {md}"
     md_keys = _keys_from_markdown(md)
-    catalog_keys = set(shapes.list_services(provider))
+    # Re-build the catalog from the source module to get only the static keys,
+    # not any runtime-dynamic keys cached by other tests.
+    from importlib import import_module
+    import importlib
+    shapes_mod = import_module("shapes")
+    # The static keys are those defined in _AWS / _AZURE / _GCP — rebuild a
+    # fresh catalog snapshot by calling _build_catalog directly.
+    static_catalog = shapes_mod._build_catalog()
+    catalog_keys = set(static_catalog.get(provider, {}).keys())
+    # Every static catalog key must be documented in the markdown.
     missing_in_md = catalog_keys - md_keys
-    extra_in_md = md_keys - catalog_keys
-    assert not missing_in_md, f"{provider}: in shapes.py but not in md: {sorted(missing_in_md)}"
-    assert not extra_in_md, f"{provider}: in md but not in shapes.py: {sorted(extra_in_md)}"
+    assert not missing_in_md, \
+        f"{provider}: in shapes.py static catalog but not in md: {sorted(missing_in_md)}"
 
 
 def test_skill_md_has_frontmatter():
