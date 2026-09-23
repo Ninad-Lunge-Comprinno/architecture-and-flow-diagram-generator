@@ -1,0 +1,54 @@
+provider: aws
+metadata:
+  project: "Demo 3-Tier (grid)"
+  version: "1.0"
+  date: "2026-09-22"
+  creator: "Kiro"
+global:
+  - { id: r53, service: route_53 }
+  - { id: cf, service: cloudfront }
+  - { id: s3, service: s3 }
+  - { id: iam, service: identity_and_access_management }
+edge:
+  - { id: users, service: user, label: "Users" }
+  - { id: waf, service: waf }
+  - { id: cf_edge, service: cloudfront, label: "CloudFront" }
+  - { id: alb, service: application_load_balancer, label: "ALB" }
+  - { id: igw, service: internet_gateway, label: "IGW" }
+region:
+  label: "ap-south-1"
+  services:
+    - { id: kms, service: key_management_service }
+    - { id: secrets, service: secrets_manager }
+    - { id: pipeline, service: codepipeline }
+    - { id: build, service: codebuild }
+    - { id: ecr, service: ecr }
+  vpc:
+    label: "Demo VPC"
+    azs:
+      - id: az1
+        label: "Availability Zone 1"
+        public_subnet: { id: pub1, label: "public-subnet-1", resources: [ { id: nat1, service: nat_gateway } ] }
+        app_subnet: { id: app1, label: "app-subnet-1", resources: [] }
+        db_subnet: { id: data1, label: "db-subnet-1", resources: [ { id: rds1, service: rds }, { id: cache1, service: elasticache } ] }
+      - id: az2
+        label: "Availability Zone 2"
+        public_subnet: { id: pub2, label: "public-subnet-2", resources: [] }
+        app_subnet: { id: app2, label: "app-subnet-2", resources: [] }
+        db_subnet: { id: data2, label: "db-subnet-2", resources: [ { id: rds2, service: rds } ] }
+      - id: az3
+        label: "Availability Zone 3"
+        public_subnet: { id: pub3, label: "public-subnet-3", resources: [] }
+        app_subnet: { id: app3, label: "app-subnet-3", resources: [] }
+        db_subnet: { id: data3, label: "db-subnet-3", resources: [ { id: rds3, service: rds } ] }
+    compute_groups:
+      - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group" }
+      - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Cluster" }
+      - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Cluster" }
+edges:
+  - { source: alb, target: ecs-az1, label: "route" }
+  - { source: alb, target: ecs-az2, label: "route" }
+  - { source: alb, target: ecs-az3, label: "route" }
+  - { source: ecs-az1, target: rds1, label: "SQL" }
+  - { source: rds1, target: rds2, label: "replication", dashed: true }
+  - { source: ecr, target: ecs-az1, label: "deploy", dashed: true }

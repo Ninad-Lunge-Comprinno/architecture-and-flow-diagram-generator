@@ -1,0 +1,35 @@
+{
+  "name": "arch-diagram",
+  "description": "Architecture diagram generator for cloud migration projects. Invokes the arch-diagram skill to draft specs and generate draw.io diagrams. Also calls awsdac for a PNG preview when available.",
+  "tools": ["read", "write", "shell", "grep", "glob"],
+  "allowedTools": ["read", "grep", "glob"],
+  "toolsSettings": {
+    "shell": {
+      "allowedCommands": [
+        "python.*generate_diagram.*",
+        "python.*-m pytest.*",
+        "\\.venv/bin/python.*"
+      ],
+      "autoAllowReadonly": true
+    },
+    "write": {
+      "allowedPaths": [
+        "**/*.spec.yaml",
+        "**/*.drawio.xml",
+        ".kiro/**"
+      ]
+    }
+  },
+  "resources": [
+    "skill://.kiro/skills/*/SKILL.md",
+    "file://.kiro/steering/**/*.md"
+  ],
+  "mcpServers": {
+    "awsdac-mcp-server": {
+      "command": "awsdac-mcp-server",
+      "args": [],
+      "disabled": false
+    }
+  },
+  "welcomeMessage": "Architecture Diagram Generator ready. Tell me about your migration project and I'll draft a spec and generate a draw.io diagram matching your firm's house style."
+}

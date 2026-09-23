@@ -1,0 +1,10 @@
+[project]
+name = "arch-diagram-generator"
+version = "0.1.0"
+description = "Kiro skill helper: generate draw.io architecture and flow diagrams from a structured spec."
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0"]
+
+[tool.pytest.ini_options]
+pythonpath = [".kiro/scripts/arch-diagram"]
+testpaths = [".kiro/scripts/arch-diagram/tests"]
