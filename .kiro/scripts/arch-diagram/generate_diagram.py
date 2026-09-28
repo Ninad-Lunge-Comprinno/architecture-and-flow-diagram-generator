@@ -43,7 +43,7 @@ PAGE_ATTRS = {
 }
 
 ICON_SIZE = 120
-EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=4;"
+EDGE_STYLE = ("edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;""strokeWidth=4;fontStyle=1;fontSize=11;fontColor=#000000;")
 
 
 # --------------------------------------------------------------------------
@@ -903,9 +903,65 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     return diagram
 
 
+def _flow_layout(nodes: list[dict], edges: list[dict]) -> dict[str, tuple[float, float]]:
+    """Compute a layered (top-down) layout for flow nodes.
+
+    Nodes with no incoming edges form the first layer (top).
+    Each subsequent layer contains nodes whose predecessors are all placed.
+    Within a layer, nodes are spread horizontally centred on the canvas.
+    If a node has an explicit x/y in its spec dict those override the computed position.
+
+    Returns: {node_id: (x, y)} in absolute page coordinates.
+    """
+    STEP_X = ICON_SIZE + 220   # horizontal spacing
+    STEP_Y = ICON_SIZE + layout.LABEL_BAND + 160   # vertical spacing
+    PAD_X = 60
+    PAD_Y = 60
+
+    # Build adjacency
+    incoming: dict[str, set] = {n["id"]: set() for n in nodes}
+    for e in edges:
+        if e["target"] in incoming:
+            incoming[e["target"]].add(e["source"])
+
+    # Topological layers
+    placed: set = set()
+    layers: list[list[str]] = []
+    remaining = [n["id"] for n in nodes]
+    while remaining:
+        layer = [nid for nid in remaining if incoming[nid] <= placed]
+        if not layer:
+            # Cycle or disconnected — put remaining in a layer
+            layer = remaining[:]
+        layers.append(layer)
+        for nid in layer:
+            placed.add(nid)
+        remaining = [nid for nid in remaining if nid not in placed]
+
+    # Compute max layer width for centering
+    max_layer_w = max(len(l) for l in layers) if layers else 1
+    canvas_w = max_layer_w * STEP_X
+
+    positions: dict[str, tuple[float, float]] = {}
+    y = PAD_Y
+    for layer in layers:
+        layer_w = len(layer) * STEP_X - (STEP_X - ICON_SIZE)
+        x_start = PAD_X + (canvas_w - layer_w) / 2
+        for col_i, nid in enumerate(layer):
+            positions[nid] = (x_start + col_i * STEP_X, y)
+        y += STEP_Y
+
+    return positions
+
+
 def build_flow_page(page: dict, default_provider: str, diagram_id: str,
                     meta: Optional[dict] = None) -> Diagram:
-    """Build a flow page: a flat sequence of nodes with labeled edges."""
+    """Build a flow page using a layered top-down layout.
+
+    Nodes are arranged in topological layers (sources at top, sinks at bottom).
+    An outer border encloses the whole page. Edges use connection-point routing.
+    Spec nodes may override position with explicit 'x' and 'y' fields.
+    """
     nodes = page.get("nodes", [])
     if not nodes:
         raise SpecError(f"Flow page {page.get('name')!r} has no 'nodes'.")
@@ -922,29 +978,40 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
     _check_edges(page.get("edges", []), ids, page.get("name", "flow"))
 
     diagram = Diagram(name=page.get("name", "Flow Diagram"), diagram_id=diagram_id)
-    if meta:
-        diagram.add_title_block(meta)
 
-    # Sequential placement: a horizontal row wrapping every N nodes. Row pitch
-    # includes the label band so wrapped 2-line labels never touch the next row.
-    step_x = ICON_SIZE + 150
-    step_y = ICON_SIZE + layout.LABEL_BAND + 110
-    per_row = 5
+    # Compute layered positions (spec x/y overrides if provided)
+    auto_pos = _flow_layout(nodes, page.get("edges", []))
     boxes: dict[str, tuple[float, float, float, float]] = {}
-    for idx, node in enumerate(nodes):
-        col = idx % per_row
-        row = idx // per_row
-        x = node.get("x", col * step_x + 40)
-        y = node.get("y", row * step_y + 60)
+
+    for node in nodes:
+        nid = node["id"]
+        auto_x, auto_y = auto_pos.get(nid, (40, 60))
+        x = node.get("x", auto_x)
+        y = node.get("y", auto_y)
         diagram.add_icon(
             provider=node.get("provider", default_provider),
             service=node["service"],
             label=node.get("label"),
             x=x,
             y=y,
-            cell_id=node["id"],
+            cell_id=nid,
         )
-        boxes[node["id"]] = (x, y, ICON_SIZE, ICON_SIZE)
+        boxes[nid] = (x, y, ICON_SIZE, ICON_SIZE)
+
+    # Title block (page 1 only, meta provided by build_document)
+    if meta:
+        # Place title above the flow nodes (negative y so it sits above)
+        diagram.add_title_block(meta, x=40, y=-220)
+
+    # Outer border enclosing all flow nodes
+    if boxes:
+        all_x = [b[0] for b in boxes.values()]
+        all_y = [b[1] for b in boxes.values()]
+        bx = min(all_x) - 40
+        by = min(all_y) - 40
+        bw = max(b[0] + b[2] for b in boxes.values()) - bx + 40
+        bh = max(b[1] + b[3] for b in boxes.values()) - by + 40 + layout.LABEL_BAND
+        diagram.add_outer_border(bx, by, bw, bh, margin=0)
 
     for edge in page.get("edges", []):
         src, tgt = edge["source"], edge["target"]

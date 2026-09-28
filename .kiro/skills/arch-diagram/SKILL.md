@@ -61,7 +61,6 @@ edge:      Users, WAF, API Gateway
 region.services: Lambda, DynamoDB, SQS, SNS, CloudWatch, Secrets Manager
 (no VPC required unless Lambda needs VPC access)
 ```
-
 ### Microservices / EKS
 ```
 Same as 3-tier but:
@@ -76,6 +75,34 @@ global: S3, IAM
 region.services: Glue, Step Functions, Lambda, Athena, QuickSight, CloudWatch
 vpc (optional): EMR or Redshift cluster in db_subnet
 ```
+
+### Flow Diagram (page 2)
+The Flow Diagram page uses a **layered top-down layout**:
+- Nodes with no incoming edges go in the **top layer** (sources)
+- Each subsequent layer contains nodes whose predecessors are already placed
+- Within a layer, nodes are spread horizontally and centred
+- The engine computes layout automatically from the edge graph topology
+- You may override any node's position with explicit `x` and `y` in the spec
+
+Good flow page spec:
+```yaml
+- name: "Flow Diagram"
+  type: flow
+  nodes:
+    - { id: f_user, service: users, label: "User" }
+    - { id: f_waf, service: waf, label: "WAF" }
+    - { id: f_alb, service: application_load_balancer, label: "ALB" }
+    - { id: f_ecs, service: ecs, label: "ECS Fargate" }
+    - { id: f_cache, service: elasticache, label: "ElastiCache" }  # sibling
+    - { id: f_db, service: aurora, label: "Aurora" }               # sibling
+  edges:
+    - { source: f_user, target: f_waf }
+    - { source: f_waf, target: f_alb }
+    - { source: f_alb, target: f_ecs }
+    - { source: f_ecs, target: f_cache, label: "cache" }
+    - { source: f_ecs, target: f_db, label: "SQL" }
+```
+This produces: user→waf→alb→ecs vertically, then cache and aurora side-by-side below ecs.
 
 ---
 

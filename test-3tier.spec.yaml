@@ -1,0 +1,115 @@
+provider: aws
+metadata:
+  project: "3-Tier 3-AZ Architecture"
+  version: "1.0"
+  date: "2026-09-28"
+  creator: "Test"
+  reviewer: "TBD"
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53, service: route_53 }
+      - { id: cf, service: cloudfront }
+      - { id: s3, service: s3 }
+      - { id: iam, service: identity_and_access_management }
+
+    edge:
+      - { id: users, service: users, label: "Users" }
+      - { id: waf, service: waf }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+
+    region:
+      label: "us-east-1"
+      services:
+        - { id: shield, service: shield, label: "Shield" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: ecr, service: ecr, label: "ECR" }
+        - { id: cw, service: cloudwatch_2, label: "CloudWatch" }
+
+      vpc:
+        label: "App VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+                - { id: bastion1, service: ec2, label: "Bastion Host" }
+            app_subnet:
+              id: app1
+              label: "private-app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: valkey1, service: elasticache, label: "Valkey/Redis" }
+                - { id: aurora1, service: aurora, label: "Aurora PostgreSQL" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "private-app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: valkey2, service: elasticache, label: "Valkey/Redis" }
+                - { id: aurora2, service: aurora, label: "Aurora Replica" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "private-app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: valkey3, service: elasticache, label: "Valkey/Redis" }
+                - { id: aurora3, service: aurora, label: "Aurora Replica" }
+        compute_groups:
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS (EC2)" }
+
+    edges:
+      - { source: users, target: waf, label: "HTTPS" }
+      - { source: waf, target: alb }
+      - { source: alb, target: ecs, label: "route" }
+      - { source: ecs-az1, target: valkey1, label: "cache" }
+      - { source: ecs-az1, target: aurora1, label: "SQL" }
+      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
+      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+
+  - name: "Flow Diagram"
+    type: flow
+    nodes:
+      - { id: f_user, service: users, label: "User" }
+      - { id: f_waf, service: waf, label: "WAF" }
+      - { id: f_alb, service: application_load_balancer, label: "ALB" }
+      - { id: f_ecs, service: ecs, label: "ECS Fargate" }
+      - { id: f_cache, service: elasticache, label: "Valkey/Redis" }
+      - { id: f_db, service: aurora, label: "Aurora PostgreSQL" }
+    edges:
+      - { source: f_user, target: f_waf, label: "HTTPS" }
+      - { source: f_waf, target: f_alb }
+      - { source: f_alb, target: f_ecs, label: "route" }
+      - { source: f_ecs, target: f_cache, label: "cache" }
+      - { source: f_ecs, target: f_db, label: "SQL" }

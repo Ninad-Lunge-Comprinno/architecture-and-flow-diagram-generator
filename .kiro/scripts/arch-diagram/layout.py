@@ -126,7 +126,7 @@ def _subnet_width(n_resources: int, cols: int = 0) -> float:
     """
     n = max(1, n_resources)
     if cols == 0:
-        cols = 1 if n <= 2 else 2
+        cols = 2  # always side-by-side (2 icons per row)
     effective_w = max(ICON, LABEL_WIDTH)
     grid_cols = min(cols, n)
     content = grid_cols * effective_w + (grid_cols - 1) * ICON_GAP
@@ -139,7 +139,7 @@ def _subnet_height(n_resources: int, cols: int = 0) -> float:
     if n == 0:
         return SUBNET_H  # empty subnet uses the default compact height
     if cols == 0:
-        cols = 1 if n <= 2 else 2
+        cols = 2  # always side-by-side
     rows = (n + cols - 1) // cols
     grid_h = rows * ICON + (rows - 1) * ICON_GAP
     return max(SUBNET_H, grid_h + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM)
@@ -457,17 +457,19 @@ def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
     n = len(resources)
     if n == 0:
         return
-    # Auto-apply grid layout: use cols=1 for <=2 icons, cols=2 for more
-    # (can be overridden by subnet.get("cols")), keeping subnets compact.
-    default_cols = 1 if n <= 2 else 2
-    cols = int(subnet.get("cols", default_cols))
-    rows = (n + cols - 1) // cols
-    grid_w = cols * ICON + (cols - 1) * ICON_GAP
+    # Auto-apply grid layout: always use cols=2 (side-by-side pairs).
+    # This ensures 2 icons appear horizontally next to each other,
+    # not stacked vertically. Subnets with 1 icon stay centered.
+    # Override with subnet.get("cols") if vertical stacking is needed.
+    default_cols = 2
+    actual_cols = min(int(subnet.get("cols", default_cols)), n)  # can't have more cols than icons
+    rows = (n + actual_cols - 1) // actual_cols
+    grid_w = actual_cols * ICON + (actual_cols - 1) * ICON_GAP
     grid_h = rows * ICON + (rows - 1) * ICON_GAP
     start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
     for idx, res in enumerate(resources):
-        col_i = idx % cols
-        row_i = idx // cols
+        col_i = idx % actual_cols
+        row_i = idx // actual_cols
         rx = start_x + col_i * (ICON + ICON_GAP)
         ry = SUBNET_PAD_TOP + row_i * (ICON + ICON_GAP)
         node = Node(res["id"], "resource", subnet["id"], rx, ry, ICON, ICON,
