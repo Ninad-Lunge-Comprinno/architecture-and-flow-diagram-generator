@@ -32,6 +32,43 @@ Ask or infer (never guess):
 
 ---
 
+## STEP 2.5 — Validate Stencil Names (CRITICAL)
+
+**Do not guess stencil names.** Incorrect names render as colored squares.
+
+Before using any AWS service not in the local `shapes-aws.md`, fetch and verify
+the stencil name from the authoritative source:
+
+**Authoritative source:** https://github.com/vidanov/aws-architecture-diagram-skill/tree/main/references
+
+Reference files by category:
+- `aws-icons-compute.md` - EC2, Lambda, ECS, EKS, Fargate, Batch
+- `aws-icons-database.md` - RDS, Aurora, DynamoDB, ElastiCache, Neptune, DocumentDB, MemoryDB
+- `aws-icons-storage.md` - S3, EFS, EBS, FSx, Glacier
+- `aws-icons-networking.md` - VPC, ALB, NLB, CloudFront, Route 53, VPN, Transit Gateway
+- `aws-icons-security.md` - IAM, Cognito, KMS, WAF, Shield, GuardDuty
+- `aws-icons-integration.md` - SQS, SNS, EventBridge, Step Functions, SES, Managed Grafana
+- `aws-icons-analytics-ml.md` - Athena, Glue, SageMaker, Bedrock, Lex, Comprehend
+- `aws-icons-iot-migration-devtools.md` - IoT Core, Greengrass, X-Ray, CodePipeline
+
+**Known stencil name differences** (service key ≠ stencil name):
+| Service Key | Correct Stencil | Wrong Guess |
+|-------------|-----------------|-------------|
+| efs | `elastic_file_system` | ~~efs~~ |
+| ebs | `elastic_block_store` | ~~ebs~~ |
+| documentdb | `documentdb_with_mongodb_compatibility` | ~~documentdb~~ |
+| memorydb | `memorydb_for_redis` | ~~memorydb~~ |
+| s3_glacier | `glacier` | ~~s3_glacier~~ |
+| vpn | `vpn_gateway` | ~~vpn~~ |
+| x_ray | `xray` | ~~x_ray~~ |
+| ses | `simple_email_service` | ~~ses~~ |
+| lex_v2 | `lex` | ~~lex_v2~~ |
+| managed_grafana | `managed_service_for_grafana` | ~~managed_grafana~~ |
+
+When adding a service not in this list, **always fetch from the authoritative source first**.
+
+---
+
 ## STEP 3 — Apply the Architecture Pattern Library
 
 ### 3-Tier Web Application (most common migration pattern)

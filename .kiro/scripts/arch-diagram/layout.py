@@ -4,24 +4,36 @@ Implements the firm's architecture layout (see references/house-style.md):
 
     Outer border (encloses the title block)
     AWS Cloud
-      global row (centred, outside region): CloudFront, S3, IAM, Route 53
-      edge strip (left, inside cloud):       WAF, CloudFront, ALB
-        (a `user` renders just OUTSIDE the cloud)
+      Global row  (centred, top of cloud): CloudFront, S3, IAM, Route 53
+      Ingress band (horizontal, between global row and region):
+          External actors (Users, Mobile) sit LEFT of the cloud.
+          Ingress-path services (Shield, WAF, ALB, APIGW) are placed
+          LEFT-TO-RIGHT in traffic order inside the cloud.
+          WAF and ALB are SIDE-BY-SIDE at the same y level.
+          IGW straddles the left VPC border at AZ-1 centre.
       Region
-        region-shared row (centred):         ACM, Secrets, ... + CI/CD icons
+        region-shared row (centred):  ACM, Cognito, Lambda, ECR, …
         VPC
-          IGW on left VPC border aligned to AZ-1 centre
-          AZ rows (horizontal repeated):     az1 / az2 / az3, each with
-                                               public-subnet (green)
-                                               app-subnet   (blue)  <- lanes
-                                               db-subnet    (blue)
-          compute-group lanes (vertical, span ALL AZ rows)
-      edge strip icons aligned to AZ centres:
-        IGW  aligned to AZ-1 centre
-        ALB  aligned to middle-AZ centre (or VPC vertical midpoint)
+          AZ rows (horizontal): public / app / db subnets + compute lanes
 
-Layout is produced as a flat node list with explicit `parent` per node. Absolute
-page coords for every node are stored in `lo.abs_boxes` for edge routing.
+Layout philosophy
+-----------------
+Landscape-first: the diagram must be WIDER than it is tall (≥1.3:1 ratio).
+The ingress band is HORIZONTAL rather than a vertical left strip, which is
+the main structural change that achieves landscape orientation.
+
+The ingress band sits inside the AWS Cloud boundary, between the global row
+and the region box. External actors sit LEFT of the cloud, at the same y level
+as their connected ingress service (e.g. Users aligns with Shield).
+
+Edge services that are part of the ingress path (Shield, WAF, ALB, API Gateway)
+are placed in the ingress band. IGW and non-ingress VPC-border services are
+placed as before (straddling the VPC border at the appropriate AZ centre).
+
+Spacing tokens
+--------------
+All layout distances are defined as constants at module level and are used
+consistently throughout. Do not use magic numbers in the build() function.
 """
 
 from __future__ import annotations
@@ -30,48 +42,70 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # ---------------------------------------------------------------------------
+# Spacing tokens — all layout distances derive from these.
+# ---------------------------------------------------------------------------
 ICON = 120
 ICON_GAP = 60
 LABEL_BAND = 50          # clearance below an icon for its wrapped label text
                           # (used ONLY for edge-routing waypoints, NOT sizing)
 LABEL_WIDTH = 160
 
-# Subnet sizing: keep original compact height (label overflows outside the cell
-# which is how draw.io renders verticalLabelPosition=bottom — expected behaviour)
+# Subnet sizing
 SUBNET_MIN_W = 300
 SUBNET_PAD_X = 40
 SUBNET_PAD_TOP = 50
 SUBNET_PAD_BOTTOM = 40
-SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM + 40  # 250px — extra 40px so compute lanes sit inside app_subnet vertically
+SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM + 40  # 250px baseline
 
-TIER_GAP = 80
-AZ_INNER_PAD_X = 35
-AZ_INNER_PAD_TOP = 50
-AZ_INNER_PAD_BOTTOM = 40
-AZ_GAP = 120
+TIER_GAP = 80             # gap between subnet columns inside an AZ
+AZ_INNER_PAD_X = 35      # x padding inside AZ box
+AZ_INNER_PAD_TOP = 50    # y padding above subnets (for AZ label)
+AZ_INNER_PAD_BOTTOM = 40 # y padding below subnets
+AZ_GAP = 120             # gap between AZ rows
 
-LANE_W = ICON + 2 * 30
-LANE_GAP = 50       # gap between vertical lane columns
-LANE_OVERHANG = 50   # = AZ_INNER_PAD_TOP: lane label sits in the AZ top padding band, above app_subnet label
+LANE_W = ICON + 2 * 30   # width of a compute-group vertical lane
+LANE_GAP = 50             # gap between lane columns
+LANE_OVERHANG = 50        # lane top extends above first AZ
 
 VPC_PAD_X = 65
 VPC_PAD_TOP = 80
 VPC_PAD_BOTTOM = 65
-VPC_LEFT_MARGIN = 80
+VPC_LEFT_MARGIN = 80      # space left of first AZ column
 
-REGION_PAD_X = 85
-REGION_SERVICES_Y = 65    # top of services icon row within region
-REGION_PAD_TOP = 240
-REGION_PAD_BOTTOM = 80
-REGION_RES_GAP = 45
-REGION_ROW_ICONS = 12   # max icons per row in region/global service rows
+REGION_PAD_X = 85        # left/right padding inside region box
+# Entry gutters: left columns that hold ingress services INSIDE their container.
+#   Region gutter holds Shield + WAF (regional, outside the VPC).
+#   VPC gutter holds ALB + API Gateway (traffic entry points inside the VPC).
+# Each gutter fits two icons side-by-side plus padding on both sides.
+REGION_ENTRY_GUTTER_W = 2 * ICON + 80 + 2 * ICON_GAP
+VPC_ENTRY_GUTTER_W = 2 * ICON + 80 + 2 * ICON_GAP
+ENTRY_PAIR_GAP = 80  # horizontal gap within a side-by-side ingress pair
+REGION_SERVICES_Y = 65   # top of services grid within region
+REGION_PAD_BOTTOM = 80   # bottom padding inside region
+REGION_RES_GAP = 45      # gap between icons in the region services grid
+REGION_ROW_ICONS = 20    # max icons per row — higher value → fewer rows → shorter height
 
-CLOUD_PAD_X = 85
-CLOUD_GLOBAL_Y = 65       # top of global icon row within cloud
-CLOUD_PAD_TOP = 240
-CLOUD_PAD_BOTTOM = 85
-CLOUD_LEFT_EDGE = 190
+CLOUD_PAD_X = 85         # right padding inside cloud
+CLOUD_GLOBAL_Y = 65      # top of global icon row within cloud
+CLOUD_PAD_BOTTOM = 85    # bottom padding inside cloud
 
+# Ingress band — sits BETWEEN the global row and the region box, spanning
+# the full cloud width. Items are spaced horizontally left-to-right.
+INGRESS_BAND_PAD_X = 60  # x of first ingress item (cloud-relative)
+INGRESS_ITEM_GAP = 80    # horizontal gap between consecutive ingress items
+INGRESS_BAND_MARGIN = 40 # vertical gap between global row bottom and band y
+INGRESS_BAND_BELOW_GAP = 50 # vertical gap between band bottom and region top
+
+# WAF + ALB side-by-side offset (ALB is INGRESS_ITEM_GAP px right of WAF).
+# They share the same y; the connector WAF→ALB goes horizontally.
+WAF_ALB_PAIR_GAP = ICON + INGRESS_ITEM_GAP  # gap WAF right-edge to ALB left-edge
+
+# External actors (outside cloud boundary, to the left)
+ACTOR_LEFT_X = 60        # left edge of actor icons (page-absolute)
+ACTOR_TO_CLOUD_GAP = 80  # gap from actor right edge to cloud left edge
+ACTOR_BETWEEN_GAP = 80   # vertical gap between stacked actor icons
+
+# Legacy constants (kept for edge-routing compatibility)
 EDGE_GAP = 80
 USER_GAP = 100
 
@@ -111,39 +145,43 @@ class Layout:
     az_rows: list[tuple[float, float]] = field(default_factory=list)
     # Left corridor x inside the VPC (between VPC left edge and public subnets)
     vpc_corridor_x: float = 0.0
+    # Right corridor x: just right of the Region box, for routing region→VPC edges
+    region_right_x: float = 0.0
+    # Ingress band y-centre (page-absolute); used by routing code
+    ingress_band_y: float = 0.0
+    # VPC abs top (page coords): helps routing code distinguish above-VPC from in-VPC
+    vpc_abs_top: float = 0.0
 
     def add(self, node: Node, abs_x: float, abs_y: float):
         self.nodes.append(node)
         self.abs_boxes[node.node_id] = (abs_x, abs_y, node.width, node.height)
 
 
-def _subnet_width(n_resources: int, cols: int = 0) -> float:
+def _subnet_width(n_resources: int, cols: int = 0, is_db_subnet: bool = False) -> float:
     """Compute subnet width for n icons in a grid.
 
-    If cols==0, auto-select: 1 for <=2 icons, 2 for more (matching _emit_subnet).
-    The effective per-icon footprint uses max(ICON, LABEL_WIDTH) so wrapped
-    labels never overflow the subnet box.
+    If is_db_subnet=True, use single-row layout (all icons horizontal).
+    Otherwise, use 2-column layout.
     """
     n = max(1, n_resources)
     if cols == 0:
-        cols = 2  # always side-by-side (2 icons per row)
+        cols = n if is_db_subnet else 2
     effective_w = max(ICON, LABEL_WIDTH)
     grid_cols = min(cols, n)
     content = grid_cols * effective_w + (grid_cols - 1) * ICON_GAP
     return max(SUBNET_MIN_W, content + 2 * SUBNET_PAD_X)
 
 
-def _subnet_height(n_resources: int, cols: int = 0) -> float:
-    """Compute subnet height for n icons in a grid with auto-cols."""
+def _subnet_height(n_resources: int, cols: int = 0, is_db_subnet: bool = False) -> float:
+    """Compute subnet height for n icons in a grid."""
     n = max(0, n_resources)
     if n == 0:
-        return SUBNET_H  # empty subnet uses the default compact height
+        return SUBNET_H
     if cols == 0:
-        cols = 2  # always side-by-side
+        cols = n if is_db_subnet else 2
     rows = (n + cols - 1) // cols
     grid_h = rows * ICON + (rows - 1) * ICON_GAP
     return max(SUBNET_H, grid_h + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM)
-    return max(SUBNET_MIN_W, content + 2 * SUBNET_PAD_X)
 
 
 def _center_row(items_w: float, container_w: float, min_x: float) -> float:
@@ -159,28 +197,29 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     groups = vpc.get("compute_groups", []) or []
     az_ids = [az["id"] for az in azs]
 
-    # ---- tier widths (uniform) and per-AZ heights -----------------------
+    # All region services render in the region services grid.
+    grid_services = region.get("services", []) or []
+
+    # ---- Tier widths (uniform across AZs) and per-AZ heights ---------------
     def _az_res(az, tier):
         return (az.get(tier) or {}).get("resources", []) or []
 
     pub_w = max((_subnet_width(len(_az_res(az, "public_subnet")))
                  for az in azs), default=SUBNET_MIN_W)
-    db_w = max((_subnet_width(len(_az_res(az, "db_subnet")))
+    db_w = max((_subnet_width(len(_az_res(az, "db_subnet")), is_db_subnet=True)
                 for az in azs), default=SUBNET_MIN_W)
 
-    # Per-AZ row height: max of all subnet heights in that AZ (uniform across AZs)
-    def _az_row_height(az):
-        pub_h = _subnet_height(len(_az_res(az, "public_subnet")))
-        app_h = _subnet_height(len(_az_res(az, "app_subnet")))
-        db_h  = _subnet_height(len(_az_res(az, "db_subnet")))
-        return AZ_INNER_PAD_TOP + max(pub_h, app_h, db_h) + AZ_INNER_PAD_BOTTOM
+    pub_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "public_subnet"))) for az in azs}
+    app_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "app_subnet"))) for az in azs}
+    db_h_by_az  = {az["id"]: _subnet_height(len(_az_res(az, "db_subnet")), is_db_subnet=True) for az in azs}
 
-    # Use the tallest AZ row height as the uniform height (keeps grid alignment)
-    az_row_h = max((_az_row_height(az) for az in azs), default=AZ_INNER_PAD_TOP + SUBNET_H + AZ_INNER_PAD_BOTTOM)
-    # Compute subnet height for each tier as max across AZs
-    pub_h_uniform = max((_subnet_height(len(_az_res(az, "public_subnet"))) for az in azs), default=SUBNET_H)
-    app_h_uniform = max((_subnet_height(len(_az_res(az, "app_subnet"))) for az in azs), default=SUBNET_H)
-    db_h_uniform  = max((_subnet_height(len(_az_res(az, "db_subnet"))) for az in azs), default=SUBNET_H)
+    def _az_row_height(az):
+        aid = az["id"]
+        return AZ_INNER_PAD_TOP + max(pub_h_by_az[aid], app_h_by_az[aid],
+                                      db_h_by_az[aid]) + AZ_INNER_PAD_BOTTOM
+
+    az_row_h_by_az = {az["id"]: _az_row_height(az) for az in azs}
+    app_h_max = max(app_h_by_az.values(), default=SUBNET_H)
     lanes_w = (len(groups) * LANE_W + max(0, len(groups) - 1) * LANE_GAP) if groups else 0
     app_res_w = max((_subnet_width(len((az.get("app_subnet") or {}).get("resources", [])))
                      for az in azs), default=SUBNET_MIN_W)
@@ -191,88 +230,208 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     col_app_x = col_pub_x + pub_w + TIER_GAP
     col_db_x = col_app_x + app_w + TIER_GAP
     az_content_w = col_db_x + db_w + AZ_INNER_PAD_X
-    # az_row_h computed dynamically above
 
-    # ---- Dynamic region top padding (accounts for multi-row services) ------
-    services = region.get("services", []) or []  # define here for padding calc
-    n_service_rows = max(1, (len(services) + REGION_ROW_ICONS - 1) // REGION_ROW_ICONS) if services else 1
-    # Each row occupies ICON + LABEL_BAND height + gap
+    # ---- Region services height (drives dynamic_region_pad_top) ----------
+    n_services = len(grid_services)
+    n_service_rows = max(1, (n_services + REGION_ROW_ICONS - 1) // REGION_ROW_ICONS) if n_services else 1
     services_block_h = n_service_rows * (ICON + LABEL_BAND) + (n_service_rows - 1) * REGION_RES_GAP
     dynamic_region_pad_top = REGION_SERVICES_Y + services_block_h + REGION_RES_GAP
 
     # ---- VPC geometry ----------------------------------------------------
-    vpc_content_x = VPC_LEFT_MARGIN
-    az_y = {}
+    # The VPC gets a LEFT ENTRY GUTTER holding ALB + API Gateway (traffic entry
+    # points that live inside the VPC). AZ content is shifted right by the
+    # gutter width so the entry icons have their own readable column.
+    has_vpc_gutter = any(r.get("service") in
+                         {"application_load_balancer", "network_load_balancer",
+                          "api_gateway"}
+                         for r in (page.get("edge", []) or []))
+    vpc_gutter_w = VPC_ENTRY_GUTTER_W if has_vpc_gutter else 0
+    vpc_content_x = vpc_gutter_w + VPC_LEFT_MARGIN
+    az_y: dict[str, float] = {}
     y = VPC_PAD_TOP
     for az in azs:
         az_y[az["id"]] = y
-        y += az_row_h + AZ_GAP
+        y += az_row_h_by_az[az["id"]] + AZ_GAP
     vpc_content_h = (y - AZ_GAP) if azs else ICON
     vpc_width = vpc_content_x + az_content_w + VPC_PAD_X
     vpc_height = vpc_content_h + VPC_PAD_BOTTOM
 
-    # ---- region / cloud dimensions ---------------------------------------
-    region_x = REGION_PAD_X
-    region_y = dynamic_region_pad_top
-    # Region must be wide enough for BOTH the VPC and its shared-services row.
-    services_list = region.get("services", []) or []
-    n_services = len(services_list)
-    # Use the width of ONE wrapped row (max REGION_ROW_ICONS icons), not all services.
-    # The multi-row layout stacks rows vertically, so width is determined by the
-    # widest single row, not the total icon count.
+    # ---- Region dimensions -----------------------------------------------
+    # The Region gets a LEFT ENTRY GUTTER holding Shield + WAF (regional
+    # services outside the VPC). The VPC is offset right by that gutter.
+    has_region_gutter = any(r.get("service") in {"shield", "waf"}
+                            for r in (page.get("edge", []) or []))
+    region_gutter_w = REGION_ENTRY_GUTTER_W if has_region_gutter else 0
+
+    # The region must be wide enough for the services row AND the gutter+VPC.
     icons_per_row = min(n_services, REGION_ROW_ICONS) if n_services else 0
     services_row_w = (icons_per_row * ICON + max(0, icons_per_row - 1) * REGION_RES_GAP
                       if icons_per_row else 0)
-    region_width = max(vpc_width + 2 * REGION_PAD_X,
+    region_width = max(region_gutter_w + vpc_width + 2 * REGION_PAD_X,
                        services_row_w + 2 * REGION_PAD_X)
+    region_x = 0               # region is left-flush inside the cloud (we add padding in cloud)
+    region_y = dynamic_region_pad_top  # VPC starts at this y within region
     region_height = dynamic_region_pad_top + vpc_height + REGION_PAD_BOTTOM
 
-    cloud_region_x = CLOUD_LEFT_EDGE
-    cloud_region_y = CLOUD_PAD_TOP
-    # Cloud width: wide enough for the region and global-services row (also one row).
+    # ---- Global services row width for cloud sizing ----------------------
     global_row_list = page.get("global", []) or []
     n_global = len(global_row_list)
     icons_per_global_row = min(n_global, REGION_ROW_ICONS) if n_global else 0
     global_row_w = (icons_per_global_row * ICON + max(0, icons_per_global_row - 1) * REGION_RES_GAP
                     if icons_per_global_row else 0)
-    cloud_width = max(cloud_region_x + region_width + CLOUD_PAD_X,
-                      CLOUD_LEFT_EDGE + global_row_w + CLOUD_PAD_X)
-    cloud_height = CLOUD_PAD_TOP + region_height + CLOUD_PAD_BOTTOM
 
-    cloud_x = USER_GAP + ICON + USER_GAP
+    # ---- Ingress classification ------------------------------------------
+    # New placement model (see house-style):
+    #   actors (users/devices)        -> OUTSIDE the cloud (left)
+    #   IGW                           -> straddles the left VPC border
+    #   Shield, WAF                   -> Region ENTRY GUTTER (inside Region,
+    #                                     outside the VPC), side-by-side
+    #   ALB, API Gateway              -> VPC ENTRY GUTTER (inside the VPC),
+    #                                     side-by-side; APIGW aligns near Lambda
+    #   any other edge items          -> horizontal band above the Region
+    edge_list = page.get("edge", []) or []
+    actor_services_set = {"user", "users", "mobile_client", "iot_device"}
+    igw_svc = "internet_gateway"
+    region_gutter_services = {"shield", "waf"}
+    vpc_gutter_services = {"application_load_balancer", "network_load_balancer",
+                           "api_gateway"}
+
+    actor_items = [r for r in edge_list if r.get("service") in actor_services_set]
+    igw_item    = next((r for r in edge_list if r.get("service") == igw_svc), None)
+    region_gutter_items = [r for r in edge_list
+                           if r.get("service") in region_gutter_services]
+    vpc_gutter_items = [r for r in edge_list
+                        if r.get("service") in vpc_gutter_services]
+    # Anything left over (e.g. a cloudfront placed in edge) stays in the band.
+    _classified = (actor_services_set | {igw_svc}
+                   | region_gutter_services | vpc_gutter_services)
+    ingress_items = [r for r in edge_list
+                     if r.get("service") not in _classified]
+
+    # Named lookups for pairing / edge alignment.
+    shield_item = next((r for r in region_gutter_items if r.get("service") == "shield"), None)
+    waf_item    = next((r for r in region_gutter_items if r.get("service") == "waf"), None)
+    alb_item    = next((r for r in vpc_gutter_items
+                        if r.get("service") in ("application_load_balancer",
+                                                "network_load_balancer")), None)
+    apigw_item  = next((r for r in vpc_gutter_items if r.get("service") == "api_gateway"), None)
+
+    # Remaining band items (rare) keep the old horizontal-band behaviour.
+    _ingress_order = ["cloudfront"]
+    def _ingress_sort_key(r):
+        svc = r.get("service", "")
+        try:
+            return _ingress_order.index(svc)
+        except ValueError:
+            return len(_ingress_order)  # unknown items go after the chain
+    ingress_items = sorted(ingress_items, key=_ingress_sort_key)
+
+    # Band now holds only leftover edge items (not shield/waf/alb/apigw), placed
+    # left-to-right. Shield/WAF and ALB/APIGW are positioned later in the gutters.
+    ingress_x_offsets: dict[str, float] = {}
+    cur_x = 0.0
+    for item in ingress_items:
+        ingress_x_offsets[item["id"]] = cur_x
+        cur_x += ICON + INGRESS_ITEM_GAP
+
+    ingress_band_w = max(cur_x - INGRESS_ITEM_GAP, ICON) if ingress_items else 0
+
+    # ---- Cloud dimensions ------------------------------------------------
+    # Global row height
+    global_row_h = (ICON + LABEL_BAND) if global_row_list else 0
+    # Ingress band height (only leftover band items, if any)
+    ingress_band_h = (ICON + LABEL_BAND) if ingress_items else 0
+
+    # Vertical layout of cloud content (top to bottom):
+    # [CLOUD_GLOBAL_Y]    global row
+    # [+INGRESS_BAND_MARGIN]  ingress band (leftover items only)
+    # [+INGRESS_BAND_BELOW_GAP] region top
+    cloud_global_y = CLOUD_GLOBAL_Y
+    cloud_ingress_y = cloud_global_y + global_row_h + INGRESS_BAND_MARGIN
+    cloud_region_y  = cloud_ingress_y + ingress_band_h + INGRESS_BAND_BELOW_GAP
+
+    # ---- Horizontal centering of the VPC within the Cloud ----------------
+    # The VPC's left edge (relative to region) is REGION_PAD_X + region_gutter_w.
+    # We want the VPC centred in the Cloud: the gap from the Cloud's left edge to
+    # the VPC's left edge must equal the gap from the VPC's right edge to the
+    # Cloud's right edge. Region is left-flush inside the Cloud at cloud_region_x.
+    #
+    #   vpc_left_in_cloud  = cloud_region_x + REGION_PAD_X + region_gutter_w
+    #   vpc_right_in_cloud = vpc_left_in_cloud + vpc_width
+    #   left_gap  = vpc_left_in_cloud
+    #   right_gap = cloud_width - vpc_right_in_cloud
+    # Set left_gap == right_gap and solve, honouring minimum paddings.
+    vpc_left_rel_region = REGION_PAD_X + region_gutter_w
+
+    # Minimum cloud left padding must still fit the region-services row and any
+    # leftover band, which are left-flush at cloud_region_x.
+    min_side = max(INGRESS_BAND_PAD_X, CLOUD_PAD_X)
+    cloud_region_x = min_side
+    cloud_content_left = cloud_region_x  # leftover band / global row share this origin
+
+    vpc_left_in_cloud = cloud_region_x + vpc_left_rel_region
+    # For balance: right_gap = left_gap = vpc_left_in_cloud
+    #   cloud_width = vpc_right_in_cloud + left_gap
+    cloud_width_balanced = (vpc_left_in_cloud + vpc_width) + vpc_left_in_cloud
+    # Also honour the raw minimum needed to contain the region + paddings.
+    cloud_width_min = max(
+        cloud_region_x + region_width + CLOUD_PAD_X,
+        cloud_content_left + global_row_w + CLOUD_PAD_X,
+        cloud_content_left + ingress_band_w + CLOUD_PAD_X,
+    )
+    cloud_width = max(cloud_width_balanced, cloud_width_min)
+    cloud_height = cloud_region_y + region_height + CLOUD_PAD_BOTTOM
+
+    # cloud_x: must leave room for actors on the left
+    n_actors = len(actor_items) if actor_items else 0
+    cloud_x = ACTOR_LEFT_X + ICON + ACTOR_TO_CLOUD_GAP
     cloud_y = TITLE_H + TITLE_MARGIN
 
-    # ---- title block -----------------------------------------------------
+    # ---- Title block -----------------------------------------------------
     lo.add(Node("__title", "title", "1", cloud_x, 0, TITLE_W, TITLE_H, label=None),
            cloud_x, 0)
 
-    # ---- cloud -----------------------------------------------------------
+    # ---- Cloud -----------------------------------------------------------
     lo.add(Node("cloud", "cloud", "1", cloud_x, cloud_y, cloud_width, cloud_height,
                 label=page.get("cloud_label", "AWS Cloud")),
            cloud_x, cloud_y)
 
-    # ---- global services row (centred within cloud) ----------------------
-    global_list = page.get("global", []) or []
-    if global_list:
-        row_w = len(global_list) * ICON + (len(global_list) - 1) * REGION_RES_GAP
-        content_w = cloud_width - CLOUD_LEFT_EDGE - CLOUD_PAD_X
-        gx = CLOUD_LEFT_EDGE + max(0, (content_w - row_w) / 2)
-        for res in global_list:
-            n = Node(res["id"], "resource", "cloud", gx, CLOUD_GLOBAL_Y, ICON, ICON,
+    # ---- Global services row (centred within cloud) ----------------------
+    if global_row_list:
+        row_w = len(global_row_list) * ICON + (len(global_row_list) - 1) * REGION_RES_GAP
+        gx = cloud_content_left + max(0, (region_width - row_w) / 2)
+        for res in global_row_list:
+            n = Node(res["id"], "resource", "cloud", gx, cloud_global_y, ICON, ICON,
                      provider=res.get("provider", default_provider),
                      service=res["service"], label=res.get("label"))
-            lo.add(n, cloud_x + gx, cloud_y + CLOUD_GLOBAL_Y)
+            lo.add(n, cloud_x + gx, cloud_y + cloud_global_y)
             gx += ICON + REGION_RES_GAP
 
-    # ---- region ----------------------------------------------------------
-    lo.add(Node("region", "region", "cloud", cloud_region_x, cloud_region_y,
-                region_width, region_height, label=region.get("label", "Region")),
-           cloud_x + cloud_region_x, cloud_y + cloud_region_y)
+    # ---- Ingress band (horizontal strip) ---------------------------------
+    # All ingress-path services are placed LEFT-TO-RIGHT at y = cloud_ingress_y.
+    # WAF and ALB share the same y (side-by-side). APIGW is placed after ALB.
+    ingress_band_abs_y = cloud_y + cloud_ingress_y + ICON / 2   # y-centre of band icons
+
+    for item in ingress_items:
+        iid = item["id"]
+        ix = cloud_content_left + ingress_x_offsets.get(iid, 0)
+        iy = cloud_ingress_y     # y within cloud
+        n = Node(iid, "resource", "cloud", ix, iy, ICON, ICON,
+                 provider=item.get("provider", default_provider),
+                 service=item["service"], label=item.get("label"))
+        lo.add(n, cloud_x + ix, cloud_y + iy)
+
+    lo.ingress_band_y = ingress_band_abs_y
+
+    # ---- Region ----------------------------------------------------------
     region_abs_x = cloud_x + cloud_region_x
     region_abs_y = cloud_y + cloud_region_y
+    lo.add(Node("region", "region", "cloud", cloud_region_x, cloud_region_y,
+                region_width, region_height, label=region.get("label", "Region")),
+           region_abs_x, region_abs_y)
 
-    # ---- region-shared services rows (auto-wraps at REGION_ROW_ICONS per row) --
-    services = region.get("services", []) or []
+    # ---- Region-shared services rows (auto-wraps at REGION_ROW_ICONS per row) --
+    services = grid_services
     if services:
         content_w_r = region_width - 2 * REGION_PAD_X
         row_y = REGION_SERVICES_Y
@@ -289,62 +448,104 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
             row_y += ICON + LABEL_BAND + REGION_RES_GAP
 
     # ---- VPC -------------------------------------------------------------
-    lo.add(Node("vpc", "vpc", "region", region_x, region_y, vpc_width, vpc_height,
+    vpc_region_x = REGION_PAD_X + region_gutter_w
+    vpc_region_y = region_y   # = dynamic_region_pad_top (VPC y within region)
+    lo.add(Node("vpc", "vpc", "region", vpc_region_x, vpc_region_y, vpc_width, vpc_height,
                 label=vpc.get("label", "VPC")),
-           region_abs_x + region_x, region_abs_y + region_y)
-    vpc_abs_x = region_abs_x + region_x
-    vpc_abs_y = region_abs_y + region_y
+           region_abs_x + vpc_region_x, region_abs_y + vpc_region_y)
+    vpc_abs_x = region_abs_x + vpc_region_x
+    vpc_abs_y = region_abs_y + vpc_region_y
+    lo.vpc_abs_top = vpc_abs_y
+
+    # ---- Region ENTRY GUTTER: Shield + WAF (inside Region, outside VPC) ----
+    # Placed side-by-side in the left gutter column, vertically aligned with the
+    # top of the VPC so the WAF→ALB handoff is a short near-horizontal segment.
+    if region_gutter_items:
+        pair = [shield_item, waf_item]
+        pair = [p for p in pair if p is not None]
+        # Fall back to whatever region-gutter items exist, in spec order.
+        if not pair:
+            pair = region_gutter_items
+        gutter_cx = REGION_PAD_X + ICON_GAP           # x within region for first icon
+        gutter_cy = vpc_region_y + VPC_PAD_TOP        # align with VPC AZ-1 top band
+        gx = gutter_cx
+        for item in pair:
+            n = Node(item["id"], "resource", "region", gx, gutter_cy, ICON, ICON,
+                     provider=item.get("provider", default_provider),
+                     service=item["service"], label=item.get("label"))
+            lo.add(n, region_abs_x + gx, region_abs_y + gutter_cy)
+            gx += ICON + ENTRY_PAIR_GAP
+
+    # ---- VPC ENTRY GUTTER: ALB + API Gateway (inside the VPC) -------------
+    # Side-by-side in the VPC's left gutter. APIGW is placed to the right of ALB
+    # and vertically aligned toward the region-services row that holds Lambda so
+    # the APIGW→Lambda edge stays short.
+    if vpc_gutter_items:
+        pair = [alb_item, apigw_item]
+        pair = [p for p in pair if p is not None]
+        if not pair:
+            pair = vpc_gutter_items
+        gutter_x = ICON_GAP                            # x within VPC for first icon
+        gutter_y = VPC_PAD_TOP                         # align with AZ-1 top band
+        gx = gutter_x
+        for item in pair:
+            n = Node(item["id"], "resource", "vpc", gx, gutter_y, ICON, ICON,
+                     provider=item.get("provider", default_provider),
+                     service=item["service"], label=item.get("label"))
+            lo.add(n, vpc_abs_x + gx, vpc_abs_y + gutter_y)
+            gx += ICON + ENTRY_PAIR_GAP
 
     # ---- AZ rows + subnets -----------------------------------------------
     for az in azs:
-        ay = az_y[az["id"]]
+        aid = az["id"]
+        ay = az_y[aid]
         az_w = az_content_w
-        lo.add(Node(az["id"], "az", "vpc", vpc_content_x, ay, az_w, az_row_h,
-                    label=az.get("label", az["id"])),
+        az_row_h = az_row_h_by_az[aid]
+        lo.add(Node(aid, "az", "vpc", vpc_content_x, ay, az_w, az_row_h,
+                    label=az.get("label", aid)),
                vpc_abs_x + vpc_content_x, vpc_abs_y + ay)
         az_abs_x = vpc_abs_x + vpc_content_x
         az_abs_y = vpc_abs_y + ay
-        tier_heights = {"public_subnet": pub_h_uniform,
-                        "app_subnet": app_h_uniform,
-                        "db_subnet": db_h_uniform}
+        tier_heights = {"public_subnet": pub_h_by_az[aid],
+                        "app_subnet": app_h_by_az[aid],
+                        "db_subnet": db_h_by_az[aid]}
         for tier, col_x, w in (("public_subnet", col_pub_x, pub_w),
                                ("app_subnet", col_app_x, app_w),
                                ("db_subnet", col_db_x, db_w)):
             subnet = az.get(tier)
             if subnet:
                 th = tier_heights[tier]
-                _emit_subnet(lo, subnet, tier, parent=az["id"],
+                _emit_subnet(lo, subnet, tier, parent=aid,
                              rel_x=col_x, rel_y=AZ_INNER_PAD_TOP,
                              width=w, height=th,
                              abs_x=az_abs_x + col_x,
                              abs_y=az_abs_y + AZ_INNER_PAD_TOP,
                              default_provider=default_provider)
 
-    # ---- VPC left corridor x (spine for fan-out routing) ----------------
-    # This is the x in the space between the VPC left border and the public subnets,
-    # used as the trunk of fan-out connections (e.g. ALB -> all 3 AZ targets).
-    pub_abs_x = vpc_abs_x + vpc_content_x + AZ_INNER_PAD_X + col_pub_x
+    # ---- VPC corridor x and region right corridor ------------------------
     lo.vpc_corridor_x = vpc_abs_x + VPC_LEFT_MARGIN / 2
+    lo.region_right_x = region_abs_x + region_width + 30
 
-    # ---- AZ gap corridors + row bounds (for edge routing) ---------------
+    # ---- AZ gap corridors + row bounds -----------------------------------
+    az_mid_ys = []
     for i in range(len(azs) - 1):
         top_az = azs[i]["id"]
         bot_az = azs[i + 1]["id"]
-        gap_top = vpc_abs_y + az_y[top_az] + az_row_h
+        gap_top = vpc_abs_y + az_y[top_az] + az_row_h_by_az[top_az]
         gap_bot = vpc_abs_y + az_y[bot_az]
         lo.az_gaps.append((gap_top, gap_bot))
     for az in azs:
         row_top = vpc_abs_y + az_y[az["id"]]
-        row_bot = row_top + az_row_h
+        row_bot = row_top + az_row_h_by_az[az["id"]]
         lo.az_rows.append((row_top, row_bot))
+        az_mid_ys.append((row_top + row_bot) / 2)
 
-    # ---- compute-group vertical lanes ------------------------------------
+    # ---- Compute-group vertical lanes ------------------------------------
     if groups and azs:
         first_y = az_y[az_ids[0]] + AZ_INNER_PAD_TOP
-        last_y = az_y[az_ids[-1]] + AZ_INNER_PAD_TOP + app_h_uniform
+        last_y  = az_y[az_ids[-1]] + AZ_INNER_PAD_TOP + app_h_by_az[az_ids[-1]]
         lane_top = first_y - LANE_OVERHANG
-        # Ensure the lane bottom does not overlap the last AZ's bottom border
-        az_last_bottom = az_y[az_ids[-1]] + az_row_h - AZ_INNER_PAD_BOTTOM
+        az_last_bottom = az_y[az_ids[-1]] + az_row_h_by_az[az_ids[-1]] - AZ_INNER_PAD_BOTTOM
         lane_bottom = min(last_y + LANE_OVERHANG, az_last_bottom - 5)
         lane_height = lane_bottom - lane_top
         lane_x0 = vpc_content_x + col_app_x + SUBNET_PAD_X
@@ -369,78 +570,50 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                        lane_abs_x + icon_rel_x, lane_abs_y + icon_rel_y)
             lane_x += LANE_W + LANE_GAP
 
-    # ---- edge strip: aligned to AZ centres, IGW at VPC border -----------
-    edge_list = page.get("edge", []) or []
-    edge_inner_x = 40
-
-    # Compute y-positions for edge icons based on AZ geometry:
-    # - non-IGW, non-user items: placed at the vertical centres of each AZ row
-    #   starting from AZ1. IGW aligns with AZ1 centre; ALB with middle-AZ centre.
-    az_mid_ys = [vpc_abs_y + az_y[aid] + az_row_h / 2 for aid in az_ids]
-    middle_az_y = az_mid_ys[len(az_mid_ys) // 2] if az_mid_ys else cloud_y + cloud_region_y + REGION_PAD_TOP + 200
-
-    # Separate IGW and user; remaining strip items get y-positions anchored on ALB.
-    strip_items = [r for r in edge_list if r.get("service") not in ("internet_gateway", "user")]
-    igw_item = next((r for r in edge_list if r.get("service") == "internet_gateway"), None)
-    user_item = next((r for r in edge_list if r.get("service") == "user"), None)
-
-    # ALB anchors at the middle-AZ centre; other strip items space evenly around it.
-    alb_svc = ("application_load_balancer", "network_load_balancer")
-    alb_idx = next((i for i, r in enumerate(strip_items)
-                    if r.get("service", "") in alb_svc), None)
-    middle_az_mid = az_mid_ys[len(az_mid_ys) // 2] if az_mid_ys else cloud_y + 400
-
-    if alb_idx is not None and az_mid_ys:
-        # Place ALB at the first AZ gap midpoint so its connecting line goes
-        # cleanly through the gap corridor (horizontal line at gap y).
-        if lo.az_gaps:
-            alb_anchor_y = (lo.az_gaps[0][0] + lo.az_gaps[0][1]) / 2
-        else:
-            alb_anchor_y = middle_az_mid
-        y_alb = alb_anchor_y - ICON / 2
-        item_ys = {alb_idx: y_alb}
-        for i in range(alb_idx - 1, -1, -1):
-            item_ys[i] = item_ys[i + 1] - ICON - EDGE_GAP
-        for i in range(alb_idx + 1, len(strip_items)):
-            item_ys[i] = item_ys[i - 1] + ICON + EDGE_GAP
-    else:
-        item_ys = {i: az_mid_ys[min(i, len(az_mid_ys)-1)] - ICON/2
-                   for i in range(len(strip_items))}
-
-    for idx, res in enumerate(strip_items):
-        ey = item_ys[idx]
-        n = Node(res["id"], "resource", "cloud", edge_inner_x, ey - cloud_y, ICON, ICON,
-                 provider=res.get("provider", default_provider),
-                 service=res["service"], label=res.get("label"))
-        lo.add(n, cloud_x + edge_inner_x, ey)
-
-    # IGW: align to AZ1 centre, straddling the left VPC border
+    # ---- IGW: straddle left VPC border at AZ-1 centre --------------------
     if igw_item:
         az1_mid_y = az_mid_ys[0] if az_mid_ys else vpc_abs_y + vpc_height / 2
-        igw_rel_x = -ICON / 2  # straddle VPC left edge
+        igw_rel_x = -ICON / 2
         igw_rel_y = az1_mid_y - vpc_abs_y - ICON / 2
         n = Node(igw_item["id"], "resource", "vpc", igw_rel_x, igw_rel_y, ICON, ICON,
                  provider=igw_item.get("provider", default_provider),
                  service="internet_gateway", label=igw_item.get("label"))
         lo.add(n, vpc_abs_x + igw_rel_x, vpc_abs_y + igw_rel_y)
 
-    # User: outside the cloud, at the same y as the first strip item (WAF/top item)
-    if user_item:
-        # Align with first strip item so they are on the same horizontal line
-        first_strip_y = item_ys.get(0, az_mid_ys[0] - ICON / 2) if item_ys else cloud_y + 200
-        user_y = first_strip_y
-        n = Node(user_item["id"], "resource", "1", USER_GAP, user_y, ICON, ICON,
-                 provider=user_item.get("provider", default_provider),
-                 service="user", label=user_item.get("label"))
-        lo.add(n, USER_GAP, user_y)
+    # ---- External actors (left of cloud) ---------------------------------
+    # Actors stack vertically at ACTOR_LEFT_X. They centre on the ingress entry
+    # row they connect to: the Region gutter (Shield/WAF) when present, else the
+    # leftover band. This keeps the users→shield/waf edge short and horizontal.
+    if region_gutter_items:
+        entry_cy = region_abs_y + vpc_region_y + VPC_PAD_TOP + ICON / 2
+    else:
+        entry_cy = cloud_y + cloud_ingress_y + ICON / 2
+    if actor_items:
+        n_act = len(actor_items)
+        actors_total_h = n_act * ICON + (n_act - 1) * ACTOR_BETWEEN_GAP
+        actor_y_start = entry_cy - actors_total_h / 2
+        for i, res in enumerate(actor_items):
+            ay = actor_y_start + i * (ICON + ACTOR_BETWEEN_GAP)
+            n = Node(res["id"], "resource", "1", ACTOR_LEFT_X, ay, ICON, ICON,
+                     provider=res.get("provider", default_provider),
+                     service=res["service"], label=res.get("label"))
+            lo.add(n, ACTOR_LEFT_X, ay)
+    else:
+        # Legacy: single "user" item
+        user_item = next((r for r in edge_list if r.get("service") == "user"), None)
+        if user_item:
+            band_y = entry_cy - ICON / 2
+            n = Node(user_item["id"], "resource", "1", ACTOR_LEFT_X, band_y, ICON, ICON,
+                     provider=user_item.get("provider", default_provider),
+                     service="user", label=user_item.get("label"))
+            lo.add(n, ACTOR_LEFT_X, band_y)
 
-    # ---- overall extents + border ----------------------------------------
-    content_right = cloud_x + cloud_width
+    # ---- Overall extents + border ----------------------------------------
+    content_right  = cloud_x + cloud_width
     content_bottom = cloud_y + cloud_height
-    lo.width = content_right
+    lo.width  = content_right
     lo.height = content_bottom
-    left_most = min(USER_GAP, cloud_x)
-    lo.border_x = left_most - BORDER_MARGIN
+    lo.border_x = ACTOR_LEFT_X - BORDER_MARGIN
     lo.border_y = 0 - BORDER_MARGIN
     lo.border_w = (content_right + BORDER_MARGIN) - lo.border_x
     lo.border_h = (content_bottom + BORDER_MARGIN) - lo.border_y
@@ -457,12 +630,11 @@ def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
     n = len(resources)
     if n == 0:
         return
-    # Auto-apply grid layout: always use cols=2 (side-by-side pairs).
-    # This ensures 2 icons appear horizontally next to each other,
-    # not stacked vertically. Subnets with 1 icon stay centered.
-    # Override with subnet.get("cols") if vertical stacking is needed.
-    default_cols = 2
-    actual_cols = min(int(subnet.get("cols", default_cols)), n)  # can't have more cols than icons
+    if kind == "db_subnet":
+        default_cols = n
+    else:
+        default_cols = 2
+    actual_cols = min(int(subnet.get("cols", default_cols)), n)
     rows = (n + actual_cols - 1) // actual_cols
     grid_w = actual_cols * ICON + (actual_cols - 1) * ICON_GAP
     grid_h = rows * ICON + (rows - 1) * ICON_GAP

@@ -621,7 +621,8 @@ def _edge_style(edge: dict) -> str:
 def _route_edge(src_box, tgt_box, label_band: float = 50.0,
                 az_gaps: Optional[list] = None,
                 vpc_corridor_x: Optional[float] = None,
-                az_rows: Optional[list] = None):
+                az_rows: Optional[list] = None,
+                region_right_x: Optional[float] = None):
     """Minimal waypoint routing matching the house style.
 
     Strategy (matching the reference diagrams):
@@ -639,6 +640,23 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
     tcx, tcy = tx + tw / 2, ty + th / 2
     dx = tcx - scx
     dy = tcy - scy
+
+    # 0. Region-service → VPC element: route via the right corridor.
+    #    The source is in the region services grid and the target is in the VPC.
+    #    Route: exit source right → travel right to region_right_x corridor →
+    #    drop to target y → enter target from the right.
+    #    This completely avoids crossing the service icon grid.
+    if region_right_x is not None and abs(dx) > 100:
+        exit_xy, entry_xy = (1.0, 0.5), (1.0, 0.5)
+        waypoints = [
+            (region_right_x, scy),   # exit right to the region right corridor
+            (region_right_x, tcy),   # travel down the corridor to target y
+        ]
+        seen: list = []
+        for p in waypoints:
+            if not seen or abs(p[0]-seen[-1][0]) > 1 or abs(p[1]-seen[-1][1]) > 1:
+                seen.append(p)
+        return exit_xy, entry_xy, seen
 
     # 1. Source is above a tall container and horizontally offset:
     #    ECR-style — exit bottom, go horizontal at midpoint, enter top.
@@ -782,10 +800,122 @@ def _nearest_az_gap(y: float, gaps: list) -> Optional[tuple]:
 
 
 
+# Services that are REGIONAL or GLOBAL and must never be placed inside VPC subnets.
+# The engine auto-migrates them to region.services when found in a subnet.
+_REGIONAL_ONLY = frozenset({
+    "dynamodb", "sqs", "sns", "s3", "s3_glacier", "cloudfront",
+    "route_53", "ses", "pinpoint", "eventbridge", "step_functions",
+    "athena", "glue", "emr", "quicksight", "lake_formation",
+    "bedrock", "sagemaker", "lambda", "api_gateway", "cloudwatch_2",
+    "cloudtrail", "config", "systems_manager", "organizations",
+    "identity_and_access_management", "single_sign_on", "codepipeline",
+    "codebuild", "codedeploy", "codecommit", "kinesis",
+    "kinesis_data_streams", "kinesis_data_firehose",
+    "kinesis_data_analytics", "redshift", "timestream", "keyspaces",
+    "elasticsearch_service", "managed_streaming_for_kafka", "appflow",
+    "connect", "mq",
+})
+
+
+def _fix_regional_placement(page: dict) -> None:
+    """Mutate the page spec in-place: move regional/global services out of VPC subnets.
+
+    AWS services like DynamoDB, SQS, Kinesis, Athena are regional/serverless —
+    they are NOT deployed inside a VPC subnet. When the spec incorrectly places
+    them in a subnet (a common authoring mistake), this function silently moves
+    them to ``region.services`` before layout and validation run.
+
+    This fixes the ROOT CAUSE at the spec level rather than just warning.
+    """
+    region_spec = page.get("region", {}) or {}
+    existing_ids = {r.get("id") for r in (region_spec.get("services", []) or [])}
+    promoted: list[dict] = []
+
+    for az in (region_spec.get("vpc", {}) or {}).get("azs", []) or []:
+        for tier in ("public_subnet", "app_subnet", "db_subnet"):
+            subnet = az.get(tier)
+            if not subnet:
+                continue
+            resources = subnet.get("resources", []) or []
+            keep, move = [], []
+            for res in resources:
+                if res.get("service", "") in _REGIONAL_ONLY and res.get("id") not in existing_ids:
+                    move.append(res)
+                    existing_ids.add(res.get("id"))
+                else:
+                    keep.append(res)
+            if move:
+                subnet["resources"] = keep
+                promoted.extend(move)
+                for res in move:
+                    print(
+                        f"  ℹ  AUTO-FIXED: moved {res.get('id')!r} "
+                        f"({res.get('service')!r}) from {tier} of {az.get('id')!r} "
+                        f"to region.services (regional service — not VPC-bound)",
+                        flush=True,
+                    )
+
+    if promoted:
+        if "services" not in region_spec or region_spec["services"] is None:
+            region_spec["services"] = []
+        region_spec["services"].extend(promoted)
+
+
+def _reorder_services_for_vpc_proximity(page: dict) -> None:
+    """Move region services that connect to VPC elements to the end of the list.
+
+    Services like ECR that have "deploy" connections into the VPC should be
+    placed in the last row of region services, as close to the VPC as possible.
+    This minimises the length and crossing potential of those edges.
+    """
+    edges = page.get("edges", []) or []
+    services = (page.get("region", {}) or {}).get("services", []) or []
+    if not services or not edges:
+        return
+
+    # Collect all IDs of elements inside the VPC
+    vpc_ids: set = set()
+    vpc = (page.get("region", {}) or {}).get("vpc", {}) or {}
+    for az in vpc.get("azs", []) or []:
+        for tier in ("public_subnet", "app_subnet", "db_subnet"):
+            subnet = az.get(tier) or {}
+            for r in subnet.get("resources", []) or []:
+                vpc_ids.add(r.get("id"))
+    for g in vpc.get("compute_groups", []) or []:
+        vpc_ids.add(g.get("id"))
+        for az in (vpc.get("azs", []) or []):
+            vpc_ids.add(f"{g.get('id')}-{az.get('id')}")
+
+    # Find region services that connect to VPC elements
+    svc_ids = {s["id"] for s in services}
+    vpc_connected: set = set()
+    for e in edges:
+        src, tgt = e.get("source", ""), e.get("target", "")
+        if src in svc_ids and tgt in vpc_ids:
+            vpc_connected.add(src)
+        if tgt in svc_ids and src in vpc_ids:
+            vpc_connected.add(tgt)
+
+    if not vpc_connected:
+        return
+
+    # Reorder: non-connected first, VPC-connected last
+    region_spec = page.get("region", {}) or {}
+    region_spec["services"] = (
+        [s for s in services if s["id"] not in vpc_connected] +
+        [s for s in services if s["id"] in vpc_connected]
+    )
+
+
 def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                             meta: Optional[dict] = None) -> Diagram:
     """Build an architecture page from the grid-model spec."""
     layout = _import_layout()
+
+    # Auto-fix regional services before validation and layout.
+    _fix_regional_placement(page)
+    # Move VPC-connected region services to the last row (closest to VPC).
+    _reorder_services_for_vpc_proximity(page)
 
     elements = _collect_arch_ids(page)
     ids = _check_unique_ids(elements, page.get("name", "architecture"))
@@ -801,35 +931,6 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     if _overlap_warnings:
         for w in _overlap_warnings:
             print(f"  ⚠  {w}", flush=True)
-
-    # Warn about regional/global AWS services placed inside VPC subnets.
-    # These services are not VPC-bound and should live in region.services.
-    _REGIONAL_ONLY = {
-        "dynamodb", "sqs", "sns", "s3", "s3_glacier", "cloudfront",
-        "route_53", "ses", "pinpoint", "eventbridge", "step_functions",
-        "athena", "glue", "emr", "quicksight", "lake_formation",
-        "bedrock", "sagemaker", "lambda", "api_gateway", "cloudwatch_2",
-        "cloudtrail", "config", "systems_manager", "organizations",
-        "identity_and_access_management", "iam", "codepipeline",
-        "codebuild", "codedeploy", "codecommit", "kinesis",
-        "kinesis_data_streams", "kinesis_data_firehose",
-        "kinesis_data_analytics", "redshift", "timestream", "keyspaces",
-    }
-    region_spec = page.get("region", {}) or {}
-    for az in (region_spec.get("vpc", {}) or {}).get("azs", []) or []:
-        for tier in ("public_subnet", "app_subnet", "db_subnet"):
-            subnet = az.get(tier)
-            if not subnet:
-                continue
-            for res in subnet.get("resources", []) or []:
-                svc = res.get("service", "")
-                if svc in _REGIONAL_ONLY:
-                    print(
-                        f"  ⚠  REGIONAL-SERVICE-IN-VPC: {res.get('id')!r} "
-                        f"(service={svc!r}) is a regional AWS service and should "
-                        f"be in region.services, not inside a VPC subnet.",
-                        flush=True
-                    )
 
     # Title block: position from the layout's __title node (top-left).
     title_node = next((n for n in lo.nodes if n.node_id == "__title"), None)
@@ -868,6 +969,10 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
 
     # Edges: routed with connection points using absolute boxes.
     boxes = lo.abs_boxes
+    # Track edges sharing the same top-exit corridor to stagger them apart.
+    _stagger_tracker: dict = {}
+    # VPC absolute top y (used to distinguish ingress band items from VPC items)
+    vpc_abs_top = getattr(lo, "vpc_abs_top", lo.abs_boxes.get("vpc", (0, 0, 0, 0))[1])
     for edge in page.get("edges", []):
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
@@ -875,18 +980,97 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         if src in boxes and tgt in boxes and not edge.get("style"):
             src_box = boxes[src]
             tgt_box = boxes[tgt]
+            src_cx = src_box[0] + src_box[2] / 2
+            src_cy = src_box[1] + src_box[3] / 2
+            tgt_cx = tgt_box[0] + tgt_box[2] / 2
+            tgt_cy = tgt_box[1] + tgt_box[3] / 2
+            dx = abs(tgt_cx - src_cx)
+
+            # Check if target is a tall container (compute group/lane)
+            is_target_tall = tgt_box[3] > 240
+            # Is the source in the ingress band (above the region box)?
+            region_box = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
+            src_in_ingress_band = src_box[1] < region_box[1]
+            # Is the source above the VPC?
+            src_above_vpc = src_box[1] < vpc_abs_top
+            # Is the target in the VPC?
+            tgt_in_vpc = tgt_box[1] >= vpc_abs_top
+
             # Use the VPC corridor spine when the source is to the left of the VPC
-            # (e.g. ALB/CloudFront in the edge strip routing into VPC compute nodes).
+            # (e.g. ALB/CloudFront in the legacy left-edge strip routing into VPC).
+            # With the new horizontal ingress band, ingress items are above the VPC
+            # so use_spine is typically false for them.
             use_spine = (lo.vpc_corridor_x > 0
                          and src_box[0] < lo.vpc_corridor_x
-                         and tgt_box[0] > lo.vpc_corridor_x)
-            exit_xy, entry_xy, waypoints = _route_edge(
-                src_box, tgt_box,
-                label_band=layout.LABEL_BAND,
-                az_gaps=lo.az_gaps,
-                vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
-                az_rows=lo.az_rows,
+                         and tgt_box[0] > lo.vpc_corridor_x
+                         and not src_in_ingress_band)  # ingress band items use vertical routing
+
+            # Use right-corridor routing when: source is in region services
+            # (above VPC) and target is in VPC — avoids crossing service grid.
+            use_right_corridor = (
+                lo.region_right_x > 0
+                and src_above_vpc
+                and tgt_in_vpc
+                and not use_spine
+                and not src_in_ingress_band  # ingress band items route directly
+                and dx > 100
             )
+
+            # Ingress band → VPC/tall-container routing:
+            # Source is in the ingress band (above region) and target is a tall
+            # container or is inside the VPC.  Route: exit source BOTTOM →
+            # straight down → enter target from TOP.
+            # This is the cleanest path for items like ALB→ECS.
+            if src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
+                exit_xy = (0.5, 1.0)
+                entry_xy = (0.5, 0.0)
+                # No waypoints needed — draw.io will route orthogonally.
+                # But add a single horizontal waypoint if there's significant
+                # horizontal offset, so the line bends cleanly.
+                if dx > layout.ICON:
+                    mid_y = vpc_abs_top - 40  # just above VPC top
+                    waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
+                else:
+                    waypoints = []
+
+            # Region service → tall cluster (ECR→ECS/EKS deploy)
+            elif (src_above_vpc and not src_in_ingress_band
+                  and is_target_tall and not use_spine):
+                exit_xy = (0.5, 1.0)
+                entry_xy = (0.5, 0.0)
+                mid_y = tgt_box[1] - 40
+                waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
+
+            else:
+                exit_xy, entry_xy, waypoints = _route_edge(
+                    src_box, tgt_box,
+                    label_band=layout.LABEL_BAND,
+                    az_gaps=lo.az_gaps,
+                    vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                    az_rows=lo.az_rows,
+                    region_right_x=lo.region_right_x if use_right_corridor else None,
+                )
+
+            # Stagger: if another edge from the same source already uses the same
+            # top-exit clear_y, shift this edge's corridor up by 20px per step
+            # so multiple arrows from the same icon don't visually overlap.
+            if waypoints and exit_xy and exit_xy[1] == 0.0:
+                key = (src, round(waypoints[0][1] / 5) * 5)
+                n = _stagger_tracker.get(key, 0)
+                _stagger_tracker[key] = n + 1
+                if n > 0:
+                    waypoints = [(p[0], p[1] - n * 20) for p in waypoints]
+        
+        # Allow spec to override exit/entry points (e.g., "source_point": "0.25,1.0")
+        spec_src_point = edge.get("source_point")
+        spec_tgt_point = edge.get("target_point")
+        if spec_src_point:
+            parts = [float(x) for x in spec_src_point.split(",")]
+            exit_xy = (parts[0], parts[1])
+        if spec_tgt_point:
+            parts = [float(x) for x in spec_tgt_point.split(",")]
+            entry_xy = (parts[0], parts[1])
+        
         # Allow spec to provide explicit waypoints (overrides computed ones)
         spec_wps = edge.get("waypoints")
         if spec_wps:

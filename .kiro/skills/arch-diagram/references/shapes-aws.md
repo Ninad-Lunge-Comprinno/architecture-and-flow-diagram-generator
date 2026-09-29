@@ -16,6 +16,7 @@ test fails the build if they drift apart.
 | app_runner | containers | #ED7100 | mxgraph.aws4.app_runner | AWS App Runner |
 | appflow | integration | #E7157B | mxgraph.aws4.appflow | Amazon AppFlow |
 | application_load_balancer | networking | #8C4FFF | mxgraph.aws4.application_load_balancer | Application Load Balancer |
+| appmesh | networking | #8C4FFF | mxgraph.aws4.app_mesh | AWS App Mesh |
 | appsync | integration | #E7157B | mxgraph.aws4.appsync | AWS AppSync |
 | athena | analytics | #E7157B | mxgraph.aws4.athena | Amazon Athena |
 | aurora | database | #C925D1 | mxgraph.aws4.aurora | Amazon Aurora |
@@ -29,6 +30,7 @@ test fails the build if they drift apart.
 | cloud9 | devtools | #C925D1 | mxgraph.aws4.cloud9 | AWS Cloud9 |
 | cloudformation | management | #E7157B | mxgraph.aws4.cloudformation | AWS CloudFormation |
 | cloudfront | networking | #8C4FFF | mxgraph.aws4.cloudfront | Amazon CloudFront |
+| cloudmap | networking | #8C4FFF | mxgraph.aws4.cloud_map | AWS Cloud Map |
 | cloudtrail | management | #E7157B | mxgraph.aws4.cloudtrail | AWS CloudTrail |
 | cloudwatch_2 | management | #E7157B | mxgraph.aws4.cloudwatch_2 | Amazon CloudWatch |
 | codeartifact | devtools | #C925D1 | mxgraph.aws4.codeartifact | AWS CodeArtifact |
@@ -50,13 +52,13 @@ test fails the build if they drift apart.
 | deepracer | ml | #01A88D | mxgraph.aws4.deepracer | AWS DeepRacer |
 | detective | security | #DD344C | mxgraph.aws4.detective | Amazon Detective |
 | direct_connect | networking | #8C4FFF | mxgraph.aws4.direct_connect | AWS Direct Connect |
-| documentdb | database | #C925D1 | mxgraph.aws4.documentdb | Amazon DocumentDB |
+| documentdb | database | #C925D1 | mxgraph.aws4.documentdb_with_mongodb_compatibility | Amazon DocumentDB |
 | dynamodb | database | #C925D1 | mxgraph.aws4.dynamodb | Amazon DynamoDB |
-| ebs | storage | #7AA116 | mxgraph.aws4.ebs | Amazon EBS |
+| ebs | storage | #7AA116 | mxgraph.aws4.elastic_block_store | Amazon EBS |
 | ec2 | compute | #ED7100 | mxgraph.aws4.ec2 | Amazon EC2 |
 | ecr | containers | #ED7100 | mxgraph.aws4.ecr | Amazon ECR |
 | ecs | containers | #ED7100 | mxgraph.aws4.ecs | Amazon ECS |
-| efs | storage | #7AA116 | mxgraph.aws4.efs | Amazon EFS |
+| efs | storage | #7AA116 | mxgraph.aws4.elastic_file_system | Amazon EFS |
 | eks | containers | #ED7100 | mxgraph.aws4.eks | Amazon EKS |
 | elastic_beanstalk | compute | #ED7100 | mxgraph.aws4.elastic_beanstalk | AWS Elastic Beanstalk |
 | elastic_load_balancing | networking | #8C4FFF | mxgraph.aws4.elastic_load_balancing | Elastic Load Balancing |
@@ -72,6 +74,7 @@ test fails the build if they drift apart.
 | fsx | storage | #7AA116 | mxgraph.aws4.fsx | Amazon FSx |
 | global_accelerator | networking | #8C4FFF | mxgraph.aws4.global_accelerator | AWS Global Accelerator |
 | glue | analytics | #E7157B | mxgraph.aws4.glue | AWS Glue |
+| grafana | management | #E7157B | mxgraph.aws4.managed_service_for_grafana | Amazon Managed Grafana |
 | guardduty | security | #DD344C | mxgraph.aws4.guardduty | Amazon GuardDuty |
 | health | management | #E7157B | mxgraph.aws4.health | AWS Health |
 | identity_and_access_management | security | #DD344C | mxgraph.aws4.identity_and_access_management | AWS IAM |
@@ -93,13 +96,14 @@ test fails the build if they drift apart.
 | kinesis_data_streams | integration | #E7157B | mxgraph.aws4.kinesis_data_streams | Amazon Kinesis Data Streams |
 | lake_formation | analytics | #E7157B | mxgraph.aws4.lake_formation | AWS Lake Formation |
 | lambda | compute | #ED7100 | mxgraph.aws4.lambda | AWS Lambda |
-| lex_v2 | ml | #01A88D | mxgraph.aws4.lex_v2 | Amazon Lex |
+| lex_v2 | ml | #01A88D | mxgraph.aws4.lex | Amazon Lex |
 | lightsail | compute | #ED7100 | mxgraph.aws4.lightsail | Amazon Lightsail |
 | macie | security | #DD344C | mxgraph.aws4.macie | Amazon Macie |
-| managed_grafana | management | #E7157B | mxgraph.aws4.managed_grafana | Amazon Managed Grafana |
+| managed_grafana | management | #E7157B | mxgraph.aws4.managed_service_for_grafana | Amazon Managed Grafana |
 | managed_streaming_for_kafka | analytics | #E7157B | mxgraph.aws4.managed_streaming_for_kafka | Amazon MSK |
-| memorydb | database | #C925D1 | mxgraph.aws4.memorydb | Amazon MemoryDB |
+| memorydb | database | #C925D1 | mxgraph.aws4.memorydb_for_redis | Amazon MemoryDB |
 | mobile_client | general | #232F3E | mxgraph.aws4.mobile_client | Mobile Client |
+| mongodb | database | #C925D1 | mxgraph.aws4.documentdb_with_mongodb_compatibility | MongoDB |
 | mq | integration | #E7157B | mxgraph.aws4.mq | Amazon MQ |
 | nat_gateway | networking | #8C4FFF | mxgraph.aws4.nat_gateway | NAT Gateway |
 | neptune | database | #C925D1 | mxgraph.aws4.neptune | Amazon Neptune |
@@ -111,21 +115,22 @@ test fails the build if they drift apart.
 | personalize | ml | #01A88D | mxgraph.aws4.personalize | Amazon Personalize |
 | pinpoint | integration | #E7157B | mxgraph.aws4.pinpoint | Amazon Pinpoint |
 | polly | ml | #01A88D | mxgraph.aws4.polly | Amazon Polly |
+| qldb | database | #C925D1 | mxgraph.aws4.quantum_ledger_database | Amazon QLDB |
 | quicksight | analytics | #E7157B | mxgraph.aws4.quicksight | Amazon QuickSight |
 | rds | database | #C925D1 | mxgraph.aws4.rds | Amazon RDS |
 | redshift | database | #C925D1 | mxgraph.aws4.redshift | Amazon Redshift |
 | rekognition_2 | ml | #01A88D | mxgraph.aws4.rekognition_2 | Amazon Rekognition |
 | route_53 | networking | #8C4FFF | mxgraph.aws4.route_53 | Amazon Route 53 |
 | s3 | storage | #7AA116 | mxgraph.aws4.s3 | Amazon S3 |
-| s3_glacier | storage | #7AA116 | mxgraph.aws4.s3_glacier | Amazon S3 Glacier |
+| s3_glacier | storage | #7AA116 | mxgraph.aws4.glacier | Amazon S3 Glacier |
 | sagemaker | ml | #01A88D | mxgraph.aws4.sagemaker | Amazon SageMaker |
 | secrets_manager | security | #DD344C | mxgraph.aws4.secrets_manager | AWS Secrets Manager |
 | security_hub | security | #DD344C | mxgraph.aws4.security_hub | AWS Security Hub |
 | service_catalog | management | #E7157B | mxgraph.aws4.service_catalog | AWS Service Catalog |
-| ses | integration | #E7157B | mxgraph.aws4.ses | Amazon SES |
+| ses | integration | #E7157B | mxgraph.aws4.simple_email_service | Amazon SES |
 | shield | security | #DD344C | mxgraph.aws4.shield | AWS Shield |
 | single_sign_on | security | #DD344C | mxgraph.aws4.single_sign_on | AWS IAM Identity Center |
-| snow_family | storage | #7AA116 | mxgraph.aws4.snow_family | AWS Snow Family |
+| snow_family | storage | #7AA116 | mxgraph.aws4.snowball | AWS Snow Family |
 | sns | integration | #E7157B | mxgraph.aws4.sns | Amazon SNS |
 | sqs | integration | #E7157B | mxgraph.aws4.sqs | Amazon SQS |
 | step_functions | integration | #E7157B | mxgraph.aws4.step_functions | AWS Step Functions |
@@ -143,12 +148,13 @@ test fails the build if they drift apart.
 | verified_access | security | #DD344C | mxgraph.aws4.verified_access | AWS Verified Access |
 | vpc | networking | #8C4FFF | mxgraph.aws4.vpc | Amazon VPC |
 | vpc_privatelink | networking | #8C4FFF | mxgraph.aws4.vpc_privatelink | AWS PrivateLink |
-| vpn | networking | #8C4FFF | mxgraph.aws4.vpn | AWS VPN |
+| vpn | networking | #8C4FFF | mxgraph.aws4.vpn_gateway | AWS VPN |
 | waf | security | #DD344C | mxgraph.aws4.waf | AWS WAF |
+| wafv2 | security | #DD344C | mxgraph.aws4.waf | AWS WAF |
 | wavelength | compute | #ED7100 | mxgraph.aws4.wavelength | AWS Wavelength |
-| x_ray | management | #E7157B | mxgraph.aws4.x_ray | AWS X-Ray |
+| x_ray | management | #E7157B | mxgraph.aws4.xray | AWS X-Ray |
 
 ## Adding a new AWS service
-1. Add the entry to `_AWS` in `shapes.py` (`key: (stencil_suffix, category, label)`).
-2. Add a matching row to this table.
-3. Run `pytest` to confirm no drift.
+1. Add to `_AWS` in `shapes.py`
+2. Add a matching row here
+3. Run `pytest` — the drift test enforces the match

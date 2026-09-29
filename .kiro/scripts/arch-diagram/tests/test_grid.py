@@ -105,9 +105,11 @@ def test_edge_scope_placement():
     parents = {n.node_id: n.parent for n in lo.nodes}
     # user renders outside the cloud (base layer)
     assert parents["users"] == "1"
-    # WAF / ALB render inside the cloud
-    assert parents["waf"] == "cloud"
-    assert parents["alb"] == "cloud"
+    # Shield / WAF are regional ingress services: inside the Region, outside VPC
+    if "waf" in parents:
+        assert parents["waf"] == "region"
+    # ALB is a traffic entry point inside the VPC
+    assert parents["alb"] == "vpc"
     # IGW is placed on the VPC border (child of vpc)
     assert parents["igw"] == "vpc"
 

@@ -145,10 +145,9 @@ pages:
               id: data1
               label: "db-subnet-1"
               resources:
-                - { id: cache1, service: elasticache, label: "ElastiCache" }
-                - { id: aurora1, service: aurora, label: "Aurora" }
-                - { id: rds1, service: rds, label: "RDS" }
-                - { id: ddb1, service: dynamodb, label: "DynamoDB" }
+                - { id: cache1, service: elasticache, label: "ElastiCache Primary" }
+                - { id: aurora1, service: aurora, label: "Aurora Primary" }
+                - { id: rds1, service: rds, label: "RDS Primary" }
           - id: az2
             label: "Availability Zone 2"
             public_subnet:
@@ -163,10 +162,9 @@ pages:
               id: data2
               label: "db-subnet-2"
               resources:
-                - { id: cache2, service: memorydb, label: "MemoryDB" }
+                - { id: cache2, service: elasticache, label: "ElastiCache Replica" }
                 - { id: aurora2, service: aurora, label: "Aurora Replica" }
-                - { id: docdb2, service: documentdb, label: "DocumentDB" }
-                - { id: neptune2, service: neptune, label: "Neptune" }
+                - { id: rds2, service: rds, label: "RDS Standby" }
           - id: az3
             label: "Availability Zone 3"
             public_subnet:
@@ -181,8 +179,7 @@ pages:
               id: data3
               label: "db-subnet-3"
               resources:
-                - { id: timestream3, service: timestream, label: "Timestream" }
-                - { id: keyspaces3, service: keyspaces, label: "Keyspaces" }
+                - { id: cache3, service: elasticache, label: "ElastiCache Replica" }
                 - { id: aurora3, service: aurora, label: "Aurora Replica" }
         compute_groups:
           - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group (EC2)" }
@@ -190,15 +187,29 @@ pages:
           - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Cluster" }
 
     edges:
-      - { source: users, target: waf, label: "https" }
-      - { source: waf, target: alb, label: "filtered" }
-      - { source: alb, target: ecs-az1, label: "route" }
-      - { source: ecs-az1, target: cache1, label: "cache" }
-      - { source: ecs-az1, target: aurora1, label: "sql" }
+      # User traffic flow
+      - { source: users, target: shield, label: "https" }
+      - { source: shield, target: waf, label: "DDoS filtered" }
+      - { source: waf, target: alb, label: "WAF filtered" }
+      - { source: alb, target: ecs, label: "route" }
+      # API Gateway path (for REST APIs)
+      - { source: apigw, target: lambda, label: "invoke" }
+      # Container deployments - ECR to both ECS and EKS
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+      - { source: ecr, target: eks, label: "deploy", dashed: true }
+      # ECS to databases (different source points for each connection)
+      - { source: ecs-az1, target: cache1, label: "cache", source_point: "0.25,1.0" }
+      - { source: ecs-az1, target: aurora1, label: "sql", source_point: "0.75,1.0" }
+      # EKS to databases
+      - { source: eks-az2, target: rds1, label: "sql" }
+      # Aurora replication across AZs
       - { source: aurora1, target: aurora2, label: "replication", dashed: true }
       - { source: aurora1, target: aurora3, label: "replication", dashed: true }
-      - { source: ecr, target: ecs-az1, label: "deploy", dashed: true }
-      - { source: eks-az2, target: rds1, label: "sql" }
+      # ElastiCache replication across AZs
+      - { source: cache1, target: cache2, label: "replication", dashed: true }
+      - { source: cache1, target: cache3, label: "replication", dashed: true }
+      # RDS Multi-AZ standby
+      - { source: rds1, target: rds2, label: "sync", dashed: true }
 
   - name: "Flow Diagram"
     type: flow
