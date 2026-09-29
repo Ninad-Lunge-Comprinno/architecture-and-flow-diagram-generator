@@ -232,9 +232,12 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     az_content_w = col_db_x + db_w + AZ_INNER_PAD_X
 
     # ---- Region services height (drives dynamic_region_pad_top) ----------
+    # Emission row pitch is (ICON + LABEL_BAND + REGION_RES_GAP) per row; the
+    # reservation MUST match it or the last rows overrun into the VPC band.
     n_services = len(grid_services)
     n_service_rows = max(1, (n_services + REGION_ROW_ICONS - 1) // REGION_ROW_ICONS) if n_services else 1
-    services_block_h = n_service_rows * (ICON + LABEL_BAND) + (n_service_rows - 1) * REGION_RES_GAP
+    row_pitch = ICON + LABEL_BAND + REGION_RES_GAP
+    services_block_h = n_service_rows * row_pitch
     dynamic_region_pad_top = REGION_SERVICES_Y + services_block_h + REGION_RES_GAP
 
     # ---- VPC geometry ----------------------------------------------------
@@ -457,9 +460,31 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     vpc_abs_y = region_abs_y + vpc_region_y
     lo.vpc_abs_top = vpc_abs_y
 
+    # ---- Ingress row alignment -------------------------------------------
+    # Align the ingress chain (Shield/WAF in the region gutter, ALB in the VPC
+    # gutter) to the MIDDLE AZ's vertical centre, and API Gateway to the AZ
+    # above it. This makes Users→Shield→WAF→ALB a single straight horizontal
+    # line and lets ALB enter the compute cluster cleanly through the AZ gap
+    # (matching the house-style reference). Falls back to the VPC top band when
+    # there are no AZ rows.
+    if azs:
+        mid_idx = len(azs) // 2
+        mid_aid = azs[mid_idx]["id"]
+        ingress_row_cy = vpc_region_y + az_y[mid_aid] + az_row_h_by_az[mid_aid] / 2
+        # API Gateway aligns to the AZ above the middle (or the middle itself
+        # when there is only one AZ).
+        above_idx = max(0, mid_idx - 1)
+        above_aid = azs[above_idx]["id"]
+        apigw_row_cy = vpc_region_y + az_y[above_aid] + az_row_h_by_az[above_aid] / 2
+    else:
+        ingress_row_cy = vpc_region_y + VPC_PAD_TOP + ICON / 2
+        apigw_row_cy = ingress_row_cy
+    ingress_row_y = ingress_row_cy - ICON / 2          # top-left y of ingress icons
+    apigw_row_y = apigw_row_cy - ICON / 2
+
     # ---- Region ENTRY GUTTER: Shield + WAF (inside Region, outside VPC) ----
-    # Placed side-by-side in the left gutter column, vertically aligned with the
-    # top of the VPC so the WAF→ALB handoff is a short near-horizontal segment.
+    # Placed side-by-side in the left gutter column at the ingress-row y so the
+    # Users→Shield→WAF→ALB handoffs are straight horizontal segments.
     if region_gutter_items:
         pair = [shield_item, waf_item]
         pair = [p for p in pair if p is not None]
@@ -467,7 +492,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
         if not pair:
             pair = region_gutter_items
         gutter_cx = REGION_PAD_X + ICON_GAP           # x within region for first icon
-        gutter_cy = vpc_region_y + VPC_PAD_TOP        # align with VPC AZ-1 top band
+        gutter_cy = ingress_row_y
         gx = gutter_cx
         for item in pair:
             n = Node(item["id"], "resource", "region", gx, gutter_cy, ICON, ICON,
@@ -476,24 +501,37 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
             lo.add(n, region_abs_x + gx, region_abs_y + gutter_cy)
             gx += ICON + ENTRY_PAIR_GAP
 
-    # ---- VPC ENTRY GUTTER: ALB + API Gateway (inside the VPC) -------------
-    # Side-by-side in the VPC's left gutter. APIGW is placed to the right of ALB
-    # and vertically aligned toward the region-services row that holds Lambda so
-    # the APIGW→Lambda edge stays short.
+    # ---- VPC ENTRY GUTTER: ALB (ingress row) + API Gateway (row above) ----
+    # ALB sits at the ingress row y (aligned with WAF) so WAF→ALB is straight
+    # and ALB→cluster enters through the middle AZ gap. API Gateway sits one AZ
+    # row up, directly above ALB, so APIGW→Lambda routes cleanly upward.
     if vpc_gutter_items:
-        pair = [alb_item, apigw_item]
-        pair = [p for p in pair if p is not None]
-        if not pair:
-            pair = vpc_gutter_items
         gutter_x = ICON_GAP                            # x within VPC for first icon
-        gutter_y = VPC_PAD_TOP                         # align with AZ-1 top band
-        gx = gutter_x
-        for item in pair:
-            n = Node(item["id"], "resource", "vpc", gx, gutter_y, ICON, ICON,
+        if alb_item is not None:
+            n = Node(alb_item["id"], "resource", "vpc", gutter_x,
+                     ingress_row_y - vpc_region_y, ICON, ICON,
+                     provider=alb_item.get("provider", default_provider),
+                     service=alb_item["service"], label=alb_item.get("label"))
+            lo.add(n, vpc_abs_x + gutter_x,
+                   region_abs_y + ingress_row_y)
+        if apigw_item is not None:
+            n = Node(apigw_item["id"], "resource", "vpc", gutter_x,
+                     apigw_row_y - vpc_region_y, ICON, ICON,
+                     provider=apigw_item.get("provider", default_provider),
+                     service=apigw_item["service"], label=apigw_item.get("label"))
+            lo.add(n, vpc_abs_x + gutter_x,
+                   region_abs_y + apigw_row_y)
+        # Any other vpc-gutter items (rare) stack below ALB.
+        placed = {i["id"] for i in (alb_item, apigw_item) if i}
+        extra_y = ingress_row_y - vpc_region_y + ICON + ICON_GAP
+        for item in vpc_gutter_items:
+            if item["id"] in placed:
+                continue
+            n = Node(item["id"], "resource", "vpc", gutter_x, extra_y, ICON, ICON,
                      provider=item.get("provider", default_provider),
                      service=item["service"], label=item.get("label"))
-            lo.add(n, vpc_abs_x + gx, vpc_abs_y + gutter_y)
-            gx += ICON + ENTRY_PAIR_GAP
+            lo.add(n, vpc_abs_x + gutter_x, vpc_abs_y + extra_y)
+            extra_y += ICON + ICON_GAP
 
     # ---- AZ rows + subnets -----------------------------------------------
     for az in azs:
@@ -585,7 +623,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     # row they connect to: the Region gutter (Shield/WAF) when present, else the
     # leftover band. This keeps the users→shield/waf edge short and horizontal.
     if region_gutter_items:
-        entry_cy = region_abs_y + vpc_region_y + VPC_PAD_TOP + ICON / 2
+        entry_cy = region_abs_y + ingress_row_cy
     else:
         entry_cy = cloud_y + cloud_ingress_y + ICON / 2
     if actor_items:

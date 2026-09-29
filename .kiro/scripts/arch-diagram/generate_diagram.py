@@ -914,8 +914,11 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
 
     # Auto-fix regional services before validation and layout.
     _fix_regional_placement(page)
-    # Move VPC-connected region services to the last row (closest to VPC).
-    _reorder_services_for_vpc_proximity(page)
+    # Connection-aware placement: order freely-placeable region services so
+    # connected pairs (e.g. API Gateway ↔ Lambda) land close together and
+    # VPC-connected services sit closest to the VPC.
+    import routing as _routing
+    _routing.plan_region_service_order(page)
 
     elements = _collect_arch_ids(page)
     ids = _check_unique_ids(elements, page.get("name", "architecture"))
@@ -967,101 +970,86 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 x=node.x, y=node.y, width=node.width, height=node.height,
             ))
 
-    # Edges: routed with connection points using absolute boxes.
+    # ---- Edges: routed LAST, with DETERMINISTIC HOUSE-STYLE rules ----------
+    # Placement is now final. Pick connection points + waypoints per the
+    # relationship type and relative geometry (see routing._rule_for), which
+    # reproduces the hand-authored house-style conventions (linear ingress,
+    # over-the-top task→DB, consistent replication, gap-entry ALB→cluster).
+    # A conflict check still runs for a validation report.
     boxes = lo.abs_boxes
-    # Track edges sharing the same top-exit corridor to stagger them apart.
-    _stagger_tracker: dict = {}
-    # VPC absolute top y (used to distinguish ingress band items from VPC items)
-    vpc_abs_top = getattr(lo, "vpc_abs_top", lo.abs_boxes.get("vpc", (0, 0, 0, 0))[1])
-    for edge in page.get("edges", []):
+    all_edges = page.get("edges", []) or []
+
+    icon_ids = {n.node_id for n in lo.nodes
+                if n.kind == "resource" and n.node_id in boxes}
+
+    # Per-node metadata for the rule router: service, kind, parent, AZ.
+    parent_of = {n.node_id: n.parent for n in lo.nodes}
+
+    def _az_of(nid):
+        # Walk up parents until an AZ node id (az1/az2/...) is hit, or infer
+        # from a compute-node id "<group>-<az>".
+        if "-" in nid:
+            tail = nid.rsplit("-", 1)[-1]
+            if tail.startswith("az"):
+                return tail
+        cur = nid
+        seen = set()
+        while cur and cur not in seen:
+            seen.add(cur)
+            if cur.startswith("az") and cur[2:].isdigit():
+                return cur
+            cur = parent_of.get(cur)
+        return None
+
+    meta = {n.node_id: {"service": n.service, "kind": n.kind,
+                        "parent": n.parent, "az": _az_of(n.node_id)}
+            for n in lo.nodes}
+
+    def _is_overridden(e):
+        return bool(e.get("style") or e.get("waypoints"))
+
+    auto_edges = [e for e in all_edges
+                  if not _is_overridden(e)
+                  and e["source"] in boxes and e["target"] in boxes]
+
+    routes, endpoints = _routing.route_all_edges_rulebased(
+        auto_edges, boxes, meta)
+
+    # Validation report: check the rule-routed paths for residual conflicts.
+    icon_boxes = {i: boxes[i] for i in icon_ids}
+    conflicts = _routing.find_conflicts(routes, icon_boxes)
+
+    # Conflict report (deterministic; part of the pipeline's validation stage).
+    if conflicts:
+        n_icon = sum(1 for c in conflicts if c[0] == "edge_icon")
+        n_edge = sum(1 for c in conflicts if c[0] == "edge_edge")
+        print(f"  ⚠  ROUTING CONFLICTS: {n_icon} edge-over-icon, "
+              f"{n_edge} edge-over-edge", flush=True)
+        for c in conflicts[:12]:
+            if c[0] == "edge_icon":
+                print(f"       edge {c[1][0]}→{c[1][1]} crosses icon {c[2]!r}",
+                      flush=True)
+            else:
+                print(f"       edge {c[1][0]}→{c[1][1]} overlaps edge "
+                      f"{c[2][0]}→{c[2][1]}", flush=True)
+    else:
+        if auto_edges:
+            print(f"  ✓  ROUTING: {len(auto_edges)} edges routed with no "
+                  f"icon/edge conflicts", flush=True)
+
+    for edge in all_edges:
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
         waypoints = None
-        if src in boxes and tgt in boxes and not edge.get("style"):
-            src_box = boxes[src]
-            tgt_box = boxes[tgt]
-            src_cx = src_box[0] + src_box[2] / 2
-            src_cy = src_box[1] + src_box[3] / 2
-            tgt_cx = tgt_box[0] + tgt_box[2] / 2
-            tgt_cy = tgt_box[1] + tgt_box[3] / 2
-            dx = abs(tgt_cx - src_cx)
+        ekey = (src, tgt)
+        if ekey in routes and not _is_overridden(edge):
+            path = routes[ekey]
+            exit_xy, entry_xy = endpoints[ekey]
+            # Pass only the INTERMEDIATE waypoints; draw.io derives the endpoints
+            # from the exit/entry fractions on the icon borders.
+            waypoints = [tuple(p) for p in path[1:-1]] if len(path) > 2 else []
 
-            # Check if target is a tall container (compute group/lane)
-            is_target_tall = tgt_box[3] > 240
-            # Is the source in the ingress band (above the region box)?
-            region_box = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
-            src_in_ingress_band = src_box[1] < region_box[1]
-            # Is the source above the VPC?
-            src_above_vpc = src_box[1] < vpc_abs_top
-            # Is the target in the VPC?
-            tgt_in_vpc = tgt_box[1] >= vpc_abs_top
-
-            # Use the VPC corridor spine when the source is to the left of the VPC
-            # (e.g. ALB/CloudFront in the legacy left-edge strip routing into VPC).
-            # With the new horizontal ingress band, ingress items are above the VPC
-            # so use_spine is typically false for them.
-            use_spine = (lo.vpc_corridor_x > 0
-                         and src_box[0] < lo.vpc_corridor_x
-                         and tgt_box[0] > lo.vpc_corridor_x
-                         and not src_in_ingress_band)  # ingress band items use vertical routing
-
-            # Use right-corridor routing when: source is in region services
-            # (above VPC) and target is in VPC — avoids crossing service grid.
-            use_right_corridor = (
-                lo.region_right_x > 0
-                and src_above_vpc
-                and tgt_in_vpc
-                and not use_spine
-                and not src_in_ingress_band  # ingress band items route directly
-                and dx > 100
-            )
-
-            # Ingress band → VPC/tall-container routing:
-            # Source is in the ingress band (above region) and target is a tall
-            # container or is inside the VPC.  Route: exit source BOTTOM →
-            # straight down → enter target from TOP.
-            # This is the cleanest path for items like ALB→ECS.
-            if src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
-                exit_xy = (0.5, 1.0)
-                entry_xy = (0.5, 0.0)
-                # No waypoints needed — draw.io will route orthogonally.
-                # But add a single horizontal waypoint if there's significant
-                # horizontal offset, so the line bends cleanly.
-                if dx > layout.ICON:
-                    mid_y = vpc_abs_top - 40  # just above VPC top
-                    waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
-                else:
-                    waypoints = []
-
-            # Region service → tall cluster (ECR→ECS/EKS deploy)
-            elif (src_above_vpc and not src_in_ingress_band
-                  and is_target_tall and not use_spine):
-                exit_xy = (0.5, 1.0)
-                entry_xy = (0.5, 0.0)
-                mid_y = tgt_box[1] - 40
-                waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
-
-            else:
-                exit_xy, entry_xy, waypoints = _route_edge(
-                    src_box, tgt_box,
-                    label_band=layout.LABEL_BAND,
-                    az_gaps=lo.az_gaps,
-                    vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
-                    az_rows=lo.az_rows,
-                    region_right_x=lo.region_right_x if use_right_corridor else None,
-                )
-
-            # Stagger: if another edge from the same source already uses the same
-            # top-exit clear_y, shift this edge's corridor up by 20px per step
-            # so multiple arrows from the same icon don't visually overlap.
-            if waypoints and exit_xy and exit_xy[1] == 0.0:
-                key = (src, round(waypoints[0][1] / 5) * 5)
-                n = _stagger_tracker.get(key, 0)
-                _stagger_tracker[key] = n + 1
-                if n > 0:
-                    waypoints = [(p[0], p[1] - n * 20) for p in waypoints]
-        
-        # Allow spec to override exit/entry points (e.g., "source_point": "0.25,1.0")
+        # Spec overrides win over computed routing.
         spec_src_point = edge.get("source_point")
         spec_tgt_point = edge.get("target_point")
         if spec_src_point:
@@ -1070,11 +1058,10 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         if spec_tgt_point:
             parts = [float(x) for x in spec_tgt_point.split(",")]
             entry_xy = (parts[0], parts[1])
-        
-        # Allow spec to provide explicit waypoints (overrides computed ones)
         spec_wps = edge.get("waypoints")
         if spec_wps:
             waypoints = [tuple(p) for p in spec_wps]
+
         diagram.add_edge(
             source=src,
             target=tgt,

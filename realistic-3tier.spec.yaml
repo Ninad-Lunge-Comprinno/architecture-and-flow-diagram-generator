@@ -1,0 +1,65 @@
+provider: aws
+metadata:
+  project: "Realistic 3-Tier"
+  version: "1.0"
+  date: "2026-09-29"
+  creator: "Ninad"
+  reviewer: "TBD"
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+    global:
+      - { id: r53, service: route_53, label: "Route 53" }
+      - { id: cf, service: cloudfront, label: "CloudFront" }
+      - { id: s3, service: s3, label: "S3" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+    edge:
+      - { id: users, service: users, label: "Users" }
+      - { id: shield, service: shield, label: "Shield" }
+      - { id: waf, service: waf, label: "WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: apigw, service: api_gateway, label: "API Gateway" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+    region:
+      label: "us-east-1"
+      services:
+        - { id: cognito, service: cognito, label: "Cognito" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: cloudwatch, service: cloudwatch_2, label: "CloudWatch" }
+        - { id: ecr, service: ecr, label: "ECR" }
+        - { id: lambda, service: lambda, label: "Lambda" }
+      vpc:
+        label: "App VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet: { id: pub1, label: "public-1", resources: [ { id: nat1, service: nat_gateway, label: "NAT" } ] }
+            app_subnet: { id: app1, label: "app-1", resources: [] }
+            db_subnet:
+              id: data1
+              label: "db-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+                - { id: rds1, service: rds, label: "RDS Primary" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet: { id: pub2, label: "public-2", resources: [] }
+            app_subnet: { id: app2, label: "app-2", resources: [] }
+            db_subnet:
+              id: data2
+              label: "db-2"
+              resources:
+                - { id: rds2, service: rds, label: "RDS Standby" }
+        compute_groups:
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
+    edges:
+      - { source: users, target: waf, label: "https" }
+      - { source: waf, target: alb, label: "filtered" }
+      - { source: alb, target: ecs, label: "route" }
+      - { source: apigw, target: lambda, label: "invoke" }
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+      - { source: ecs-az1, target: cache1, label: "cache" }
+      - { source: ecs-az1, target: rds1, label: "sql" }
+      - { source: rds1, target: rds2, label: "replication", dashed: true }
