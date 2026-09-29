@@ -41,12 +41,10 @@ Use the dedicated `arch-diagram` agent, or invoke the skill from any agent:
 /arch-diagram our e-commerce app is migrating to AWS — 3-tier, 3 AZs, ECS Fargate + RDS
 ```
 
-The agent will:
-1. Ask clarifying questions if needed
-2. Draft a spec following the Pattern Library in SKILL.md
-3. Show you the spec for review
-4. Generate `<project>.drawio.xml` with overlap warnings
-5. (If awsdac is installed) also generate a PNG preview
+The agent will ask for architecture choices that are missing, summarize the
+proposed components and important flows, then create a focused spec and diagram.
+It does not assume a fixed pattern, AZ count, NAT design, or required service
+inventory. If an awsdac preview tool is available, it may also render a PNG.
 
 ### Via the CLI
 ```bash
@@ -56,7 +54,7 @@ python .kiro/scripts/arch-diagram/generate_diagram.py \
   --output my-project.drawio.xml
 ```
 
-See `tests/fixtures/demo_grid.yaml` for a worked example.
+See `.kiro/scripts/arch-diagram/tests/fixtures/demo_grid.yaml` for a worked example.
 Open output at https://app.diagrams.net or in the draw.io desktop app.
 
 ## Setup
@@ -65,7 +63,7 @@ Open output at https://app.diagrams.net or in the draw.io desktop app.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest            # 67 tests should pass
+pytest
 ```
 
 ### awsdac MCP server (optional — enables PNG preview)
@@ -109,15 +107,13 @@ For a **custom agent** that needs access to this skill, add:
 }
 ```
 
-## What makes the diagrams intelligent
+## Design approach
 
-The skill's SKILL.md encodes:
-- **Architecture Pattern Library**: 3-tier, serverless, microservices, data pipeline
-- **Service placement rules**: what belongs in global vs edge vs region vs VPC
-- **Connection semantics**: when to exit bottom vs top, when to use direct vs routed edges
-- **Common mistakes to avoid**: single NAT, Cache-left/RDS-right ordering, ALB→cluster not tasks
-- **Routing is fully computed**: the engine detects adjacent-vs-non-adjacent, multi-AZ replication skips, ECR-above-cluster — no hardcoded coordinates
-- **Overlap detection**: after generating, the engine checks if any icons or containers geometrically overlap and warns before writing
+Kiro asks about requirements that affect the architecture, models only the
+components and important connections needed to explain the system, and writes a
+spec before rendering. The renderer handles coordinates and emits editable
+draw.io XML. The examples in `diagram examples/` provide visual guidance; they
+are not templates that every request must follow.
 
 ## Extending the shape catalog
 

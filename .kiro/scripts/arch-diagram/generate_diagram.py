@@ -799,6 +799,42 @@ def _nearest_az_gap(y: float, gaps: list) -> Optional[tuple]:
     return min(gaps, key=lambda g: abs((g[0]+g[1])/2 - y)) if gaps else None
 
 
+def _same_row(y1: float, y2: float, az_rows: list):
+    """Return the (top, bottom) AZ row containing both y-values, or None."""
+    if not az_rows:
+        return None
+    for row in az_rows:
+        if row[0] <= y1 <= row[1] and row[0] <= y2 <= row[1]:
+            return row
+    return None
+
+
+def _seg_hits_resource(points: list, boxes: dict, kind_of: dict,
+                       src: str, tgt: str, margin: float = 4.0):
+    """Return the id of a resource icon crossed by the polyline, or None.
+
+    Used to verify a candidate routed path before committing to it.
+    Container boxes are ignored (lines must cross container borders);
+    only resource-icon crossings count. Endpoints are excluded.
+    """
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        for nid, (bx, by, bw, bh) in boxes.items():
+            if nid in (src, tgt) or kind_of.get(nid) != "resource":
+                continue
+            if abs(x1 - x2) < 1e-6:  # vertical
+                if (bx + margin < x1 < bx + bw - margin
+                        and max(y1, y2) > by + margin
+                        and min(y1, y2) < by + bh - margin):
+                    return nid
+            elif abs(y1 - y2) < 1e-6:  # horizontal
+                if (by + margin < y1 < by + bh - margin
+                        and max(x1, x2) > bx + margin
+                        and min(x1, x2) < bx + bw - margin):
+                    return nid
+    return None
+
 
 # Services that are REGIONAL or GLOBAL and must never be placed inside VPC subnets.
 # The engine auto-migrates them to region.services when found in a subnet.
@@ -971,29 +1007,56 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
             ))
 
     # ---- Edges: routed LAST, with DETERMINISTIC HOUSE-STYLE rules ----------
-    # Placement is now final. Pick connection points + waypoints per the
-    # relationship type and relative geometry (see routing._rule_for), which
-    # reproduces the hand-authored house-style conventions (linear ingress,
-    # over-the-top task→DB, consistent replication, gap-entry ALB→cluster).
-    # A conflict check still runs for a validation report.
+    # Uses the inline obstacle-aware routing approach (ported from the reference
+    # implementation). Key cases in priority order:
+    #   1. Ingress band → VPC/tall-container (bottom exit → top entry)
+    #   2. Region service → tall cluster (ECR→ECS deploy: bottom → top)
+    #   3. Lane → icon (Sadhaka geometry: buses at AZ-gap centres, top entry)
+    #   4. Same-row: straight → upper-band jog → lower-band jog (obstacle-checked)
+    #   5. Fallback: _route_edge() with corridor / AZ-gap routing
+    # After all edges are routed, routing.find_conflicts() validates the result.
+    # House style: label="" on all edges (spec labels are documentation only).
     boxes = lo.abs_boxes
-    all_edges = page.get("edges", []) or []
+    kind_of = {n.node_id: n.kind for n in lo.nodes}
+    svc_of = {n.node_id: n.service for n in lo.nodes}
+    _stagger_tracker: dict = {}
+    vpc_abs_top = getattr(lo, "vpc_abs_top", lo.abs_boxes.get("vpc", (0, 0, 0, 0))[1])
 
+    # DB services that a compute cluster boundary may connect to (cluster→DB).
+    _CLUSTER_KINDS = ("asg", "ecs_cluster", "eks_cluster", "cluster")
+    _DB_SVCS = {"rds", "aurora", "elasticache", "memorydb", "documentdb",
+                "neptune", "timestream", "keyspaces", "redshift", "dynamodb"}
+
+    # Pre-index cluster→DB edges so shared-source (one cluster → many DBs) and
+    # shared-target (many clusters → one DB) bundles can each be spread into
+    # distinct lanes. Keyed independently so both fan-outs are separated.
+    _all_edges_pre = page.get("edges", []) or []
+    clusterdb_by_src: dict = {}   # cluster id → [db ids] (ordered by db x)
+    clusterdb_by_tgt: dict = {}   # db id → [cluster ids] (ordered by cluster x)
+    for _e in _all_edges_pre:
+        _s, _t = _e.get("source"), _e.get("target")
+        if (kind_of.get(_s) in _CLUSTER_KINDS
+                and svc_of.get(_t) in _DB_SVCS
+                and _s in boxes and _t in boxes):
+            clusterdb_by_src.setdefault(_s, []).append(_t)
+            clusterdb_by_tgt.setdefault(_t, []).append(_s)
+    for _k, _v in clusterdb_by_src.items():
+        _v.sort(key=lambda i: boxes[i][0])
+    for _k, _v in clusterdb_by_tgt.items():
+        _v.sort(key=lambda i: boxes[i][0])
+
+    # Build icon_ids and meta for the conflict checker.
     icon_ids = {n.node_id for n in lo.nodes
                 if n.kind == "resource" and n.node_id in boxes}
-
-    # Per-node metadata for the rule router: service, kind, parent, AZ.
     parent_of = {n.node_id: n.parent for n in lo.nodes}
 
     def _az_of(nid):
-        # Walk up parents until an AZ node id (az1/az2/...) is hit, or infer
-        # from a compute-node id "<group>-<az>".
         if "-" in nid:
             tail = nid.rsplit("-", 1)[-1]
             if tail.startswith("az"):
                 return tail
         cur = nid
-        seen = set()
+        seen: set = set()
         while cur and cur not in seen:
             seen.add(cur)
             if cur.startswith("az") and cur[2:].isdigit():
@@ -1005,21 +1068,269 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                         "parent": n.parent, "az": _az_of(n.node_id)}
             for n in lo.nodes}
 
-    def _is_overridden(e):
-        return bool(e.get("style") or e.get("waypoints"))
+    all_edges = page.get("edges", []) or []
+    computed_routes: dict = {}   # (src,tgt) → (exit_xy, entry_xy, waypoints)
 
-    auto_edges = [e for e in all_edges
-                  if not _is_overridden(e)
-                  and e["source"] in boxes and e["target"] in boxes]
+    for edge in all_edges:
+        src, tgt = edge["source"], edge["target"]
+        exit_xy = entry_xy = None
+        waypoints = None
+        if src in boxes and tgt in boxes and not edge.get("style"):
+            src_box = boxes[src]
+            tgt_box = boxes[tgt]
+            src_cx = src_box[0] + src_box[2] / 2
+            src_cy = src_box[1] + src_box[3] / 2
+            tgt_cx = tgt_box[0] + tgt_box[2] / 2
+            tgt_cy = tgt_box[1] + tgt_box[3] / 2
+            dx = abs(tgt_cx - src_cx)
 
-    routes, endpoints = _routing.route_all_edges_rulebased(
-        auto_edges, boxes, meta)
+            is_target_tall = tgt_box[3] > 240
+            region_box = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
+            src_in_ingress_band = src_box[1] < region_box[1]
+            src_above_vpc = src_box[1] < vpc_abs_top
+            tgt_in_vpc = tgt_box[1] >= vpc_abs_top
 
-    # Validation report: check the rule-routed paths for residual conflicts.
+            use_spine = (lo.vpc_corridor_x > 0
+                         and src_box[0] < lo.vpc_corridor_x
+                         and tgt_box[0] > lo.vpc_corridor_x
+                         and not src_in_ingress_band)
+
+            use_right_corridor = (
+                lo.region_right_x > 0
+                and src_above_vpc
+                and tgt_in_vpc
+                and not use_spine
+                and not src_in_ingress_band
+                and dx > 100
+            )
+
+            # Case 1: Ingress band → VPC or tall container
+            if src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
+                exit_xy = (0.5, 1.0)
+                entry_xy = (0.5, 0.0)
+                if dx > layout.ICON:
+                    mid_y = vpc_abs_top - 40
+                    waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
+                else:
+                    waypoints = []
+
+            # Case 2: Region service → tall cluster (ECR→ECS/EKS deploy)
+            elif (src_above_vpc and not src_in_ingress_band
+                  and is_target_tall and not use_spine):
+                exit_xy = (0.5, 1.0)
+                entry_xy = (0.5, 0.0)
+                mid_y = tgt_box[1] - 40
+                waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
+
+            # Case 2b: Compute CLUSTER boundary → DB (cluster→DB, option (a)).
+            # The DB sits to the RIGHT of the tall lane, in a db_subnet row.
+            # Exit the lane's RIGHT side, run to a per-edge vertical corridor in
+            # the gap between the lane and the DB column, then drop into the DB
+            # TOP. Each edge in a shared-source or shared-target bundle gets its
+            # OWN corridor x and DB entry column, so no two segments coincide —
+            # this is robust even when the vertical gap above the DB row is thin.
+            elif (kind_of.get(src) in _CLUSTER_KINDS
+                  and svc_of.get(tgt) in _DB_SVCS
+                  and tgt_box[0] > src_box[0]):
+                # shared-source: this cluster → several DBs (index by target x)
+                sibs_t = clusterdb_by_src.get(src, [tgt])
+                ti = sibs_t.index(tgt) if tgt in sibs_t else 0
+                # shared-target: several clusters → this DB (index by source x)
+                sibs_s = clusterdb_by_tgt.get(tgt, [src])
+                si = sibs_s.index(src) if src in sibs_s else 0
+                ns = len(sibs_s)
+                src_right = src_box[0] + src_box[2]
+                # Exit the lane right side, staggered vertically a little by the
+                # target index so the two edges from one lane leave at different
+                # heights (prevents a shared exit stub).
+                exit_fy = 0.30 + 0.20 * ti
+                exit_fy = min(0.9, max(0.1, exit_fy))
+                exit_py = src_box[1] + src_box[3] * exit_fy
+                # Per-edge vertical corridor in the gap between lane and DB.
+                gap = tgt_box[0] - src_right
+                # spread corridors across the gap by a combined bundle index
+                bundle_n = max(2, len(sibs_t) * ns)
+                bundle_i = ti * ns + si
+                corridor_x = src_right + gap * (bundle_i + 1) / (bundle_n + 1)
+                # DB entry column staggered by source (shared-target split)
+                entry_fx = ((si + 1) / (ns + 1)) if ns > 1 else 0.5
+                drop_x = tgt_box[0] + tgt_box[2] * entry_fx
+                exit_xy = (1.0, round(exit_fy, 3))
+                entry_xy = (round(entry_fx, 3), 0.0)
+                waypoints = [(corridor_x, exit_py),
+                             (corridor_x, tgt_box[1] - 12),
+                             (drop_x, tgt_box[1] - 12)]
+
+            # Case 3: Lane → icon (Sadhaka geometry)
+            elif (kind_of.get(src) in ("asg", "ecs_cluster", "eks_cluster", "cluster")
+                    and kind_of.get(tgt) == "resource"
+                    and tgt_box[0] > src_box[0]):
+                src_right = src_box[0] + src_box[2]
+                cand = None
+                if abs(tgt_cy - src_cy) > 10:
+                    bus_y = tgt_box[1] - 75 if tgt_cy < src_cy else tgt_box[1] - 160
+                    fexit = (bus_y - src_box[1]) / src_box[3]
+                    if 0.02 <= fexit <= 0.98:
+                        exit_xy, entry_xy = (1.0, round(fexit, 2)), (0.5, 0.0)
+                        waypoints = [(tgt_cx, bus_y)]
+                        cand = [(src_right, bus_y), (tgt_cx, bus_y),
+                                (tgt_cx, tgt_box[1])]
+                else:
+                    frac0 = (src_cy - tgt_box[1]) / tgt_box[3]
+                    if 0.05 <= frac0 <= 0.95:
+                        exit_xy, entry_xy = (1.0, 0.5), (0.0, round(frac0, 2))
+                        waypoints = []
+                        cand = [(src_right, src_cy), (tgt_box[0], src_cy)]
+                if cand is not None and _seg_hits_resource(
+                        cand, boxes, kind_of, src, tgt) is None:
+                    pass  # use exit/entry/waypoints set above
+                else:
+                    exit_xy, entry_xy, waypoints = _route_edge(
+                        src_box, tgt_box,
+                        label_band=layout.LABEL_BAND,
+                        az_gaps=lo.az_gaps,
+                        vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                        az_rows=lo.az_rows,
+                        region_right_x=lo.region_right_x if use_right_corridor else None,
+                    )
+
+            # Case 4: Same-row left→right with obstacle avoidance
+            elif (not src_in_ingress_band
+                    and tgt_box[0] > src_box[0]
+                    and _same_row(src_cy, tgt_cy, lo.az_rows) is not None):
+                row_top, row_bot = _same_row(src_cy, tgt_cy, lo.az_rows)
+                src_right = src_box[0] + src_box[2]
+                tgt_left = tgt_box[0]
+                n_up = _stagger_tracker.get((src, "bandup"), 0)
+                n_lo = _stagger_tracker.get((src, "bandlo"), 0)
+                band_up = row_top + 45 - n_up * 18
+                band_lo = row_bot - 45 + n_lo * 18
+                gx = src_right + 40
+                picked = False
+
+                # a. Straight
+                frac = (src_cy - tgt_box[1]) / tgt_box[3] if tgt_box[3] else 0.5
+                if 0.05 <= frac <= 0.95:
+                    cand = [(src_right, src_cy), (tgt_left, src_cy)]
+                    if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                        exit_xy, entry_xy = (1.0, 0.5), (0.0, round(frac, 2))
+                        waypoints = []
+                        picked = True
+
+                # b. Upper-band jog
+                if not picked and row_top + 20 < band_up < src_cy + tgt_box[3]:
+                    if is_target_tall:
+                        fup = min(0.95, max(0.05, (band_up - tgt_box[1]) / tgt_box[3]))
+                        cand = [(src_right, src_cy), (gx, src_cy), (gx, band_up),
+                                (tgt_left, band_up)]
+                        if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                            exit_xy, entry_xy = (1.0, 0.5), (0.0, round(fup, 2))
+                            waypoints = _dedup([(gx, src_cy), (gx, band_up),
+                                                (tgt_left, band_up)])
+                            _stagger_tracker[(src, "bandup")] = n_up + 1
+                            picked = True
+                    else:
+                        cand = [(src_cx, src_box[1]), (src_cx, band_up),
+                                (tgt_cx, band_up), (tgt_cx, tgt_box[1])]
+                        if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                            exit_xy, entry_xy = (0.5, 0.0), (0.5, 0.0)
+                            waypoints = _dedup([(src_cx, band_up), (tgt_cx, band_up)])
+                            _stagger_tracker[(src, "bandup")] = n_up + 1
+                            picked = True
+
+                # c. Lower-band jog
+                if not picked and src_cy - tgt_box[3] < band_lo < row_bot - 20:
+                    if is_target_tall:
+                        flo = min(0.95, max(0.05, (band_lo - tgt_box[1]) / tgt_box[3]))
+                        cand = [(src_right, src_cy), (gx, src_cy), (gx, band_lo),
+                                (tgt_left, band_lo)]
+                        if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                            exit_xy, entry_xy = (1.0, 0.5), (0.0, round(flo, 2))
+                            waypoints = _dedup([(gx, src_cy), (gx, band_lo),
+                                                (tgt_left, band_lo)])
+                            _stagger_tracker[(src, "bandlo")] = n_lo + 1
+                            picked = True
+                    else:
+                        bot = src_box[1] + src_box[3]
+                        cand = [(src_cx, bot), (src_cx, band_lo),
+                                (tgt_cx, band_lo), (tgt_cx, tgt_box[1] + tgt_box[3])]
+                        if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                            exit_xy, entry_xy = (0.5, 1.0), (0.5, 1.0)
+                            waypoints = _dedup([(src_cx, band_lo), (tgt_cx, band_lo)])
+                            _stagger_tracker[(src, "bandlo")] = n_lo + 1
+                            picked = True
+
+                if not picked:
+                    exit_xy, entry_xy, waypoints = _route_edge(
+                        src_box, tgt_box,
+                        label_band=layout.LABEL_BAND,
+                        az_gaps=lo.az_gaps,
+                        vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                        az_rows=lo.az_rows,
+                        region_right_x=lo.region_right_x if use_right_corridor else None,
+                    )
+
+            # Case 5: Fallback
+            else:
+                exit_xy, entry_xy, waypoints = _route_edge(
+                    src_box, tgt_box,
+                    label_band=layout.LABEL_BAND,
+                    az_gaps=lo.az_gaps,
+                    vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                    az_rows=lo.az_rows,
+                    region_right_x=lo.region_right_x if use_right_corridor else None,
+                )
+
+            # Stagger top-exit corridors to prevent overlapping arrows.
+            if waypoints and exit_xy and exit_xy[1] == 0.0:
+                key = (src, round(waypoints[0][1] / 5) * 5)
+                n = _stagger_tracker.get(key, 0)
+                _stagger_tracker[key] = n + 1
+                if n > 0:
+                    waypoints = [(p[0], p[1] - n * 20) for p in waypoints]
+
+            # Stagger BOTTOM-exit fan-outs (shared source → multiple tall
+            # clusters, e.g. ECR→[ecs,eks] deploy or a source feeding two
+            # cluster boundaries). Two such edges share the same source bottom
+            # stub and drop-band; offset each edge's exit x + band-y so the
+            # vertical stubs and horizontal bands never coincide. General:
+            # keyed on the source's bottom side, independent of the diagram.
+            if (waypoints and exit_xy and exit_xy[1] == 1.0
+                    and kind_of.get(tgt) in _CLUSTER_KINDS):
+                bkey = (src, "botfan")
+                m = _stagger_tracker.get(bkey, 0)
+                _stagger_tracker[bkey] = m + 1
+                if m > 0:
+                    # shift exit x-fraction and lift the drop-band so this edge
+                    # rides its own lane into the target cluster top.
+                    new_fx = min(0.85, max(0.15, exit_xy[0] + m * 0.18))
+                    exit_xy = (round(new_fx, 3), 1.0)
+                    lift = m * 22
+                    new_exit_px = src_box[0] + src_box[2] * new_fx
+                    if waypoints:
+                        first_y = waypoints[0][1] - lift
+                        waypoints = [(new_exit_px, first_y)] + \
+                            [(p[0], p[1] - lift) for p in waypoints[1:]]
+
+            computed_routes[(src, tgt)] = (exit_xy, entry_xy, waypoints)
+
+    # Run conflict check on the computed routes for validation report.
+    def _route_pts(src, tgt, exit_xy, entry_xy, waypoints):
+        sb, tb = boxes[src], boxes[tgt]
+        def _ep(box, fxy):
+            return (box[0] + box[2] * (fxy[0] if fxy else 0.5),
+                    box[1] + box[3] * (fxy[1] if fxy else 0.5))
+        return [_ep(sb, exit_xy)] + list(waypoints or []) + [_ep(tb, entry_xy)]
+
     icon_boxes = {i: boxes[i] for i in icon_ids}
-    conflicts = _routing.find_conflicts(routes, icon_boxes)
+    route_dict = {}
+    endpoint_dict = {}
+    for (src, tgt), (ex, en, wps) in computed_routes.items():
+        pts = _route_pts(src, tgt, ex, en, wps)
+        route_dict[(src, tgt)] = pts
+        endpoint_dict[(src, tgt)] = (ex, en)
 
-    # Conflict report (deterministic; part of the pipeline's validation stage).
+    conflicts = _routing.find_conflicts(route_dict, icon_boxes)
     if conflicts:
         n_icon = sum(1 for c in conflicts if c[0] == "edge_icon")
         n_edge = sum(1 for c in conflicts if c[0] == "edge_edge")
@@ -1033,23 +1344,20 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 print(f"       edge {c[1][0]}→{c[1][1]} overlaps edge "
                       f"{c[2][0]}→{c[2][1]}", flush=True)
     else:
-        if auto_edges:
-            print(f"  ✓  ROUTING: {len(auto_edges)} edges routed with no "
+        if computed_routes:
+            print(f"  ✓  ROUTING: {len(computed_routes)} edges routed with no "
                   f"icon/edge conflicts", flush=True)
 
     for edge in all_edges:
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
         waypoints = None
-        ekey = (src, tgt)
-        if ekey in routes and not _is_overridden(edge):
-            path = routes[ekey]
-            exit_xy, entry_xy = endpoints[ekey]
-            # Pass only the INTERMEDIATE waypoints; draw.io derives the endpoints
-            # from the exit/entry fractions on the icon borders.
-            waypoints = [tuple(p) for p in path[1:-1]] if len(path) > 2 else []
 
-        # Spec overrides win over computed routing.
+        route = computed_routes.get((src, tgt))
+        if route:
+            exit_xy, entry_xy, waypoints = route
+
+        # Spec overrides always win.
         spec_src_point = edge.get("source_point")
         spec_tgt_point = edge.get("target_point")
         if spec_src_point:
@@ -1065,7 +1373,9 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         diagram.add_edge(
             source=src,
             target=tgt,
-            label=edge.get("label", ""),
+            # House style: no text labels on connector lines.
+            # Spec labels are documentation only.
+            label="",
             style=_edge_style(edge),
             waypoints=waypoints,
             exit_xy=exit_xy,

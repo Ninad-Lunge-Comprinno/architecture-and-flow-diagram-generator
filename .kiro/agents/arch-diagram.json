@@ -1,6 +1,6 @@
 {
   "name": "arch-diagram",
-  "description": "Architecture diagram generator for cloud migration projects. Invokes the arch-diagram skill to draft specs and generate draw.io diagrams. Also calls awsdac for a PNG preview when available.",
+  "description": "Interview the user about missing architecture requirements, then create a focused spec and editable draw.io architecture or flow diagram.",
   "tools": ["read", "write", "shell", "grep", "glob"],
   "allowedTools": ["read", "grep", "glob"],
   "toolsSettings": {
@@ -31,5 +31,5 @@
       "disabled": false
     }
   },
-  "welcomeMessage": "Architecture Diagram Generator ready. Tell me about your migration project and I'll draft a spec and generate a draw.io diagram matching your firm's house style."
+  "welcomeMessage": "Describe the system you want to diagram. I’ll ask about any architecture choices that are still unclear, summarize the proposed components and flows, then generate an editable draw.io diagram."
 }

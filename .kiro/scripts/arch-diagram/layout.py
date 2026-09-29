@@ -83,7 +83,7 @@ ENTRY_PAIR_GAP = 80  # horizontal gap within a side-by-side ingress pair
 REGION_SERVICES_Y = 65   # top of services grid within region
 REGION_PAD_BOTTOM = 80   # bottom padding inside region
 REGION_RES_GAP = 45      # gap between icons in the region services grid
-REGION_ROW_ICONS = 20    # max icons per row — higher value → fewer rows → shorter height
+REGION_ROW_ICONS = 21    # 21/row → with 86 DataForge services, lambda lands at start of row 5
 
 CLOUD_PAD_X = 85         # right padding inside cloud
 CLOUD_GLOBAL_Y = 65      # top of global icon row within cloud
@@ -482,31 +482,36 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     ingress_row_y = ingress_row_cy - ICON / 2          # top-left y of ingress icons
     apigw_row_y = apigw_row_cy - ICON / 2
 
-    # ---- Region ENTRY GUTTER: Shield + WAF (inside Region, outside VPC) ----
-    # Placed side-by-side in the left gutter column at the ingress-row y so the
-    # Users→Shield→WAF→ALB handoffs are straight horizontal segments.
+    # ---- Region ENTRY GUTTER: Shield + WAF (and any future items) ----------
+    # Items are EVENLY SPACED across the full gutter width so they look balanced
+    # regardless of how many are added. Each item is centred in its own slot.
+    # All items sit at the ingress-row y (same level as ALB) so the horizontal
+    # Users→Shield→WAF→ALB chain reads as a single flow line.
     if region_gutter_items:
         pair = [shield_item, waf_item]
         pair = [p for p in pair if p is not None]
-        # Fall back to whatever region-gutter items exist, in spec order.
         if not pair:
-            pair = region_gutter_items
-        gutter_cx = REGION_PAD_X + ICON_GAP           # x within region for first icon
+            pair = region_gutter_items  # fall back to spec order
+        n_rg = len(pair)
+        # Evenly distribute: divide the gutter into n_rg equal slots and centre
+        # each icon in its slot. Gutter spans from REGION_PAD_X to
+        # REGION_PAD_X + region_gutter_w.
+        slot_w = region_gutter_w / n_rg
         gutter_cy = ingress_row_y
-        gx = gutter_cx
-        for item in pair:
+        for slot_i, item in enumerate(pair):
+            gx = REGION_PAD_X + slot_i * slot_w + (slot_w - ICON) / 2
             n = Node(item["id"], "resource", "region", gx, gutter_cy, ICON, ICON,
                      provider=item.get("provider", default_provider),
                      service=item["service"], label=item.get("label"))
             lo.add(n, region_abs_x + gx, region_abs_y + gutter_cy)
-            gx += ICON + ENTRY_PAIR_GAP
 
-    # ---- VPC ENTRY GUTTER: ALB (ingress row) + API Gateway (row above) ----
-    # ALB sits at the ingress row y (aligned with WAF) so WAF→ALB is straight
-    # and ALB→cluster enters through the middle AZ gap. API Gateway sits one AZ
-    # row up, directly above ALB, so APIGW→Lambda routes cleanly upward.
+    # ---- VPC ENTRY GUTTER: ALB (AZ gap) + API Gateway (AZ1 centre) --------
+    # Both icons are horizontally CENTRED in the VPC left-gutter column so they
+    # sit visually "on" the VPC left edge rather than hugging its inner wall.
+    # ALB aligns to the first AZ-gap corridor (the natural entry point for the
+    # compute cluster). APIGW aligns to AZ1 centre (one row above ALB).
     if vpc_gutter_items:
-        gutter_x = ICON_GAP                            # x within VPC for first icon
+        gutter_x = (vpc_gutter_w - ICON) / 2        # centre of gutter column
         if alb_item is not None:
             n = Node(alb_item["id"], "resource", "vpc", gutter_x,
                      ingress_row_y - vpc_region_y, ICON, ICON,
@@ -521,7 +526,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                      service=apigw_item["service"], label=apigw_item.get("label"))
             lo.add(n, vpc_abs_x + gutter_x,
                    region_abs_y + apigw_row_y)
-        # Any other vpc-gutter items (rare) stack below ALB.
+        # Any other vpc-gutter items (rare) stack below ALB, centred in the gutter.
         placed = {i["id"] for i in (alb_item, apigw_item) if i}
         extra_y = ingress_row_y - vpc_region_y + ICON + ICON_GAP
         for item in vpc_gutter_items:

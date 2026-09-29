@@ -41,8 +41,7 @@ pages:
         - { id: vpce, service: endpoints, label: "VPC Endpoints" }
         - { id: privatelink, service: vpc_privatelink, label: "PrivateLink" }
         - { id: netfw, service: network_firewall, label: "Network Firewall" }
-        # serverless / event compute
-        - { id: lambda, service: lambda, label: "Lambda" }
+        # serverless / event compute (lambda moved to last row — closest to APIGW)
         - { id: batch, service: batch, label: "Batch" }
         - { id: apprunner, service: app_runner, label: "App Runner" }
         - { id: beanstalk, service: elastic_beanstalk, label: "Elastic Beanstalk" }
@@ -127,6 +126,8 @@ pages:
         - { id: trustedadvisor, service: trusted_advisor, label: "Trusted Advisor" }
         - { id: xray, service: x_ray, label: "X-Ray" }
         - { id: grafana, service: managed_grafana, label: "Managed Grafana" }
+        # lambda last — placed at the start of the bottom row, nearest to APIGW
+        - { id: lambda, service: lambda, label: "Lambda" }
 
       vpc:
         label: "DataForge VPC"
@@ -202,14 +203,6 @@ pages:
       - { source: ecs-az1, target: aurora1, label: "sql", source_point: "0.75,1.0" }
       # EKS to databases
       - { source: eks-az2, target: rds1, label: "sql" }
-      # Aurora replication across AZs
-      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
-      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
-      # ElastiCache replication across AZs
-      - { source: cache1, target: cache2, label: "replication", dashed: true }
-      - { source: cache1, target: cache3, label: "replication", dashed: true }
-      # RDS Multi-AZ standby
-      - { source: rds1, target: rds2, label: "sync", dashed: true }
 
   - name: "Flow Diagram"
     type: flow

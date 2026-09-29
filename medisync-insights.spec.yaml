@@ -1,0 +1,149 @@
+provider: aws
+metadata:
+  project: "MediSync Insights Platform"
+  version: "1.0"
+  date: "2026-09-29"
+  creator: "Kiro"
+  reviewer: "Cloud Team"
+
+pages:
+  # ------------------------------------------------------------------ Tab 1
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53, service: route_53, label: "Route 53" }
+      - { id: cf, service: cloudfront, label: "CloudFront" }
+      - { id: s3, service: s3, label: "S3 Data Lake" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+
+    edge:
+      - { id: users, service: users, label: "Patients & Doctors" }
+      - { id: waf, service: waf, label: "WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+
+    region:
+      label: "ap-south-1"
+      services:
+        # security / shared
+        - { id: acm, service: certificate_manager_3, label: "ACM" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: guardduty, service: guardduty, label: "GuardDuty" }
+        - { id: cloudtrail, service: cloudtrail, label: "CloudTrail" }
+        - { id: cw, service: cloudwatch_2, label: "CloudWatch" }
+        # CI/CD
+        - { id: pipeline, service: codepipeline, label: "CodePipeline" }
+        - { id: build, service: codebuild, label: "CodeBuild" }
+        - { id: ecr, service: ecr, label: "ECR" }
+        # ingestion / migration
+        - { id: dms, service: database_migration_service, label: "DMS" }
+        - { id: kinesis, service: kinesis_data_streams, label: "Kinesis Streams" }
+        - { id: firehose, service: kinesis_data_firehose, label: "Firehose" }
+        # analytics / big data
+        - { id: glue, service: glue, label: "Glue ETL" }
+        - { id: emr, service: emr, label: "EMR" }
+        - { id: athena, service: athena, label: "Athena" }
+        - { id: redshift, service: redshift, label: "Redshift" }
+        - { id: quicksight, service: quicksight, label: "QuickSight" }
+        # ai / ml
+        - { id: sagemaker, service: sagemaker, label: "SageMaker" }
+        - { id: bedrock, service: bedrock, label: "Bedrock" }
+        - { id: comprehend, service: comprehend, label: "Comprehend Medical" }
+
+      vpc:
+        label: "MediSync VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet: { id: app1, label: "app-subnet-1", resources: [] }
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+                - { id: aurora1, service: aurora, label: "Aurora Primary" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet: { id: pub2, label: "public-subnet-2", resources: [] }
+            app_subnet: { id: app2, label: "app-subnet-2", resources: [] }
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache" }
+                - { id: aurora2, service: aurora, label: "Aurora Replica" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet: { id: pub3, label: "public-subnet-3", resources: [] }
+            app_subnet: { id: app3, label: "app-subnet-3", resources: [] }
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: cache3, service: elasticache, label: "ElastiCache" }
+                - { id: aurora3, service: aurora, label: "Aurora Replica" }
+        compute_groups:
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate Cluster" }
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS (ML Workers)" }
+
+    edges:
+      # Ingress path
+      - { source: users, target: waf, label: "HTTPS" }
+      - { source: waf, target: alb }
+      # App tier to operational data — CLUSTER boundary to DB (not per-AZ tasks).
+      # The engine routes one edge from each cluster lane into the DB primary
+      # and auto-separates the shared-target bundle into distinct lanes.
+      - { source: ecs, target: cache1, label: "cache" }
+      - { source: ecs, target: aurora1, label: "SQL" }
+      - { source: eks, target: cache1, label: "cache" }
+      - { source: eks, target: aurora1, label: "SQL" }
+      # Aurora replication
+      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
+      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
+      # Ingress fans out to BOTH cluster boundaries (not individual tasks)
+      - { source: alb, target: ecs, label: "route" }
+      - { source: alb, target: eks, label: "route" }
+      # CI/CD deploy to BOTH clusters (engine auto-separates the ECR fan-out)
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+      - { source: ecr, target: eks, label: "deploy", dashed: true }
+      # NOTE: analytics-ingestion (Aurora->DMS->S3) and AI-serving (EKS->Bedrock)
+      # are pipeline/structural flows shown on the "Analytics & AI Flow" page,
+      # not drawn here to avoid crossing the region service strip.
+
+  # ------------------------------------------------------------------ Tab 2
+  - name: "Analytics & AI Flow"
+    type: flow
+    nodes:
+      - { id: f_aurora, service: aurora, label: "1. Aurora (operational)" }
+      - { id: f_dms, service: database_migration_service, label: "2. DMS CDC" }
+      - { id: f_kinesis, service: kinesis_data_streams, label: "2. Kinesis (telemetry)" }
+      - { id: f_firehose, service: kinesis_data_firehose, label: "3. Firehose" }
+      - { id: f_s3, service: s3, label: "4. S3 Data Lake (raw)" }
+      - { id: f_glue, service: glue, label: "5. Glue ETL / Catalog" }
+      - { id: f_emr, service: emr, label: "6. EMR (batch transform)" }
+      - { id: f_redshift, service: redshift, label: "7. Redshift (warehouse)" }
+      - { id: f_athena, service: athena, label: "7. Athena (ad-hoc)" }
+      - { id: f_sagemaker, service: sagemaker, label: "8. SageMaker (train)" }
+      - { id: f_bedrock, service: bedrock, label: "9. Bedrock (summarize/triage)" }
+      - { id: f_quicksight, service: quicksight, label: "10. QuickSight (BI)" }
+    edges:
+      - { source: f_aurora, target: f_dms, label: "CDC" }
+      - { source: f_dms, target: f_s3, label: "land" }
+      - { source: f_kinesis, target: f_firehose, label: "buffer" }
+      - { source: f_firehose, target: f_s3, label: "land" }
+      - { source: f_s3, target: f_glue, label: "crawl" }
+      - { source: f_glue, target: f_emr, label: "transform" }
+      - { source: f_glue, target: f_athena, label: "catalog" }
+      - { source: f_emr, target: f_redshift, label: "load" }
+      - { source: f_glue, target: f_sagemaker, label: "features" }
+      - { source: f_sagemaker, target: f_bedrock, label: "model" }
+      - { source: f_redshift, target: f_quicksight, label: "visualize" }
+      - { source: f_athena, target: f_quicksight, label: "visualize" }
+      - { source: f_bedrock, target: f_quicksight, label: "insights" }

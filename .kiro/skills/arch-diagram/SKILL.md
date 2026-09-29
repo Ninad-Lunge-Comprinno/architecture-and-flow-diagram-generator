@@ -1,327 +1,84 @@
 ---
 name: arch-diagram
-description: Generate a draw.io (.drawio.xml) cloud architecture and/or flow diagram from migration requirements, matching the firm's house style (AWS/Azure/GCP icons, nested Cloud/Region/VPC/AZ/subnet grouping, standardized title block). Use when the user asks to create, draft, or update an architecture or flow diagram.
+description: Create or update a clear, editable draw.io cloud architecture or flow diagram from a user's requirements.
 ---
 
-# Architecture Diagram Generator
+# Architecture diagram workflow
 
-Generate draw.io architecture diagrams that are **aesthetically correct** and
-**technically accurate** for cloud migration projects. You author a structured
-spec; a Python engine computes layout and routing and emits validated XML.
+Turn the user's intent into a small, accurate architecture model and generate
+an editable `.drawio.xml` using the repository's deterministic renderer. The
+spec is the source of truth; do not hand-author diagram XML or hardcode project
+specific coordinates.
 
----
+## 1. Gather requirements
 
-## STEP 1 — Understand the request
+Read the request and existing project files first. Ask one compact set of
+focused questions for missing choices that would change the architecture:
 
-Ask or infer (never guess):
-- **Cloud provider**: aws (default), azure, gcp.
-- **Architecture pattern** (see Pattern Library below).
-- **Project metadata**: project name (required), version, date, creator, reviewer.
-- **Scale**: how many AZs (default 3 for HA), how many tiers.
+- cloud/provider and project name;
+- workload purpose and users/entry path;
+- compute and data stores;
+- regions, availability zones, and resilience needs;
+- integrations or important data/deployment flows;
+- whether the user needs an architecture view, a flow view, or both.
 
----
+Do not ask for information already supplied. Use sensible defaults only when
+the user has stated them or they follow directly from the requested design.
+Otherwise ask; do not silently invent components, availability guarantees, or
+network paths. Version, date, creator, and reviewer are optional metadata.
 
-## STEP 2 — Read the references (load on demand)
+Before generating, summarize the proposed architecture, key connections, and
+any assumptions in a few bullets. Keep that review focused; do not make the
+user approve routine formatting decisions.
 
-| File | When to read |
-|------|--------------|
-| `references/spec-schema.md` | Before writing any spec |
-| `references/shapes-aws.md` | To pick valid `service:` keys |
-| `references/shapes-azure.md` / `shapes-gcp.md` | For non-AWS specs |
-| `references/house-style.md` | For container hierarchy and colors |
+## 2. Model the diagram
 
----
+Read `references/spec-schema.md` before writing a spec. Read the provider's
+shape catalog for valid service keys, and `references/house-style.md` when
+choosing hierarchy or visual grouping. Use the supplied examples as visual
+references:
 
-## STEP 2.5 — Validate Stencil Names (CRITICAL)
+- Sadhaka AI for a clean, standard multi-AZ architecture;
+- MediaMint for compute lanes and a separate flow page;
+- Borderless Access for multi-VPC or enterprise scope.
 
-**Do not guess stencil names.** Incorrect names render as colored squares.
+Select only components needed to explain the requested system. Group them at
+their actual scope: global/account, region, VPC, availability zone, subnet, or
+compute group. Keep unrelated services out of a crowded inventory. Add an edge
+only for an important request/response path, data movement, deployment,
+replication, or dependency; avoid decorative and inferred all-to-all links.
 
-Before using any AWS service not in the local `shapes-aws.md`, fetch and verify
-the stencil name from the authoritative source:
+Use architecture pages for deployment boundaries and placement. Use flow pages
+for ordered processing, branching, and data movement. Split views when one page
+would become dense. Follow the provider's actual placement semantics; if a
+service's scope or network path is uncertain, check the local catalog/docs or
+ask rather than moving it merely to fit the layout. Do not guess icon stencil
+names: use the local catalog, and update the catalog only when the user asks
+for an unsupported service.
 
-**Authoritative source:** https://github.com/vidanov/aws-architecture-diagram-skill/tree/main/references
+For AWS multi-AZ VPC examples, use the existing AZ/subnet/compute-group schema.
+One NAT in a shared design is not a universal rule: model the user's stated
+resilience and egress requirements. Do not assume every architecture needs a
+VPC, three AZs, a CDN, a WAF, CI/CD, or a flow page.
 
-Reference files by category:
-- `aws-icons-compute.md` - EC2, Lambda, ECS, EKS, Fargate, Batch
-- `aws-icons-database.md` - RDS, Aurora, DynamoDB, ElastiCache, Neptune, DocumentDB, MemoryDB
-- `aws-icons-storage.md` - S3, EFS, EBS, FSx, Glacier
-- `aws-icons-networking.md` - VPC, ALB, NLB, CloudFront, Route 53, VPN, Transit Gateway
-- `aws-icons-security.md` - IAM, Cognito, KMS, WAF, Shield, GuardDuty
-- `aws-icons-integration.md` - SQS, SNS, EventBridge, Step Functions, SES, Managed Grafana
-- `aws-icons-analytics-ml.md` - Athena, Glue, SageMaker, Bedrock, Lex, Comprehend
-- `aws-icons-iot-migration-devtools.md` - IoT Core, Greengrass, X-Ray, CodePipeline
+## 3. Generate
 
-**Known stencil name differences** (service key ≠ stencil name):
-| Service Key | Correct Stencil | Wrong Guess |
-|-------------|-----------------|-------------|
-| efs | `elastic_file_system` | ~~efs~~ |
-| ebs | `elastic_block_store` | ~~ebs~~ |
-| documentdb | `documentdb_with_mongodb_compatibility` | ~~documentdb~~ |
-| memorydb | `memorydb_for_redis` | ~~memorydb~~ |
-| s3_glacier | `glacier` | ~~s3_glacier~~ |
-| vpn | `vpn_gateway` | ~~vpn~~ |
-| x_ray | `xray` | ~~x_ray~~ |
-| ses | `simple_email_service` | ~~ses~~ |
-| lex_v2 | `lex` | ~~lex_v2~~ |
-| managed_grafana | `managed_service_for_grafana` | ~~managed_grafana~~ |
-
-When adding a service not in this list, **always fetch from the authoritative source first**.
-
----
-
-## STEP 3 — Apply the Architecture Pattern Library
-
-### 3-Tier Web Application (most common migration pattern)
-```
-global:    Route53, CloudFront, S3, IAM
-edge:      Users (outside cloud), WAF, ALB, IGW
-region.services: ACM, Secrets Manager, KMS, GuardDuty, CloudTrail,
-                  CloudWatch, CodePipeline, CodeBuild, ECR
-vpc:
-  azs (×3): public_subnet → NAT (AZ1 only, others empty)
-             app_subnet   → [ASG: EC2] [ECS Cluster: Fargate]
-             db_subnet    → ElastiCache (left), RDS (right)
-  compute_groups: asg (ec2), ecs (fargate)
-edges:
-  users→waf→alb→ecs (route)
-  ecs-az1→cache1 (cache, direct right)
-  ecs-az1→rds1   (SQL, bottom-exit, routes below icon row)
-  rds1→rds2 (replication, dashed, straight vertical)
-  rds1→rds3 (replication, dashed, right corridor for multi-AZ skip)
-  ecr→ecs   (deploy, dashed, ECR bottom → ECS cluster top)
-```
-
-### Serverless / API-first
-```
-global:    Route53, CloudFront, S3, IAM
-edge:      Users, WAF, API Gateway
-region.services: Lambda, DynamoDB, SQS, SNS, CloudWatch, Secrets Manager
-(no VPC required unless Lambda needs VPC access)
-```
-### Microservices / EKS
-```
-Same as 3-tier but:
-  compute_groups: asg (ec2), eks (ec2), ecs (fargate)
-  EKS cluster holds EC2 worker nodes
-  Add ECR in region services for container registry
-```
-
-### Data Pipeline
-```
-global: S3, IAM
-region.services: Glue, Step Functions, Lambda, Athena, QuickSight, CloudWatch
-vpc (optional): EMR or Redshift cluster in db_subnet
-```
-
-### Flow Diagram (page 2)
-The Flow Diagram page uses a **layered top-down layout**:
-- Nodes with no incoming edges go in the **top layer** (sources)
-- Each subsequent layer contains nodes whose predecessors are already placed
-- Within a layer, nodes are spread horizontally and centred
-- The engine computes layout automatically from the edge graph topology
-- You may override any node's position with explicit `x` and `y` in the spec
-
-Good flow page spec:
-```yaml
-- name: "Flow Diagram"
-  type: flow
-  nodes:
-    - { id: f_user, service: users, label: "User" }
-    - { id: f_waf, service: waf, label: "WAF" }
-    - { id: f_alb, service: application_load_balancer, label: "ALB" }
-    - { id: f_ecs, service: ecs, label: "ECS Fargate" }
-    - { id: f_cache, service: elasticache, label: "ElastiCache" }  # sibling
-    - { id: f_db, service: aurora, label: "Aurora" }               # sibling
-  edges:
-    - { source: f_user, target: f_waf }
-    - { source: f_waf, target: f_alb }
-    - { source: f_alb, target: f_ecs }
-    - { source: f_ecs, target: f_cache, label: "cache" }
-    - { source: f_ecs, target: f_db, label: "SQL" }
-```
-This produces: user→waf→alb→ecs vertically, then cache and aurora side-by-side below ecs.
-
----
-
-## STEP 4 — Service Placement Rules (NEVER violate these)
-
-### Global services (scope: global) — outside the Region box
-- **Route 53** — always global (DNS is a global service)
-- **CloudFront** — always global (edge network)
-- **S3** — global when used for static assets / cross-region
-- **IAM** — always global
-
-### Edge services (scope: edge) — left strip inside the Cloud
-Order top-to-bottom: `Users` (outside cloud) → `WAF` → `ALB` → `IGW`
-- **Users**: outside the cloud boundary
-- **WAF**: inside cloud, filters traffic before ALB
-- **ALB**: inside cloud, at the **AZ1-AZ2 gap level** (aligned to gap1 mid-y)
-  so its connecting line goes cleanly through the AZ gap corridor
-- **IGW**: on the left VPC border at AZ1 mid-y
-
-### Region-level services (scope: region.services) — inside Region, outside VPC
-Include CI/CD here — CodePipeline, CodeBuild, CodeDeploy, ECR belong in the
-region strip, **not** as a separate page or bottom strip.
-
-### VPC subnets — per AZ
-- `public_subnet` (green): NAT Gateway in AZ1 only; AZ2/AZ3 public subnets are empty
-- `app_subnet` (blue): Usually empty — compute-group lanes overlay it
-- `db_subnet` (blue): Place **ElastiCache first (left)**, then **RDS (right)**
-  This ordering prevents the SQL connection from crossing the Cache icon
-
-### Compute groups — vertical lanes spanning all 3 AZs
-Declare once; engine places one node per AZ. Order matters (left→right):
-1. `asg` (Auto Scaling Group) — holds EC2
-2. `ecs` (ECS Cluster) — holds Fargate
-3. `eks` (EKS Cluster) — holds EC2 worker nodes
-Node ids auto-generated as `<group>-<az>` (e.g. `ecs-az1`, `ecs-az2`, `ecs-az3`)
-
----
-
-## STEP 5 — Edge (connection) semantics rules
-
-### Which connections to declare (and which to omit)
-| Connection | Declare? | Pattern |
-|---|---|---|
-| Users → WAF | yes | `source: users, target: waf` |
-| WAF → ALB | yes | `source: waf, target: alb` |
-| ALB → ECS cluster | yes | `source: alb, target: ecs` (single edge to cluster boundary) |
-| ECS task → RDS (SQL) | yes | `source: ecs-az1, target: rds1` — engine auto-routes below icon row |
-| ECS task → Cache | yes | `source: ecs-az1, target: cache1` — direct right |
-| RDS primary → RDS replica (same AZ below) | yes | dashed, straight vertical |
-| RDS primary → RDS replica (2+ AZs away) | yes | dashed, right corridor |
-| ECR → ECS cluster | yes | dashed, enters cluster from top |
-| ECS task → S3 (assets) | **no** — S3 access is via NAT/VPC endpoint (structural), not a primary traffic arrow; show it on the Flow Diagram only |
-| ALB → each individual Fargate task | **no** — connect to cluster boundary instead |
-| Every service to CloudWatch | **no** — CloudWatch is implied; only show if it is a primary data flow |
-
-### Connection routing is automatic
-The engine detects:
-- **Same AZ row, gap > 2.5×ICON (300px)**: exit top of source → route ABOVE the AZ row (inverted-U) → enter target top (avoids crossing sibling icons)
-- **Same AZ row, gap ≤ 300px** (adjacent): direct right side-exit
-- **Column-aligned, 1 AZ apart**: straight vertical bottom→top
-- **Column-aligned, 2+ AZs apart**: right-side corridor
-- **Outside-VPC → VPC container**: corridor spine at ALB's y level
-- **Above tall container, offset**: exit bottom → enter container top (ECR→ECS)
-- **Dashed edges**: async, deploy, replication flows
-
----
-
-## STEP 6 — Common mistakes to avoid
-
-1. **Don't put Route53/CloudFront inside the Region** — they are global services.
-2. **Don't create one NAT per AZ** — one NAT in AZ1 public subnet; AZ2/AZ3 public subnets stay empty.
-3. **Don't connect ALB to individual Fargate tasks** — connect to the ECS cluster boundary (`ecs`); the cluster represents all AZs.
-4. **Don't put RDS left of ElastiCache** — Cache must be left, RDS right, or the SQL connection will cross the Cache icon.
-5. **Don't add CI/CD as a separate page/tab** — CodePipeline/CodeBuild/ECR go in `region.services`; CI/CD tab is the Flow Diagram.
-6. **Don't declare CloudFront in both `global` and `edge`** — pick one; `global` is preferred for CloudFront unless you need a WAF edge-strip ordering.
-7. **Don't connect every service to every other service** — only primary traffic flows and key dependencies; monitoring (CloudWatch) and security (GuardDuty) are implied.
-8. **Don't declare more than one IGW** — one IGW per VPC.
-9. **Don't place regional/global services inside VPC subnets.** These are NOT VPC-bound:
-   - DynamoDB, SQS, SNS, S3, SES, EventBridge, Step Functions, Lambda (default mode), API Gateway
-   - Kinesis, Athena, Glue, EMR, Redshift, QuickSight, Bedrock, SageMaker
-   - CloudWatch, CloudTrail, IAM, CodePipeline, Timestream, Keyspaces
-   They all belong in `region.services`. Only EC2, Fargate, EKS nodes, RDS, Aurora, ElastiCache, MemoryDB, Neptune, and DocumentDB belong in VPC subnets.
-10. **Don't put too many icons in one subnet** — the engine auto-applies a 2-column grid when a subnet has >2 icons (taller, not wider). Keep db_subnet to 2 icons max per AZ (e.g. ElastiCache + Aurora) for readability.
-11. **For large architectures with many region services** — the engine wraps them into rows of 12 automatically. Include only services directly relevant to the architecture.
-9. **Don't draw direct edges from compute nodes to global services (S3, CloudFront) on the architecture page** — these are structural access patterns (via NAT/VPC endpoint), not traffic-flow arrows. They belong on the Flow Diagram page only.
-10. **Don't draw users → CloudFront on the architecture page.** Users connect to WAF. CloudFront sits in the `global` row for informational/CDN context only. The path User → CloudFront → WAF → ALB is implied; you only need `users → waf` on the diagram.
-
----
-
-## STEP 7 — Write the spec (show to user for review)
-
-Follow `references/spec-schema.md` exactly. Only use `service:` keys from
-`references/shapes-<provider>.md`. Apply the patterns and rules above.
-
-**Spec quality checklist before generating:**
-- [ ] Route53 and CloudFront in `global` (not region)
-- [ ] Users in `edge` with `service: user` (renders outside cloud)
-- [ ] WAF in `edge` before ALB (ordering matters for visual alignment)
-- [ ] Single NAT in AZ1 public subnet only
-- [ ] ElastiCache declared BEFORE RDS in each db_subnet resources list
-- [ ] `alb→ecs` (cluster) NOT `alb→ecs-az1/2/3` (individual tasks)
-- [ ] `ecr→ecs` (cluster) NOT individual task targets
-- [ ] CI/CD in `region.services`, not a separate section
-- [ ] Replication edges are `dashed: true`
-- [ ] No duplicate service ids across the whole page
-
----
-
-## STEP 8 — Generate the diagram
+Write `<project-slug>.spec.yaml`, then run:
 
 ```bash
-# Activate venv if not already active
-source .venv/bin/activate  # or: .venv/bin/python directly
-
-python .kiro/scripts/arch-diagram/generate_diagram.py \
+.venv/bin/python .kiro/scripts/arch-diagram/generate_diagram.py \
   --input <project-slug>.spec.yaml \
   --output <project-slug>.drawio.xml
 ```
 
-The generator will:
-1. Validate the spec (reports `error:` and exits 2 on problems)
-2. **Run an overlap check** — prints `⚠ OVERLAP:` warnings for any icons/containers
-   that geometrically overlap (excluding intentional lane-over-AZ overlaps)
-3. Emit validated draw.io XML
-4. If `awsdac-mcp-server` is available, also call `generateDiagramToFile` for a
-   PNG preview (see Track 3 in README)
+Resolve validation errors before delivery. Review warnings and the resulting
+diagram at normal viewing size when a renderer/preview is available. XML
+validity alone does not establish visual quality. If a preview is unavailable,
+say so and report the checks actually completed. Keep the output landscape and
+readable, with a clear hierarchy, aligned groups, restrained crossings, legible
+labels, and a title block populated from available metadata.
 
-### Handling overlap warnings
-If the generator reports overlaps:
-- Check if two resources in the same subnet are placed too close (increase ICON_GAP)
-- Check if the subnet is sized too small for its resources (SUBNET_MIN_W)
-- Or adjust the spec to move resources to different tiers/subnets
+## 4. Deliver
 
----
-
-## STEP 9 — Report result
-
-Tell the user:
-- The path to `<project-slug>.drawio.xml` (open at https://app.diagrams.net)
-- Any overlap warnings from the generator
-- A one-line summary: `2 pages (Architecture + Flow), 3 AZs, ECS Fargate + RDS multi-AZ`
-
----
-
-## Pattern Quick-Reference (for common migration scenarios)
-
-| Customer says | Pattern to use | Key services |
-|---|---|---|
-| "3-tier web app" | 3-Tier Web | ALB, ECS/Fargate, RDS, ElastiCache |
-| "lift-and-shift" | 3-Tier Web | ALB, ASG+EC2, RDS |
-| "containerize" | 3-Tier + EKS/ECS | EKS or ECS, ECR, RDS |
-| "go serverless" | Serverless | API Gateway, Lambda, DynamoDB |
-| "data lake" | Data Pipeline | S3, Glue, Athena, QuickSight |
-| "microservices" | Microservices | EKS, ECR, RDS (per service) |
-| "multi-region DR" | 3-Tier × 2 regions | Route53 failover, Aurora Global |
-
----
-
-## Extending the shape catalog
-
-The generator now handles **any AWS service key** without crashing:
-
-- **Known services** (120+ in catalog): exact stencil + verified color.
-- **Unknown AWS services**: the engine automatically derives:
-  - stencil name = `mxgraph.aws4.<key>` (matches draw.io's naming convention)
-  - category color = inferred from keyword patterns in the key name
-  - label = human-readable from the key
-
-This means you can use any AWS service key directly in the spec — e.g.
-`service: timestream`, `service: clean_rooms`, `service: verified_access` —
-and the generator will produce a reasonable icon. draw.io will render it using
-the built-in stencil if it exists, or fall back to a generic shape.
-
-### For brand-new or unusual services
-If you need to confirm the exact draw.io stencil name for a service just
-announced by AWS:
-
-1. Use the **AWS Documentation MCP** (available as `awslabs.aws-documentation-mcp-server`):
-   ```
-   search_documentation("AWS <ServiceName> draw.io architecture icon")
-   ```
-2. Or search the [draw.io AWS stencil list](https://github.com/jgraph/drawio/tree/dev/src/main/webapp/stencils/aws4)
-   for the exact stencil suffix.
-3. Add it permanently: add to `_AWS` in `shapes.py` + matching row in
-   `references/shapes-aws.md` + run `pytest` to confirm no drift.
+Report the spec and draw.io file paths, page types, major scope/availability
+choices, and any unresolved assumptions or warnings. Keep the summary concise.

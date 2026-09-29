@@ -46,15 +46,16 @@ systems (logical grouping × physical zone), not containment.
 | global | account level, above the Region | CloudFront, Route 53, S3, IAM |
 | edge | left strip INSIDE the cloud (Users stay outside) | Users, WAF, CloudFront, ALB |
 | region services | inside Region, outside VPC (incl. CI/CD) | ACM, Secrets, GuardDuty, CloudTrail, CodePipeline, CodeBuild, ECR |
-| public_subnet | web/public tier (one NAT for the VPC, in AZ1) | NAT Gateway |
+| public_subnet | web/public tier, shaped by the requested design | NAT Gateway |
 | app_subnet | blue band behind the compute-group lanes | (usually empty) |
 | db_subnet | data tier | RDS, ElastiCache |
 | compute-group node | lane × AZ intersection | EC2 / Fargate |
 
 Route 53 and CloudFront are **global**. Users render **outside** the cloud; WAF /
 CloudFront / ALB render in the **edge** strip inside the cloud. **IGW** sits on the
-left VPC border. There is **one NAT Gateway** for the VPC (in AZ1); other public
-subnets are empty uniform boxes. **CI/CD** icons live in `region.services`.
+left VPC border. NAT Gateway count and placement follow the requested egress,
+resilience, and cost design; do not assume one NAT per VPC or one per AZ.
+**CI/CD** icons live in `region.services` when that scope matches the design.
 
 ## Sizing / aesthetics
 
@@ -100,6 +101,6 @@ Use `dashed: true` for async / deploy / replication flows. Cross-boundary arrows
 
 ## Title block & pages
 
-- Title block (page 1 only): project, version, date, creator, reviewer.
-- Two tabs: **Architecture Diagram** and **Flow Diagram** (CI/CD belongs on the
-  flow tab or the architecture CI/CD strip — not a third page).
+- Title block: project and available metadata.
+- Use architecture and flow pages when both views help explain the system;
+  neither page type is mandatory for every request.

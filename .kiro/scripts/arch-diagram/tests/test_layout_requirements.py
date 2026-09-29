@@ -615,8 +615,10 @@ class TestCrossAzRoutes:
         xml_str = gd2.render_xml(result)
         root = ET.fromstring(xml_str.split('\n', 1)[1])
         edges = [c for c in root.iter('mxCell') if c.get('edge') == '1']
-        labels = {c.get('value', '') for c in edges}
-        assert any('replication' in v for v in labels), (
+        # House style: edges render with label="" (labels are documentation only).
+        # Verify the replication edges exist as connectors (source/target pairs).
+        pairs = {(c.get('source'), c.get('target')) for c in edges}
+        assert ("aurora1", "aurora2") in pairs and ("aurora1", "aurora3") in pairs, (
             "Cross-AZ replication edges must appear in output XML"
         )
 

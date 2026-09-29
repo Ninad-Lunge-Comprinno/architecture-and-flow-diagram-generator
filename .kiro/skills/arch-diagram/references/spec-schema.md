@@ -56,11 +56,10 @@ Every resource lives in exactly one scope:
 | `compute_groups` node | intersection of a group lane and an AZ row | EC2 (ASG), Fargate (ECS), EC2 worker (EKS) |
 
 Notes matching the house style:
-- **One NAT Gateway** for the VPC (put it in AZ1's `public_subnet`); other public
-  subnets render as empty uniform boxes.
-- **Users** render OUTSIDE the AWS Cloud; **WAF / ALB / CloudFront** render in the
-  `edge` strip inside the cloud. **ALB sits outside the subnets but within the VPC
-  region** conceptually and fans out to all AZs (declare edges alb -> each AZ node).
+- Model NAT Gateways and public subnet contents according to the requested
+  egress, availability, and cost requirements; do not assume one NAT per VPC.
+- **Users** render OUTSIDE the AWS Cloud; ingress services render in the
+  `edge` scope. Place services at the scope described by the requested design.
 - **IGW** is drawn on the left VPC border automatically when an `internet_gateway`
   resource is in the `edge` list.
 - **CI/CD** icons (CodePipeline, CodeBuild, ECR) go in `region.services` — there is

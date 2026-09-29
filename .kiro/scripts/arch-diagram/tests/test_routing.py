@@ -7,7 +7,12 @@ import routing as R
 
 
 # ---- placement planning ---------------------------------------------------
-def test_apigw_connected_service_ordered_first():
+def test_apigw_connected_service_ordered_last():
+    """APIGW/ALB-connected region services (e.g. Lambda) must land at the END of
+    the services list so they appear in the LAST row, closest to the VPC gutter
+    where API Gateway sits. Short APIGW->Lambda edges are only possible when
+    Lambda is near the VPC, not when it is pulled to the first row.
+    """
     page = {
         "edge": [
             {"id": "apigw", "service": "api_gateway"},
@@ -27,9 +32,8 @@ def test_apigw_connected_service_ordered_first():
     }
     R.plan_region_service_order(page)
     order = [s["id"] for s in page["region"]["services"]]
-    # lambda connects to the APIGW gutter → pulled to the FRONT (left), away
-    # from cluster-deploy services, so their edges don't tangle.
-    assert order[0] == "lambda", f"expected lambda first, got {order}"
+    # lambda connects to the APIGW gutter -> pulled to the END (last row, near VPC).
+    assert order[-1] == "lambda", f"expected lambda last, got {order}"
 
 
 def test_vpc_connected_service_after_unconnected():

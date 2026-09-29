@@ -88,22 +88,26 @@ def plan_region_service_order(page: dict) -> None:
         nb = _neighbours(sid)
     # Score each region service to decide its column in the grid. The grid
     # fills left→right, top→bottom, so LOWER scores render earlier (left/top)
-    # and HIGHER scores later (right/bottom). We deliberately push the two
-    # different "connected" kinds to OPPOSITE ends so their edges don't tangle:
-    #   * API-Gateway/ALB-gutter-connected services (e.g. Lambda) → FRONT
-    #     (left), because the gutter sits at the VPC's left; APIGW routes up
-    #     and to the left into them, clear of the cluster deploy lines.
-    #   * VPC-element / cluster-connected services (e.g. ECR) → END (right,
-    #     last row), sitting near the cluster they deploy into.
+    # and HIGHER scores later (right/bottom, i.e. closest to the VPC).
+    #
+    # Scoring:
+    #   * Services connected to APIGW/ALB gutter items (e.g. Lambda) → END
+    #     of the list, so they land in the LAST row nearest the VPC where
+    #     the gutter sits. The short APIGW→Lambda edge then has the minimum
+    #     possible length.
+    #   * VPC-element / cluster-connected services (e.g. ECR) → also END,
+    #     right after the gutter-connected ones.
+    #   * Services connected to another region service → middle (keep together).
+    #   * Unconnected services → front.
     def _score(sid: str) -> int:
         nb = _neighbours(sid)
         if nb & gutter_vpc_ids:
-            return -1         # APIGW/ALB-connected → pull to the FRONT (left)
+            return 2          # APIGW/ALB-connected → END (last row, near VPC gutter)
         if nb & vpc_ids:
-            return 2          # connected to a VPC element/cluster → END (right)
+            return 3          # connected to a VPC element/cluster → very END
         if nb & svc_ids:
-            return 1          # connected to another region service
-        return 0              # unconnected
+            return 1          # connected to another region service → middle
+        return 0              # unconnected → front
 
     order = sorted(range(len(services)),
                    key=lambda i: (_score(services[i]["id"]), i))
