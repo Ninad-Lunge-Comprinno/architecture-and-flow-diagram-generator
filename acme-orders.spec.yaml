@@ -1,0 +1,129 @@
+provider: aws
+
+metadata:
+  project: "Acme Orders"
+  version: "1.0"
+  date: "2026-09-30"
+  creator: "Architecture Team"
+
+pages:
+
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53,  service: route_53,   label: "Route 53" }
+      - { id: cf,   service: cloudfront, label: "CloudFront" }
+      - { id: s3,   service: s3,         label: "S3 (Web App)" }
+
+    edge:
+      - { id: users, service: users,                      label: "Customers" }
+      - { id: waf,   service: waf,                        label: "AWS WAF" }
+      - { id: alb,   service: application_load_balancer,  label: "Application Load Balancer" }
+      - { id: igw,   service: internet_gateway,           label: "Internet Gateway" }
+
+    region:
+      label: "us-east-1"
+
+      services:
+        - { id: acm,     service: certificate_manager_3, label: "ACM" }
+        - { id: secrets, service: secrets_manager,       label: "Secrets Manager" }
+        - { id: cw,      service: cloudwatch_2,          label: "CloudWatch" }
+        - { id: ecr,     service: ecr,                   label: "ECR" }
+
+      vpc:
+        label: "Acme VPC"
+
+        azs:
+
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "Public Subnet 1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "App Subnet 1"
+              resources: []
+            db_subnet:
+              id: db1
+              label: "DB Subnet 1"
+              resources:
+                - { id: cache1,  service: elasticache, label: "ElastiCache" }
+                - { id: aurora1, service: aurora,      label: "Aurora Primary" }
+
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "Public Subnet 2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "App Subnet 2"
+              resources: []
+            db_subnet:
+              id: db2
+              label: "DB Subnet 2"
+              resources:
+                - { id: cache2,  service: elasticache, label: "ElastiCache Replica" }
+                - { id: aurora2, service: aurora,      label: "Aurora Standby" }
+
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "Public Subnet 3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "App Subnet 3"
+              resources: []
+            db_subnet:
+              id: db3
+              label: "DB Subnet 3"
+              resources:
+                - { id: cache3, service: elasticache, label: "ElastiCache Replica" }
+
+        compute_groups:
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
+
+    edges:
+      # Customer/API path plus CloudFront's static-content origin.
+      - { source: users, target: waf,  label: "HTTPS" }
+      - { source: cf,    target: s3,   label: "Static content origin" }
+      - { source: waf,   target: igw,  label: "API requests" }
+      - { source: igw,   target: alb }
+      - { source: alb,   target: ecs,  label: "route" }
+
+      # Use the AZ1 task as the connection source; the router keeps the cache
+      # path direct and lifts the Aurora path above the intervening cache icon.
+      - { source: ecs-az1, target: cache1,  label: "cache" }
+      - { source: ecs-az1, target: aurora1, label: "SQL" }
+
+      # Deployment
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+
+  - name: "Order Submission Flow"
+    type: flow
+
+    nodes:
+      - { id: f_customer, service: users,                     label: "1. Customer" }
+      - { id: f_cf,       service: cloudfront,                label: "2. CloudFront" }
+      - { id: f_waf,      service: waf,                       label: "3. AWS WAF" }
+      - { id: f_alb,      service: application_load_balancer, label: "4. ALB" }
+      - { id: f_ecs,      service: fargate,                   label: "5. Order Service (ECS)" }
+      - { id: f_cache,    service: elasticache,               label: "6. ElastiCache" }
+      - { id: f_aurora,   service: aurora,                    label: "7. Aurora PostgreSQL" }
+      - { id: f_s3,       service: s3,                        label: "Static Web App" }
+
+    edges:
+      - { source: f_customer, target: f_cf,    label: "HTTPS request" }
+      - { source: f_cf,       target: f_waf,   label: "inspect request" }
+      - { source: f_cf,       target: f_s3,    label: "static content" }
+      - { source: f_waf,      target: f_alb,   label: "forward API request" }
+      - { source: f_alb,      target: f_ecs,   label: "route to task" }
+      - { source: f_ecs,      target: f_cache,  label: "check cache" }
+      - { source: f_ecs,      target: f_aurora, label: "persist order" }

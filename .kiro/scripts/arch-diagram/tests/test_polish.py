@@ -157,9 +157,9 @@ def test_subnet_width_accounts_for_label_width():
     assert three >= 2 * layout.LABEL_WIDTH + layout.ICON_GAP  # cols=2, two wide
 
 
-def test_region_width_covers_services_row():
-    # A page with a long services row (more icons than the VPC is wide) must
-    # produce a region box at least as wide as the services row + padding.
+def test_region_services_wrap_into_balanced_rows_within_region():
+    # A service list wider than the available region row is split into
+    # centered rows instead of expanding into an excessively long strip.
     services = [{"id": f"svc{i}", "service": "cloudwatch_2"} for i in range(9)]
     page = {
         "global": [],
@@ -181,9 +181,18 @@ def test_region_width_covers_services_row():
     }
     lo = layout.build(page, "aws")
     region = lo.abs_boxes["region"]  # (x, y, w, h)
-    n = len(services)
-    services_row_w = n * layout.ICON + (n - 1) * layout.REGION_RES_GAP
-    assert region[2] >= services_row_w + 2 * layout.REGION_PAD_X
+    rows = {}
+    for service in services:
+        x, y, width, height = lo.abs_boxes[service["id"]]
+        rows.setdefault(y, []).append((x, width))
+    assert len(rows) > 1
+    row_sizes = [len(row) for row in rows.values()]
+    assert max(row_sizes) - min(row_sizes) <= 1
+    for row in rows.values():
+        left = min(x for x, _ in row)
+        right = max(x + width for x, width in row)
+        assert left >= region[0] + layout.REGION_PAD_X
+        assert right <= region[0] + region[2] - layout.REGION_PAD_X
     # And no service icon overflows the region right edge.
     region_right = region[0] + region[2]
     last = lo.abs_boxes["svc8"]

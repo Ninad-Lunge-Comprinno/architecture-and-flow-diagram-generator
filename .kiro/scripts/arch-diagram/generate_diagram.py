@@ -16,6 +16,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+from pathlib import Path
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -126,6 +128,59 @@ class Diagram:
             height=200,
         )
         self.cells.append(cell)
+        return cell.id
+
+    def add_comprinno_mark(self, x: float, y: float) -> str:
+        """Embed the supplied Comprinno logo in the page header."""
+        logo_path = Path(__file__).resolve().parent / "assets" / "comprinno-logo.png"
+        logo_data = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+        cell = Cell(
+            id=self._next_id("brand"),
+            value="",
+            # draw.io image URLs use a comma after the MIME type; a semicolon
+            # here is parsed as a style separator and makes the image appear broken.
+            style=f"shape=image;aspect=fixed;imageAspect=0;image=data:image/png,{logo_data};",
+            vertex=True,
+            x=x,
+            y=y,
+            width=240.9,
+            height=50,
+        )
+        self.cells.append(cell)
+        return cell.id
+
+    def add_cluster_mark(self, cluster_id: str, kind: str,
+                         label: Optional[str] = None) -> str:
+        """Place the AWS ECS/EKS icon and name together in the cluster header."""
+        service = {"ecs_cluster": "ecs", "eks_cluster": "eks"}.get(kind)
+        if not service:
+            return ""
+        shape = shapes.get_shape("aws", service)
+        cell = Cell(
+            id=self._next_id("clusterlogo"),
+            parent=cluster_id,
+            value="",
+            style=shape.style(font_size=1, label_width=1),
+            vertex=True,
+            x=8,
+            y=8,
+            width=42,
+            height=42,
+        )
+        self.cells.append(cell)
+        label_cell = Cell(
+            id=self._next_id("clusterlabel"),
+            parent=cluster_id,
+            value=_label_html(label or shapes.get_container(kind).label, font_size=16),
+            style="text;html=1;strokeColor=none;fillColor=none;align=left;"
+                  "verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;",
+            vertex=True,
+            x=58,
+            y=8,
+            width=max(40, layout.LANE_W - 70),
+            height=42,
+        )
+        self.cells.append(label_cell)
         return cell.id
 
     def add_icon(
@@ -943,12 +998,58 @@ def _reorder_services_for_vpc_proximity(page: dict) -> None:
     )
 
 
+def _ensure_aws_foundation_services(page: dict, default_provider: str) -> None:
+    """Add standard shared AWS services to every AWS architecture page once."""
+    if default_provider.lower() != "aws":
+        return
+
+    placements = (
+        ("identity_and_access_management", "global", "baseline_iam", "IAM"),
+        ("s3", "global", "baseline_s3", "S3"),
+        ("secrets_manager", "regional", "baseline_secrets_manager", "Secrets Manager"),
+        ("cloudwatch_2", "regional", "baseline_cloudwatch", "CloudWatch"),
+        ("cloudtrail", "regional", "baseline_cloudtrail", "CloudTrail"),
+        ("key_management_service", "regional", "baseline_kms", "KMS"),
+    )
+
+    present_services: set[str] = set()
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            service = value.get("service")
+            if isinstance(service, str):
+                present_services.add(service)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+    visit(page)
+
+    global_services = page.setdefault("global", [])
+    region = page.setdefault("region", {})
+    regional_services = region.setdefault("services", [])
+    used_ids = {item_id for item_id, _ in _collect_arch_ids(page)}
+    for service, scope, base_id, label in placements:
+        if service in present_services:
+            continue
+        target = global_services if scope == "global" else regional_services
+        node_id = base_id
+        suffix = 2
+        while node_id in used_ids:
+            node_id = f"{base_id}_{suffix}"
+            suffix += 1
+        target.append({"id": node_id, "service": service, "label": label})
+        used_ids.add(node_id)
+        present_services.add(service)
+
+
 def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                             meta: Optional[dict] = None) -> Diagram:
     """Build an architecture page from the grid-model spec."""
     layout = _import_layout()
 
     # Auto-fix regional services before validation and layout.
+    _ensure_aws_foundation_services(page, default_provider)
     _fix_regional_placement(page)
     # Connection-aware placement: order freely-placeable region services so
     # connected pairs (e.g. API Gateway ↔ Lambda) land close together and
@@ -973,13 +1074,23 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
 
     # Title block: position from the layout's __title node (top-left).
     title_node = next((n for n in lo.nodes if n.node_id == "__title"), None)
+    brand_x = lo.border_x + 10 + layout.BORDER_LEFT_MARGIN - layout.BORDER_MARGIN
+    brand_width = 240.9
+    title_x = max(title_node.x if title_node is not None else lo.border_x,
+                  brand_x + brand_width + 20)
     if meta and title_node is not None:
-        diagram.add_title_block(meta, x=title_node.x, y=title_node.y)
+        diagram.add_title_block(meta, x=title_x, y=title_node.y)
     elif meta:
-        diagram.add_title_block(meta)
+        diagram.add_title_block(meta, x=title_x)
 
     # Outer border enclosing the title block AND the cloud.
-    diagram.add_outer_border(lo.border_x, lo.border_y, lo.border_w, lo.border_h, margin=0)
+    border_right = max(lo.border_x + lo.border_w, title_x + 440 + layout.BORDER_MARGIN)
+    diagram.add_outer_border(lo.border_x, lo.border_y,
+                             border_right - lo.border_x, lo.border_h, margin=0)
+    diagram.add_comprinno_mark(
+        x=brand_x,
+        y=(title_node.y + 50) if title_node is not None else lo.border_y + 10,
+    )
 
     # Emit every positioned node (skip the synthetic title placeholder).
     for node in lo.nodes:
@@ -997,14 +1108,17 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
             )
         else:
             container = shapes.get_container(node.kind)
+            is_named_cluster = node.kind in ("ecs_cluster", "eks_cluster")
             diagram.cells.append(Cell(
                 id=node.node_id,
                 parent=node.parent,
-                value=_label_html(node.label or container.label),
+                value="" if is_named_cluster else _label_html(node.label or container.label),
                 style=container.style(),
                 vertex=True,
                 x=node.x, y=node.y, width=node.width, height=node.height,
             ))
+            if is_named_cluster:
+                diagram.add_cluster_mark(node.node_id, node.kind, node.label)
 
     # ---- Edges: routed LAST, with DETERMINISTIC HOUSE-STYLE rules ----------
     # Uses the inline obstacle-aware routing approach (ported from the reference
@@ -1122,41 +1236,40 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 mid_y = tgt_box[1] - 40
                 waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
 
-            # Case 2b: Compute CLUSTER boundary → DB (cluster→DB, option (a)).
-            # The DB sits to the RIGHT of the tall lane, in a db_subnet row.
-            # Exit the lane's RIGHT side, run to a per-edge vertical corridor in
-            # the gap between the lane and the DB column, then drop into the DB
-            # TOP. Each edge in a shared-source or shared-target bundle gets its
-            # OWN corridor x and DB entry column, so no two segments coincide —
-            # this is robust even when the vertical gap above the DB row is thin.
+            # Case 2b: Compute cluster → data store. Route above the subnet
+            # contents, then use the free gap before each target for its drop.
+            # This keeps a path to a later store from crossing earlier stores.
             elif (kind_of.get(src) in _CLUSTER_KINDS
                   and svc_of.get(tgt) in _DB_SVCS
                   and tgt_box[0] > src_box[0]):
-                # shared-source: this cluster → several DBs (index by target x)
                 sibs_t = clusterdb_by_src.get(src, [tgt])
                 ti = sibs_t.index(tgt) if tgt in sibs_t else 0
-                # shared-target: several clusters → this DB (index by source x)
-                sibs_s = clusterdb_by_tgt.get(tgt, [src])
-                si = sibs_s.index(src) if src in sibs_s else 0
-                ns = len(sibs_s)
                 src_right = src_box[0] + src_box[2]
-                # Exit the lane right side, staggered vertically a little by the
-                # target index so the two edges from one lane leave at different
-                # heights (prevents a shared exit stub).
-                exit_fy = 0.30 + 0.20 * ti
-                exit_fy = min(0.9, max(0.1, exit_fy))
-                exit_py = src_box[1] + src_box[3] * exit_fy
-                # Per-edge vertical corridor in the gap between lane and DB.
-                gap = tgt_box[0] - src_right
-                # spread corridors across the gap by a combined bundle index
-                bundle_n = max(2, len(sibs_t) * ns)
-                bundle_i = ti * ns + si
-                corridor_x = src_right + gap * (bundle_i + 1) / (bundle_n + 1)
-                # DB entry column staggered by source (shared-target split)
-                entry_fx = ((si + 1) / (ns + 1)) if ns > 1 else 0.5
-                drop_x = tgt_box[0] + tgt_box[2] * entry_fx
+                target_row = _same_row(tgt_cy, tgt_cy, lo.az_rows)
+                row_top = target_row[0] if target_row else tgt_box[1] - 100
+                exit_py = row_top + 20 + 10 * min(ti, 2)
+                exit_fy = min(0.98, max(0.01,
+                                       (exit_py - src_box[1]) / src_box[3]))
+
+                # Place the drop in the gap between this store and the nearest
+                # store before it; the first store uses the lane-to-subnet gap.
+                preceding = [
+                    boxes[n.node_id]
+                    for n in lo.nodes
+                    if n.parent == parent_of.get(tgt)
+                    and n.kind == "resource"
+                    and svc_of.get(n.node_id) in _DB_SVCS
+                    and boxes[n.node_id][0] + boxes[n.node_id][2] <= tgt_box[0]
+                ]
+                if preceding:
+                    previous_right = max(b[0] + b[2] for b in preceding)
+                    corridor_x = (previous_right + tgt_box[0]) / 2
+                else:
+                    corridor_x = (src_right + tgt_box[0]) / 2
+
+                drop_x = tgt_cx
                 exit_xy = (1.0, round(exit_fy, 3))
-                entry_xy = (round(entry_fx, 3), 0.0)
+                entry_xy = (0.5, 0.0)
                 waypoints = [(corridor_x, exit_py),
                              (corridor_x, tgt_box[1] - 12),
                              (drop_x, tgt_box[1] - 12)]
@@ -1213,7 +1326,10 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 if 0.05 <= frac <= 0.95:
                     cand = [(src_right, src_cy), (tgt_left, src_cy)]
                     if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
-                        exit_xy, entry_xy = (1.0, 0.5), (0.0, round(frac, 2))
+                        # Keep the target port at the exact source y. Rounding
+                        # this fraction can create a small vertical jog on an
+                        # otherwise straight ALB-to-cluster connection.
+                        exit_xy, entry_xy = (1.0, 0.5), (0.0, frac)
                         waypoints = []
                         picked = True
 
@@ -1230,11 +1346,23 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                             _stagger_tracker[(src, "bandup")] = n_up + 1
                             picked = True
                     else:
-                        cand = [(src_cx, src_box[1]), (src_cx, band_up),
+                        # A compute-task edge that must pass a sibling store
+                        # leaves near the task's upper-right corner. This keeps
+                        # its short vertical stub clear of the subnet label and
+                        # lets the shared horizontal segment pass above icons.
+                        task_in_cluster = (
+                            kind_of.get(src) == "resource"
+                            and kind_of.get(parent_of.get(src)) in _CLUSTER_KINDS
+                        )
+                        source_x = (src_box[0] + src_box[2] * 0.9
+                                    if task_in_cluster else src_cx)
+                        cand = [(source_x, src_box[1]), (source_x, band_up),
                                 (tgt_cx, band_up), (tgt_cx, tgt_box[1])]
                         if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
-                            exit_xy, entry_xy = (0.5, 0.0), (0.5, 0.0)
-                            waypoints = _dedup([(src_cx, band_up), (tgt_cx, band_up)])
+                            exit_xy = (0.9 if task_in_cluster else 0.5, 0.0)
+                            entry_xy = (0.5, 0.0)
+                            waypoints = _dedup([(source_x, band_up),
+                                                (tgt_cx, band_up)])
                             _stagger_tracker[(src, "bandup")] = n_up + 1
                             picked = True
 

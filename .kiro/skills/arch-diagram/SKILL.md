@@ -56,6 +56,16 @@ ask rather than moving it merely to fit the layout. Do not guess icon stencil
 names: use the local catalog, and update the catalog only when the user asks
 for an unsupported service.
 
+Keep architectural paths semantically clean: show CloudFront's origin as a
+separate connection when relevant, represent WAF as its own component when it
+is part of the request path, and keep the Internet Gateway on the VPC boundary.
+For customer ingress diagrams, align Customers → WAF → Internet Gateway → ALB
+on one horizontal row when those components are present. Every AWS architecture
+page automatically includes IAM, S3, Secrets Manager, CloudWatch, CloudTrail,
+and KMS unless the service is already represented in the spec. For shared ECS/EKS services, connect
+the cluster boundary to shared data stores; connect individual AZ task nodes
+only when the AZ-specific path itself matters.
+
 For AWS multi-AZ VPC examples, use the existing AZ/subnet/compute-group schema.
 One NAT in a shared design is not a universal rule: model the user's stated
 resilience and egress requirements. Do not assume every architecture needs a

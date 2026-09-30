@@ -759,17 +759,42 @@ class TestVpcCenteringAndGutters:
             assert box is not None, f"{svc} must be placed"
             assert contained(box, vpc), f"{svc} must be inside the VPC"
 
-    def test_vpc_horizontally_centered_in_cloud(self):
+    def test_cloud_avoids_excess_right_whitespace_and_pads_outer_border(self):
         lo = self._gutter_layout()
         cloud = lo.abs_boxes["cloud"]
         vpc = lo.abs_boxes["vpc"]
         left_gap = vpc[0] - cloud[0]
         right_gap = (cloud[0] + cloud[2]) - (vpc[0] + vpc[2])
-        # Balanced within a small tolerance.
-        assert abs(left_gap - right_gap) <= 20, (
-            f"VPC not centred: left_gap={left_gap:.0f} right_gap={right_gap:.0f}"
-        )
+        assert right_gap < left_gap, "Cloud should not duplicate the left gutter on the right"
+        assert right_gap <= 2 * lo_mod.CLOUD_PAD_X + 5
         assert left_gap > 0 and right_gap > 0
+
+        outer_right = lo.border_x + lo.border_w
+        outer_bottom = lo.border_y + lo.border_h
+        assert outer_right - (cloud[0] + cloud[2]) == lo_mod.BORDER_RIGHT_MARGIN
+        bottom_padding = outer_bottom - (cloud[1] + cloud[3])
+        assert bottom_padding == lo_mod.BORDER_BOTTOM_MARGIN
+
+    def test_cloud_service_to_container_gaps_are_compact(self):
+        lo = _build_minimal_arch(
+            global_items=[{"id": "iam", "service": "identity_and_access_management"}],
+            region_services=[
+                {"id": "cw", "service": "cloudwatch_2"},
+                {"id": "trail", "service": "cloudtrail"},
+            ],
+        )
+        region = lo.abs_boxes["region"]
+        global_row_bottom = lo.abs_boxes["iam"][1] + lo_mod.ICON + lo_mod.LABEL_BAND
+        global_to_region_gap = region[1] - global_row_bottom
+        assert global_to_region_gap == (
+            lo_mod.INGRESS_BAND_MARGIN + lo_mod.INGRESS_BAND_BELOW_GAP
+        )
+
+        last_regional = lo.abs_boxes["trail"]
+        regional_to_vpc_gap = lo.abs_boxes["vpc"][1] - (
+            last_regional[1] + lo_mod.ICON + lo_mod.LABEL_BAND
+        )
+        assert regional_to_vpc_gap == lo_mod.REGION_SERVICES_VPC_GAP
 
     def test_waf_alb_same_row(self):
         """WAF (region gutter) and ALB (vpc gutter) sit on the same y row."""
