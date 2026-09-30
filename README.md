@@ -29,8 +29,22 @@ computes the layout and emits valid XML.
     ├── generate_diagram.py      # spec -> .drawio.xml (CLI) + overlap checker
     ├── layout.py                # grid-based layout engine with AZ routing
     ├── shapes.py                # shape/color catalog (SOURCE OF TRUTH)
+    ├── assets/
+    │   └── comprinno-logo.png   # embedded in generated diagram headers
     └── tests/                   # pytest suite
 ```
+
+AWS architecture pages automatically include IAM and S3 in the global
+services row, plus Secrets Manager, CloudWatch, CloudTrail, and KMS in the
+regional services area. A service already present in the spec is not added a
+second time. These defaults apply to architecture pages, not flow diagrams.
+
+The renderer balances regional services across rows, keeps the AWS Cloud sized
+close to its contents, and routes edges to avoid icons. Customer ingress can be
+laid out on a single row through WAF, Internet Gateway, and ALB when those
+components and connections are part of the design. ECS and EKS cluster headers
+show the service logo beside the cluster name. The Comprinno logo is embedded
+in the diagram header.
 
 ## Usage
 
@@ -43,8 +57,10 @@ Use the dedicated `arch-diagram` agent, or invoke the skill from any agent:
 
 The agent will ask for architecture choices that are missing, summarize the
 proposed components and important flows, then create a focused spec and diagram.
-It does not assume a fixed pattern, AZ count, NAT design, or required service
-inventory. If an awsdac preview tool is available, it may also render a PNG.
+It does not assume a fixed pattern, AZ count, NAT design, or workload-specific
+service inventory. AWS architecture pages do include the shared foundation
+services listed above. If an awsdac preview tool is available, it may also
+render a PNG.
 
 ### Via the CLI
 ```bash
