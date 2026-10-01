@@ -2787,17 +2787,56 @@ def build_document(spec: dict, strict_connectivity: bool = False) -> ET.Element:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a draw.io diagram from a spec.")
     parser.add_argument("--input", required=True, help="Path to spec YAML/JSON.")
-    parser.add_argument("--output", required=True, help="Path to write .drawio.xml.")
+    parser.add_argument(
+        "--output",
+        help="Path to write .drawio.xml. Required unless --output-dir is given.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        help=(
+            "Root output directory. The diagram is written to "
+            "DIR/<project-slug>/<spec-stem>.drawio.xml, creating the folder "
+            "automatically. Ignored when --output is also supplied. "
+            "Default: outputs/ (relative to the current working directory)."
+        ),
+    )
     parser.add_argument(
         "--strict-connectivity", action="store_true",
         help="Do not emit diagrams with unresolved architecture connectivity warnings.",
     )
     args = parser.parse_args(argv)
 
+    if not args.output and not args.output_dir:
+        # Default to outputs/ when neither flag is given
+        args.output_dir = "outputs"
+
     import yaml  # local import so the module loads without PyYAML for unit tests
+    import re as _re
 
     with open(args.input, "r", encoding="utf-8") as fh:
         spec = yaml.safe_load(fh)
+
+    # Resolve output path
+    if args.output:
+        output_path = args.output
+    else:
+        # Derive project slug from the spec metadata.project, falling back to
+        # the input filename stem.
+        project_name = (spec.get("metadata") or {}).get("project", "")
+        if project_name:
+            slug = _re.sub(r"[^a-zA-Z0-9]+", "-", project_name).strip("-").lower()
+        else:
+            import os as _os
+            slug = _os.path.splitext(_os.path.basename(args.input))[0]
+        import os as _os
+        stem = _os.path.splitext(_os.path.basename(args.input))[0]
+        # Strip a trailing .spec suffix so "acme-orders.spec.yaml" → "acme-orders"
+        if stem.endswith(".spec"):
+            stem = stem[:-5]
+        client_dir = _os.path.join(args.output_dir, slug)
+        _os.makedirs(client_dir, exist_ok=True)
+        output_path = _os.path.join(client_dir, f"{stem}.drawio.xml")
 
     try:
         mxfile = build_document(spec, strict_connectivity=args.strict_connectivity)
@@ -2805,9 +2844,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.exit(2, f"error: {exc}\n")
 
     xml = render_xml(mxfile)
-    with open(args.output, "w", encoding="utf-8") as fh:
+    with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(xml)
-    print(f"Wrote {args.output}")
+    print(f"Wrote {output_path}")
     return 0
 
 
