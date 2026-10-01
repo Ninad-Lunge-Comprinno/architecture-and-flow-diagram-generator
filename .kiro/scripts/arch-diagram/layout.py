@@ -92,6 +92,11 @@ CLOUD_PAD_X = 85         # right padding inside cloud
 CLOUD_GLOBAL_Y = 65      # top of global icon row within cloud
 CLOUD_PAD_BOTTOM = 85    # bottom padding inside cloud
 
+# Routing corridor: how many pixels outside the region's right edge the
+# routing corridor sits. Edges that need to travel from inside the region to
+# a global service use this corridor to exit cleanly without crossing icons.
+REGION_CORRIDOR_OFFSET = 30
+
 # Ingress band — sits BETWEEN the global row and the region box, spanning
 # the full cloud width. Items are spaced horizontally left-to-right.
 INGRESS_BAND_PAD_X = 60  # x of first ingress item (cloud-relative)
@@ -571,7 +576,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 
     # ---- VPC corridor x and region right corridor ------------------------
     lo.vpc_corridor_x = vpc_abs_x + VPC_LEFT_MARGIN / 2
-    lo.region_right_x = region_abs_x + region_width + 30
+    lo.region_right_x = region_abs_x + region_width + REGION_CORRIDOR_OFFSET
 
     # ---- AZ gap corridors + row bounds -----------------------------------
     az_mid_ys = []

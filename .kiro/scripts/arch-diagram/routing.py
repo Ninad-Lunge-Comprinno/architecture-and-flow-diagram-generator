@@ -22,8 +22,19 @@ from typing import Optional
 
 ICON = 120
 LABEL_BAND = 50
-GRID = 20  # routing grid resolution (px)
+GRID = 20    # routing grid resolution (px)
 CLEARANCE = 10  # min gap kept between an edge and an obstacle
+
+# Rule-based routing constants (used in _rule_for and route_all_edges_rulebased).
+TASKDB_CLEAR_BASE = 60   # base clear-y offset for first task→DB edge above row
+TASKDB_CLEAR_STEP = 30   # additional clear-y per sibling task→DB edge
+STRAIGHT_BUMP_Y   = 40   # over-y for bumping a blocked straight segment
+COMPUTE_DB_CLEAR  = 70   # clear-y between compute→DB source pair centre
+DB_REPLICATION_CORRIDOR = 40   # extra corridor gap for DB→DB replication edges
+ALB_ENTRY_CLEARANCE     = 40   # gap before ALB target in ALB→cluster routing
+ALB_APPROACH_CLEARANCE  = 40   # gap left of ALB before entry point
+DB_EXIT_LEFT_FX:  float = 0.25  # exit fraction for left-of-centre DB connection
+DB_EXIT_RIGHT_FX: float = 0.75  # exit fraction for right-of-centre DB connection
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +429,7 @@ def route_all_edges_rulebased(edges, boxes, meta, az_gap_x=None):
             idx = sibs_sorted.index(t)
             n = len(sibs_sorted)
             frac = (idx + 1) / (n + 1)              # e.g. 0.33/0.66 or 0.25/0.5/0.75
-            clear_y = min(sb[1], min(boxes[x][1] for x in sibs)) - (60 + idx * 30)
+            clear_y = min(sb[1], min(boxes[x][1] for x in sibs)) - (TASKDB_CLEAR_BASE + idx * TASKDB_CLEAR_STEP)
             exit_px = sb[0] + sb[2] * frac
             exit_xy = (round(frac, 3), 0.0)
             wps = [(exit_px, clear_y), (tcx, clear_y)]
@@ -430,7 +441,7 @@ def route_all_edges_rulebased(edges, boxes, meta, az_gap_x=None):
         if len(pts) == 2 and abs(pts[0][1] - pts[1][1]) < 1:
             blocker = _intervening_icon(pts[0], pts[1], boxes, {s, t})
             if blocker is not None:
-                over_y = min(sb[1], tb[1]) - 40
+                over_y = min(sb[1], tb[1]) - STRAIGHT_BUMP_Y
                 exit_xy = (0.5, 0.0)
                 entry_xy = (0.5, 0.0)
                 pts = [(_ex(sb, exit_xy)), (scx, over_y), (tcx, over_y),
@@ -480,11 +491,11 @@ def _rule_for(s, t, sb, tb, s_svc, t_svc, sm, tm):
 
     # R-A: compute task → DB : exit TOP, route up-and-over, entry TOP.
     if s_svc in _COMPUTE_NODE_SERVICES and t_svc in _DB_SERVICES:
-        clear_y = min(sb[1], tb[1]) - 70
+        clear_y = min(sb[1], tb[1]) - COMPUTE_DB_CLEAR
         if tcx < scx:
-            exit_fx = 0.25
+            exit_fx = DB_EXIT_LEFT_FX
         elif tcx > scx + sb[2]:
-            exit_fx = 0.75
+            exit_fx = DB_EXIT_RIGHT_FX
         else:
             exit_fx = 0.5
         exit_px = sb[0] + sb[2] * exit_fx
@@ -495,14 +506,14 @@ def _rule_for(s, t, sb, tb, s_svc, t_svc, sm, tm):
         adjacent = _az_adjacent(sm.get("az"), tm.get("az"))
         if abs(dx) < 40 and adjacent:
             return (0.5, 1.0), (0.5, 0.0), []       # straight vertical
-        corridor_x = max(sb[0] + sb[2], tb[0] + tb[2]) + 40
-        return (1.0, 0.5), (0.5, 0.0), [(corridor_x, scy), (corridor_x, tb[1] - 30),
-                                        (tcx, tb[1] - 30)]
+        corridor_x = max(sb[0] + sb[2], tb[0] + tb[2]) + DB_REPLICATION_CORRIDOR
+        return (1.0, 0.5), (0.5, 0.0), [(corridor_x, scy), (corridor_x, tb[1] - ALB_APPROACH_CLEARANCE),
+                                        (tcx, tb[1] - ALB_APPROACH_CLEARANCE)]
 
     # R-C: ALB / NLB → compute cluster : side entry via the AZ gap.
     if s_svc in ("application_load_balancer", "network_load_balancer") and is_tall_target:
         entry_frac_y = max(0.0, min(1.0, (scy - tb[1]) / tb[3]))
-        return (1.0, 0.5), (0.0, round(entry_frac_y, 3)), [(tb[0] - 40, scy)]
+        return (1.0, 0.5), (0.0, round(entry_frac_y, 3)), [(tb[0] - ALB_ENTRY_CLEARANCE, scy)]
 
     # R-D: API Gateway → Lambda / region service : exit TOP → entry LEFT.
     if s_svc == "api_gateway":

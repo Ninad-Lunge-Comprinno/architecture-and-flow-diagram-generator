@@ -51,6 +51,56 @@ EDGE_STYLE = ("edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySiz
               "strokeWidth=4;fontStyle=0;fontSize=14;fontColor=#232F3E;"
               "labelBackgroundColor=#FFFFFF;spacing=5;whiteSpace=wrap;")
 
+# ---------------------------------------------------------------------------
+# Architecture-page routing constants
+# All numeric thresholds and offsets used in the arch-page edge-routing logic
+# are defined here. Change them in one place; they propagate everywhere.
+# ---------------------------------------------------------------------------
+
+# Tall-container threshold: compute-group lanes (ECS/EKS/ASG) have height > this.
+TALL_CONTAINER_H = 240
+
+# Port fraction clamp: exit/entry fractions are kept within [PORT_MIN_FX, PORT_MAX_FX]
+# so arrows always leave/enter on the icon's declared connection points.
+PORT_MIN_FX: float = 0.15
+PORT_MAX_FX: float = 0.85
+FEXIT_MIN: float = 0.02    # minimum valid exit-y fraction on a lane side
+FEXIT_MAX: float = 0.98    # maximum valid exit-y fraction on a lane side
+FRAC_MIN:  float = 0.05    # minimum valid port fraction for direct side-entry
+FRAC_MAX:  float = 0.95    # maximum valid port fraction for direct side-entry
+
+# Clearances: how many pixels an edge must stay away from container borders
+# and icon bounding boxes when computing waypoints.
+CORRIDOR_CLEARANCE  = 40   # gap used for VPC corridor and mid_y offsets
+ROW_ABOVE_CLEARANCE = 30   # clear-y above the AZ row top for same-row routes
+SAME_Y_ABOVE_CLEARANCE = 50  # clear-y above source for same-y fan-out (global row)
+STRAIGHT_BUMP_CLEARANCE = 40  # over-y offset when a straight line is blocked
+
+# Sadhaka lane→DB geometry: bus_y offsets above the target icon.
+# When target is ABOVE lane centre: bus_y = target.top - BUS_ABOVE_TARGET
+# When target is BELOW lane centre: bus_y = target.top - BUS_BELOW_TARGET
+BUS_ABOVE_TARGET = 75
+BUS_BELOW_TARGET = 160
+
+# Fan-in stagger (Case 2 — multiple region services → same cluster):
+# each successive edge gets a corridor 28px higher and a different entry fraction.
+FAN_STAGGER_STEP = 28
+
+# Same-row band routing: jog bands within an AZ row for obstacle avoidance.
+BAND_OFFSET  = 45   # distance from row edge to the band centre
+BAND_STAGGER = 18   # amount band shifts per stagger increment
+BAND_JOG_X   = 40   # x offset past source right edge before turning
+
+# Bottom-fan stagger (multiple deploys from the same source to adjacent clusters):
+BOTTOM_FAN_FX_STEP   = 0.18  # fraction step per additional fan edge
+BOTTOM_FAN_LIFT_STEP = 22    # pixels to lift each successive corridor
+
+# DB drop: how many pixels above a DB icon top to place the final horizontal.
+DB_DROP_CLEARANCE = 12
+
+# Same-row exit fraction for the top-right stagger variant.
+SAME_ROW_EXIT_FX: float = 0.75
+
 
 # --------------------------------------------------------------------------
 # In-memory cell model
@@ -831,7 +881,7 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
 
     # 1. Source is above a tall container and horizontally offset:
     #    ECR-style — exit bottom, go horizontal at midpoint, enter top.
-    if th > 240 and (sy + sh) < ty and abs(dx) > 200 and vpc_corridor_x is None:
+    if th > TALL_CONTAINER_H and (sy + sh) < ty and abs(dx) > 200 and vpc_corridor_x is None:
         exit_xy, entry_xy = (0.5, 1.0), (0.5, 0.0)
         mid_y = (sy + sh + ty) / 2
         waypoints = [(scx, mid_y), (tcx, mid_y), (tcx, ty)]
@@ -870,11 +920,11 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
                 # inverted-U that goes UP first (above all icons + labels),
                 # across, then DOWN into the target — no sibling-icon crossings.
                 row_top = src_row[0]     # top of this AZ row in abs coords
-                clear_y = row_top - 30   # 30px above the AZ row top (above subnets)
+                clear_y = row_top - ROW_ABOVE_CLEARANCE   # 30px above the AZ row top (above subnets)
                 # exitX=0.75 (top-right of source) shifts this vertical segment
                 # right of center so it doesn't overlap ECR->ECS which uses x=0.5
-                exit_src_x = sx + sw * 0.75
-                exit_xy = (0.75, 0.0)    # exit top-right of source
+                exit_src_x = sx + sw * SAME_ROW_EXIT_FX
+                exit_xy = (SAME_ROW_EXIT_FX, 0.0)   # exit top-right of source
                 entry_xy = (0.5, 0.0)    # enter top-center of target
                 waypoints = [(exit_src_x, clear_y), (tcx, clear_y)]
                 return exit_xy, entry_xy, _dedup(waypoints)
@@ -2071,7 +2121,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     # so subsequent routes spread into separate lanes automatically.
     def _edge_matches_semantic_case(src, tgt, src_box, tgt_box):
         """Return True if the edge will be handled by Cases 1-4 (not BFS)."""
-        is_target_tall = tgt_box[3] > 240
+        is_target_tall = tgt_box[3] > TALL_CONTAINER_H
         region_box2 = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
         in_band = src_box[1] < region_box2[1]
         above_vpc = src_box[1] < vpc_abs_top
@@ -2155,7 +2205,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
             tgt_cy = tgt_box[1] + tgt_box[3] / 2
             dx = abs(tgt_cx - src_cx)
 
-            is_target_tall = tgt_box[3] > 240
+            is_target_tall = tgt_box[3] > TALL_CONTAINER_H
             region_box = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
             src_in_ingress_band = src_box[1] < region_box[1]
             src_above_vpc = src_box[1] < vpc_abs_top
@@ -2180,7 +2230,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 exit_xy = (0.5, 1.0)
                 entry_xy = (0.5, 0.0)
                 if dx > layout.ICON:
-                    mid_y = vpc_abs_top - 40
+                    mid_y = vpc_abs_top - CORRIDOR_CLEARANCE
                     waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
                 else:
                     waypoints = []
@@ -2197,7 +2247,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 _stagger_tracker[fan_key] = fan_n + 1
                 _fan_offsets = [0.0, -0.2, +0.2, -0.35, +0.35]
                 fan_offset = _fan_offsets[min(fan_n, len(_fan_offsets)-1)]
-                exit_fx = round(min(0.85, max(0.15, 0.5 + fan_offset)), 2)
+                exit_fx = round(min(PORT_MAX_FX, max(PORT_MIN_FX, 0.5 + fan_offset)), 2)
                 entry_fx = exit_fx
                 exit_px = src_box[0] + src_box[2] * exit_fx
                 entry_px = tgt_box[0] + tgt_box[2] * entry_fx
@@ -2210,7 +2260,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 services_bottom = src_box[1] + src_box[3] + layout.LABEL_BAND
                 # Target: corridor well above VPC top
                 base_mid_y = (services_bottom + vpc_top_abs) / 2
-                mid_y = base_mid_y - fan_n * 28
+                mid_y = base_mid_y - fan_n * FAN_STAGGER_STEP
                 exit_xy = (exit_fx, 1.0)
                 entry_xy = (entry_fx, 0.0)
                 waypoints = [(exit_px, mid_y), (entry_px, mid_y)]
@@ -2227,7 +2277,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 target_row = _same_row(tgt_cy, tgt_cy, lo.az_rows)
                 row_top = target_row[0] if target_row else tgt_box[1] - 100
                 exit_py = row_top + 20 + 10 * min(ti, 2)
-                exit_fy = min(0.98, max(0.01,
+                exit_fy = min(FEXIT_MAX, max(FEXIT_MIN,
                                        (exit_py - src_box[1]) / src_box[3]))
 
                 # Place the drop in the gap between this store and the nearest
@@ -2250,8 +2300,8 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 exit_xy = (1.0, round(exit_fy, 3))
                 entry_xy = (0.5, 0.0)
                 waypoints = [(corridor_x, exit_py),
-                             (corridor_x, tgt_box[1] - 12),
-                             (drop_x, tgt_box[1] - 12)]
+                             (corridor_x, tgt_box[1] - DB_DROP_CLEARANCE),
+                             (drop_x, tgt_box[1] - DB_DROP_CLEARANCE)]
 
             # Case 3: Lane → icon (Sadhaka geometry).
             # Only applies when target is to the RIGHT of the lane AND is at
@@ -2272,7 +2322,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 up_key = (src, "upward")
                 up_n = _stagger_tracker.get(up_key, 0)
                 _stagger_tracker[up_key] = up_n + 1
-                exit_fx = round(min(0.85, max(0.15, 0.75 - up_n * 0.15)), 2)
+                exit_fx = round(min(PORT_MAX_FX, max(PORT_MIN_FX, SAME_ROW_EXIT_FX - up_n * 0.15)), 2)
                 exit_px = src_box[0] + src_box[2] * exit_fx
                 cloud_box = lo.abs_boxes.get("cloud", (0, 0, 0, 0))
                 above_all_y = cloud_box[1] + 30
@@ -2290,23 +2340,23 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 src_right = src_box[0] + src_box[2]
                 cand = None
                 if abs(tgt_cy - src_cy) > 10:
-                    bus_y = tgt_box[1] - 75 if tgt_cy < src_cy else tgt_box[1] - 160
+                    bus_y = tgt_box[1] - BUS_ABOVE_TARGET if tgt_cy < src_cy else tgt_box[1] - BUS_BELOW_TARGET
                     fexit = (bus_y - src_box[1]) / src_box[3]
                     # If the target is above the source box top, fexit < 0 and
                     # the guard below would reject it, falling back to a
                     # diagonal. Clamp bus_y to just inside the source box top
                     # so the exit is always valid.
-                    if fexit < 0.02:
-                        bus_y = src_box[1] + src_box[3] * 0.02
-                        fexit = 0.02
-                    if 0.02 <= fexit <= 0.98:
+                    if fexit < FEXIT_MIN:
+                        bus_y = src_box[1] + src_box[3] * FEXIT_MIN
+                        fexit = FEXIT_MIN
+                    if FEXIT_MIN <= fexit <= FEXIT_MAX:
                         exit_xy, entry_xy = (1.0, round(fexit, 2)), (0.5, 0.0)
                         waypoints = [(tgt_cx, bus_y)]
                         cand = [(src_right, bus_y), (tgt_cx, bus_y),
                                 (tgt_cx, tgt_box[1])]
                 else:
                     frac0 = (src_cy - tgt_box[1]) / tgt_box[3]
-                    if 0.05 <= frac0 <= 0.95:
+                    if FRAC_MIN <= frac0 <= FRAC_MAX:
                         exit_xy, entry_xy = (1.0, 0.5), (0.0, round(frac0, 2))
                         waypoints = []
                         cand = [(src_right, src_cy), (tgt_box[0], src_cy)]
@@ -2332,14 +2382,14 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 tgt_left = tgt_box[0]
                 n_up = _stagger_tracker.get((src, "bandup"), 0)
                 n_lo = _stagger_tracker.get((src, "bandlo"), 0)
-                band_up = row_top + 45 - n_up * 18
-                band_lo = row_bot - 45 + n_lo * 18
-                gx = src_right + 40
+                band_up = row_top + BAND_OFFSET - n_up * BAND_STAGGER
+                band_lo = row_bot - BAND_OFFSET + n_lo * BAND_STAGGER
+                gx = src_right + BAND_JOG_X
                 picked = False
 
                 # a. Straight
                 frac = (src_cy - tgt_box[1]) / tgt_box[3] if tgt_box[3] else 0.5
-                if 0.05 <= frac <= 0.95:
+                if FRAC_MIN <= frac <= FRAC_MAX:
                     cand = [(src_right, src_cy), (tgt_left, src_cy)]
                     if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
                         # Keep the target port at the exact source y. Rounding
@@ -2352,7 +2402,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 # b. Upper-band jog
                 if not picked and row_top + 20 < band_up < src_cy + tgt_box[3]:
                     if is_target_tall:
-                        fup = min(0.95, max(0.05, (band_up - tgt_box[1]) / tgt_box[3]))
+                        fup = min(FRAC_MAX, max(FRAC_MIN, (band_up - tgt_box[1]) / tgt_box[3]))
                         cand = [(src_right, src_cy), (gx, src_cy), (gx, band_up),
                                 (tgt_left, band_up)]
                         if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
@@ -2385,7 +2435,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 # c. Lower-band jog
                 if not picked and src_cy - tgt_box[3] < band_lo < row_bot - 20:
                     if is_target_tall:
-                        flo = min(0.95, max(0.05, (band_lo - tgt_box[1]) / tgt_box[3]))
+                        flo = min(FRAC_MAX, max(FRAC_MIN, (band_lo - tgt_box[1]) / tgt_box[3]))
                         cand = [(src_right, src_cy), (gx, src_cy), (gx, band_lo),
                                 (tgt_left, band_lo)]
                         if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
@@ -2431,7 +2481,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                     waypoints = [tuple(p) for p in path[1:-1]] if len(path) > 2 else []
                 else:
                     # BFS unavailable — geometric fallback with same-y check.
-                    clear_y_above = src_box[1] - 50
+                    clear_y_above = src_box[1] - SAME_Y_ABOVE_CLEARANCE
                     if abs(src_box[1] - tgt_box[1]) < 5 and tgt_box[0] > src_box[0]:
                         cand_straight = [(src_box[0] + src_box[2], src_cy),
                                          (tgt_box[0], src_cy)]
@@ -2480,9 +2530,9 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 if m > 0:
                     # shift exit x-fraction and lift the drop-band so this edge
                     # rides its own lane into the target cluster top.
-                    new_fx = min(0.85, max(0.15, exit_xy[0] + m * 0.18))
+                    new_fx = min(PORT_MAX_FX, max(PORT_MIN_FX, exit_xy[0] + m * BOTTOM_FAN_FX_STEP))
                     exit_xy = (round(new_fx, 3), 1.0)
-                    lift = m * 22
+                    lift = m * BOTTOM_FAN_LIFT_STEP
                     new_exit_px = src_box[0] + src_box[2] * new_fx
                     if waypoints:
                         first_y = waypoints[0][1] - lift
