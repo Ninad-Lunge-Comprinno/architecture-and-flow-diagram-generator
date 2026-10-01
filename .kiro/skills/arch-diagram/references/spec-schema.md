@@ -12,8 +12,9 @@ then the generator renders it deterministically.
 ```yaml
 provider: aws                 # aws | azure | gcp (default provider for services)
 metadata:
-  project: "Acme Migration"   # required (title block)
-  version: "1.0"
+  client_name: "Acme"         # optional; shown as Client Name
+  project: "Acme Migration"   # optional fallback for Client Name
+  version: "1.0"              # all fields optional; missing values display as "To be filled"
   date: "2026-09-22"
   creator: "Your Name"
   reviewer: "Reviewer Name"
@@ -40,6 +41,60 @@ pages:
 
 Single architecture page shorthand: put `global`/`edge`/`region`/`edges` at the
 top level and omit `pages`.
+
+## Flow pages
+
+Flow pages use directed steps, independent of architecture placement. The
+renderer lays them out left-to-right with compact, label-safe spacing: branches
+occupy separate rows and merges appear after all incoming steps. AWS flow pages
+receive an AWS Cloud boundary, with external actors outside it. A shared client
+endpoint that both sends and receives traffic stays on the left; a terminal
+external destination is placed beyond the cloud. VPC members use a separate
+right-hand placement lane, aligned to the connected flow rows so unrelated
+Cloud services remain outside the VPC frame without pushing VPC work below the
+diagram. Every page gets the branded title header and outer border.
+
+```yaml
+- name: "Order Processing"
+  type: flow
+  nodes:
+    - { id: checkout, service: user, label: "Customer checkout" }
+    - { id: validate, service: lambda, label: "Validate order" }
+    - { id: charge, service: lambda, label: "Charge payment" }
+    - { id: reject, service: sns, label: "Notify customer" }
+    - { id: fulfill, service: sqs, label: "Start fulfillment" }
+  edges:
+    - { source: checkout, target: validate }
+    - { source: validate, target: charge, label: "valid" }
+    - { source: validate, target: reject, label: "invalid" }
+    - { source: charge, target: fulfill, label: "payment accepted" }
+```
+
+Nodes require unique `id` and `service`; `label`, `provider`, and explicit
+`x`/`y` positions are optional. Use `scope: external` for non-AWS endpoints;
+`scope: cloud` and `scope: vpc` can clarify placement. Model the same client as
+one endpoint when it sends requests/events and receives responses. Edges define
+the real producer-to-consumer direction and may include a meaningful `label`.
+Flow arrows are rendered solid and use the shared orthogonal router, which
+avoids icon and label boxes, spreads shared paths into separate channels, and
+checks for conflicts. Prefer describing branch conditions and merge behavior
+in the spec over setting coordinates.
+
+Optional `groups` draw named deployment boundaries around flow nodes. Their
+frames size themselves to the listed members and render behind the icons.
+VPC groups also establish the VPC placement lane to the right of non-VPC AWS
+services.
+
+```yaml
+groups:
+  - id: app_vpc
+    kind: vpc
+    label: "Application VPC"
+    members: [service, database]
+```
+
+`kind` uses a known container from the provider's container catalog (for AWS,
+`cloud`, `region`, `vpc`, and `cluster` are common choices).
 
 ## Placement scopes
 
@@ -154,16 +209,21 @@ CI/CD icons are NOT a separate section — put CodePipeline / CodeBuild / ECR in
 
 ```yaml
 edges:
-  - { source: alb, target: ecs-az1, label: "route" }        # entry -> compute intersection
-  - { source: ecs-az1, target: eks-az2, label: "internal" } # cross-AZ
+  - { source: users, target: waf, label: "HTTPS" }
+  - { source: waf, target: igw }
+  - { source: igw, target: alb }
+  - { source: alb, target: ecs, label: "route" }            # shared cluster boundary
+  - { source: ecs, target: cache1, label: "cache" }
+  - { source: ecs, target: rds1, label: "queries" }
   - { source: rds1, target: rds2, label: "replication", dashed: true }
-  - { source: ecr, target: ecs-az1, label: "deploy", dashed: true }  # CI/CD deploy-up
+  - { source: ecr, target: ecs, label: "deploy", dashed: true }
 ```
 | field | required | description |
 |-------|----------|-------------|
-| `source` / `target` | yes | ids of existing elements (incl. `<group>-<az>` nodes) |
+| `source` / `target` | yes | ids of existing elements; `<group>-<az>` targets are for AZ-specific paths |
 | `label` | no | edge label |
 | `dashed` | no | `true` for async/deploy/replication flows |
+| `az_specific` | no | `true` when an edge intentionally targets one ECS/EKS AZ task |
 | `style` | no | raw draw.io style override (disables auto-routing) |
 
 Edges are kept separate from the containment structure on purpose: mixing
@@ -171,7 +231,7 @@ placement and traffic-flow confuses layout. The engine routes them with
 connection points + waypoints so they attach to borders and avoid icons.
 
 ## Validation (SpecError raised for)
-- missing `metadata.project`; invalid `provider`.
+- invalid `provider`.
 - unknown `service` for its provider; unknown compute-group `kind`.
 - resource/node missing `id` or `service`.
 - duplicate id on a page; edge endpoint referencing a missing id.

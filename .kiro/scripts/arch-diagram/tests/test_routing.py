@@ -137,6 +137,15 @@ def test_find_conflicts_edge_edge():
     assert any(c[0] == "edge_edge" for c in conflicts)
 
 
+def test_find_conflicts_perpendicular_edge_crossing():
+    routes = {
+        ("a", "b"): [(0, 50), (100, 50)],
+        ("c", "d"): [(50, 0), (50, 100)],
+    }
+    conflicts = R.find_conflicts(routes, {})
+    assert any(c[0] == "edge_edge" for c in conflicts)
+
+
 def test_find_conflicts_clean():
     routes = {
         ("a", "b"): [(0, 50), (200, 50)],

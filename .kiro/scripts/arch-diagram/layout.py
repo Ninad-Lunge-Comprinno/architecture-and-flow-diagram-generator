@@ -280,17 +280,21 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
         )
 
     # ---- Region dimensions -----------------------------------------------
-    # The Region gets a LEFT ENTRY GUTTER holding Shield + WAF (regional
-    # services outside the VPC). The VPC is offset right by that gutter.
-    has_region_gutter = any(r.get("service") in {"shield", "waf"}
-                            for r in (page.get("edge", []) or []))
-    region_gutter_w = REGION_ENTRY_GUTTER_W if has_region_gutter else 0
+    # Shield and WAF are global services in the AWS Cloud, before the Region.
+    edge_list = page.get("edge", []) or []
+    outside_region_items = [r for service in ("shield", "waf")
+                            for r in edge_list if r.get("service") == service]
+    outside_region_w = (len(outside_region_items) * ICON
+                        + max(0, len(outside_region_items) - 1) * ICON_GAP)
+    cloud_region_x = max(INGRESS_BAND_PAD_X, CLOUD_PAD_X)
+    if outside_region_items:
+        cloud_region_x += outside_region_w + REGION_PAD_X // 2
 
     # The region must be wide enough for the services row AND the gutter+VPC.
     icons_per_row = service_row_capacity if n_services else 0
     services_row_w = (icons_per_row * ICON + max(0, icons_per_row - 1) * REGION_RES_GAP
                       if icons_per_row else 0)
-    region_width = max(region_gutter_w + vpc_width + 2 * REGION_PAD_X,
+    region_width = max(vpc_width + 2 * REGION_PAD_X,
                        services_row_w + 2 * REGION_PAD_X)
     region_x = 0               # region is left-flush inside the cloud (we add padding in cloud)
     region_y = dynamic_region_pad_top  # VPC starts at this y within region
@@ -307,12 +311,10 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     # New placement model (see house-style):
     #   actors (users/devices)        -> OUTSIDE the cloud (left)
     #   IGW                           -> straddles the left VPC border
-    #   Shield, WAF                   -> Region ENTRY GUTTER (inside Region,
-    #                                     outside the VPC), side-by-side
+    #   Shield, WAF                   -> AWS Cloud lane before the Region
     #   ALB, API Gateway              -> VPC ENTRY GUTTER (inside the VPC),
     #                                     side-by-side; APIGW aligns near Lambda
     #   any other edge items          -> horizontal band above the Region
-    edge_list = page.get("edge", []) or []
     actor_services_set = {"user", "users", "mobile_client", "iot_device"}
     igw_svc = "internet_gateway"
     region_gutter_services = {"shield", "waf"}
@@ -321,8 +323,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 
     actor_items = [r for r in edge_list if r.get("service") in actor_services_set]
     igw_item    = next((r for r in edge_list if r.get("service") == igw_svc), None)
-    region_gutter_items = [r for r in edge_list
-                           if r.get("service") in region_gutter_services]
+    region_gutter_items = outside_region_items
     vpc_gutter_items = [r for r in edge_list
                         if r.get("service") in vpc_gutter_services]
     # Anything left over (e.g. a cloudfront placed in edge) stays in the band.
@@ -350,7 +351,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     ingress_items = sorted(ingress_items, key=_ingress_sort_key)
 
     # Band now holds only leftover edge items (not shield/waf/alb/apigw), placed
-    # left-to-right. Shield/WAF and ALB/APIGW are positioned later in the gutters.
+    # left-to-right. Shield/WAF and ALB/APIGW are positioned on the ingress row.
     ingress_x_offsets: dict[str, float] = {}
     cur_x = 0.0
     for item in ingress_items:
@@ -379,7 +380,6 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     # Minimum cloud left padding must still fit the region-services row and any
     # leftover band, which are left-flush at cloud_region_x.
     min_side = max(INGRESS_BAND_PAD_X, CLOUD_PAD_X)
-    cloud_region_x = min_side
     cloud_content_left = cloud_region_x  # leftover band / global row share this origin
 
     cloud_width_min = max(
@@ -461,7 +461,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
             row_y += ICON + LABEL_BAND + REGION_RES_GAP
 
     # ---- VPC -------------------------------------------------------------
-    vpc_region_x = REGION_PAD_X + region_gutter_w
+    vpc_region_x = REGION_PAD_X
     vpc_region_y = region_y   # = dynamic_region_pad_top (VPC y within region)
     lo.add(Node("vpc", "vpc", "region", vpc_region_x, vpc_region_y, vpc_width, vpc_height,
                 label=vpc.get("label", "VPC")),
@@ -471,7 +471,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     lo.vpc_abs_top = vpc_abs_y
 
     # ---- Ingress row alignment -------------------------------------------
-    # Align the ingress chain (Shield/WAF in the region gutter, ALB in the VPC
+    # Align the ingress chain (Shield/WAF before the Region, ALB in the VPC
     # gutter) to the MIDDLE AZ's vertical centre, and API Gateway to the AZ
     # above it. This makes Users→Shield→WAF→ALB a single straight horizontal
     # line and lets ALB enter the compute cluster cleanly through the AZ gap
@@ -492,28 +492,22 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     ingress_row_y = ingress_row_cy - ICON / 2          # top-left y of ingress icons
     apigw_row_y = apigw_row_cy - ICON / 2
 
-    # ---- Region ENTRY GUTTER: Shield + WAF (and any future items) ----------
-    # Items are EVENLY SPACED across the full gutter width so they look balanced
-    # regardless of how many are added. Each item is centred in its own slot.
-    # All items sit at the ingress-row y (same level as ALB) so the horizontal
-    # Users→Shield→WAF→ALB chain reads as a single flow line.
+    # ---- Shield/WAF outside the Region -----------------------------------
+    # Their reserved cloud lane ends before the Region border, leaving a clear
+    # gap before the IGW, which straddles the VPC border.
     if region_gutter_items:
         pair = [shield_item, waf_item]
         pair = [p for p in pair if p is not None]
         if not pair:
             pair = region_gutter_items  # fall back to spec order
-        n_rg = len(pair)
-        # Evenly distribute: divide the gutter into n_rg equal slots and centre
-        # each icon in its slot. Gutter spans from REGION_PAD_X to
-        # REGION_PAD_X + region_gutter_w.
-        slot_w = region_gutter_w / n_rg
         gutter_cy = ingress_row_y
         for slot_i, item in enumerate(pair):
-            gx = REGION_PAD_X + slot_i * slot_w + (slot_w - ICON) / 2
-            n = Node(item["id"], "resource", "region", gx, gutter_cy, ICON, ICON,
+            gx = cloud_region_x - (outside_region_w + REGION_PAD_X // 2) + slot_i * (ICON + ICON_GAP)
+            cloud_y_rel = cloud_region_y + gutter_cy
+            n = Node(item["id"], "resource", "cloud", gx, cloud_y_rel, ICON, ICON,
                      provider=item.get("provider", default_provider),
                      service=item["service"], label=item.get("label"))
-            lo.add(n, region_abs_x + gx, region_abs_y + gutter_cy)
+            lo.add(n, cloud_x + gx, cloud_y + cloud_y_rel)
 
     # ---- VPC ENTRY GUTTER: ALB (AZ gap) + API Gateway (AZ1 centre) --------
     # Both icons are horizontally CENTRED in the VPC left-gutter column so they
@@ -634,7 +628,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 
     # ---- External actors (left of cloud) ---------------------------------
     # Actors stack vertically at ACTOR_LEFT_X. They centre on the ingress entry
-    # row they connect to: the Region gutter (Shield/WAF) when present, else the
+    # row they connect to: the outside-Region Shield/WAF lane when present, else the
     # leftover band. This keeps the users→shield/waf edge short and horizontal.
     if region_gutter_items:
         entry_cy = region_abs_y + ingress_row_cy

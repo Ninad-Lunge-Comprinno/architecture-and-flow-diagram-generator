@@ -105,9 +105,9 @@ def test_edge_scope_placement():
     parents = {n.node_id: n.parent for n in lo.nodes}
     # user renders outside the cloud (base layer)
     assert parents["users"] == "1"
-    # Shield / WAF are regional ingress services: inside the Region, outside VPC
+    # Shield / WAF are global ingress services outside the Region
     if "waf" in parents:
-        assert parents["waf"] == "region"
+        assert parents["waf"] == "cloud"
     # ALB is a traffic entry point inside the VPC
     assert parents["alb"] == "vpc"
     # IGW is placed on the VPC border (child of vpc)
@@ -292,8 +292,8 @@ def test_dangling_edge_to_group_node_raises():
     assert "ecs-az9" in str(exc.value)
 
 
-def test_missing_project_raises():
+def test_missing_project_uses_client_name_placeholder():
     spec = _spec()
     del spec["metadata"]["project"]
-    with pytest.raises(gd.SpecError):
-        gd.build_document(spec)
+    xml = gd.render_xml(gd.build_document(spec))
+    assert "To be filled" in xml

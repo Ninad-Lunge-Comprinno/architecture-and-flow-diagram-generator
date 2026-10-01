@@ -124,6 +124,16 @@ def test_flow_page_edges_get_connection_points():
         # Edges have connection points and 4px stroke
         assert "exitX=" in style and "entryX=" in style
         assert "strokeWidth=4" in style
+        assert "labelBackgroundColor=#FFFFFF" in style
+        assert "spacing=5" in style
+
+
+def test_edge_labels_wrap_and_escape_markup():
+    diagram = gd.Diagram("Edge labels", "edge-labels")
+    diagram.add_edge("a", "b", "send a very long <request> to the playback service")
+    edge = diagram.cells[-1]
+    assert "<br>" in edge.value
+    assert "&lt;request&gt;" in edge.value
 
 
 def test_flow_page_nodes_wrap_labels():

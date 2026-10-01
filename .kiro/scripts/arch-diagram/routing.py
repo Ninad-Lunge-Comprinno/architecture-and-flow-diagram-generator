@@ -176,6 +176,19 @@ def _segments_overlap(a1, a2, b1, b2) -> bool:
     return False
 
 
+def _segments_cross(a1, a2, b1, b2) -> bool:
+    """True if two orthogonal segments cross away from their endpoints."""
+    a_horizontal = abs(a1[1] - a2[1]) < 1e-6
+    b_horizontal = abs(b1[1] - b2[1]) < 1e-6
+    if a_horizontal == b_horizontal:
+        return False
+    h1, h2, v1, v2 = ((a1, a2, b1, b2) if a_horizontal
+                      else (b1, b2, a1, a2))
+    x, y = v1[0], h1[1]
+    return (min(h1[0], h2[0]) + 1 < x < max(h1[0], h2[0]) - 1
+            and min(v1[1], v2[1]) + 1 < y < max(v1[1], v2[1]) - 1)
+
+
 # ---------------------------------------------------------------------------
 # Stage 3: obstacle-aware orthogonal routing (Lee / BFS on a coarse grid)
 # ---------------------------------------------------------------------------
@@ -215,7 +228,8 @@ class Router:
     def _free(self, r: int, c: int) -> bool:
         return 0 <= r < self.rows and 0 <= c < self.cols and not self.blocked[r][c]
 
-    def route(self, start, goal, start_dir=None, soft=None) -> Optional[list]:
+    def route(self, start, goal, start_dir=None, soft=None,
+              soft_penalty: int = 4, avoid_soft: bool = False) -> Optional[list]:
         """BFS with a turn penalty → orthogonal path minimising length+turns.
 
         start/goal are absolute (x, y). Returns a simplified list of waypoints
@@ -252,8 +266,10 @@ class Router:
                     nr, nc = r + dr, c + dc
                     if not self._free(nr, nc):
                         continue
+                    if avoid_soft and (nr, nc) in soft:
+                        continue
                     turn = 2 if (d != 0 and d != nd) else 0
-                    penalty = 4 if (nr, nc) in soft else 0
+                    penalty = soft_penalty if (nr, nc) in soft else 0
                     heapq.heappush(pq, (cost + 1 + turn + penalty, nr, nc, nd,
                                         path + [(nr, nc)]))
             return None
@@ -321,7 +337,9 @@ def find_conflicts(routes: dict, icon_boxes: dict, tol: float = 2.0) -> list:
             hit = False
             for x in range(len(pa) - 1):
                 for y in range(len(pb) - 1):
-                    if _segments_overlap(pa[x], pa[x + 1], pb[y], pb[y + 1]):
+                    if (_segments_overlap(pa[x], pa[x + 1], pb[y], pb[y + 1])
+                            or _segments_cross(pa[x], pa[x + 1],
+                                               pb[y], pb[y + 1])):
                         hit = True
                         break
                 if hit:
@@ -541,8 +559,9 @@ def _border_point(box, toward):
     cx, cy = x + w / 2, y + h / 2
     tx, ty = toward
     dx, dy = tx - cx, ty - cy
-    # Choose the dominant axis to pick a side (keeps connections orthogonal).
-    if abs(dx) >= abs(dy):
+    # Prefer side ports for left-to-right flows even when the row offset is
+    # slightly larger; bottom ports pass through the label band below icons.
+    if abs(dx) >= abs(dy) * 0.5:
         if dx >= 0:   # exit right
             return (x + w, cy), (1.0, 0.5)
         else:          # exit left
@@ -599,6 +618,7 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
     for _ in range(max_iters):
         router = Router(_obstacles(), bounds, clearance=clearance)
         routes, endpoints = {}, {}
+        unrouted = []
         # Track how many edges already exit/enter a given (node, side) so we can
         # fan them out along that border and avoid shared/overlapping segments.
         exit_count: dict = {}
@@ -615,21 +635,35 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
             # Fan out multiple edges sharing the same source/target border.
             start, exit_xy = _fan_out(sb, start, exit_xy, s, exit_count)
             goal, entry_xy = _fan_out(tb, goal, entry_xy, t, exit_count)
-            path = router.route(start, goal, soft=used_cells)
+            # Begin outside the padded endpoint boxes. Starting on the icon
+            # border can leave the first grid cells blocked and trigger a
+            # fallback line straight through a neighboring icon.
+            stub = clearance + 2 * GRID
+            start_stub = _outside_port(start, exit_xy, stub)
+            goal_stub = _outside_port(goal, entry_xy, stub)
+            path = router.route(start_stub, goal_stub, soft=used_cells)
             if path is None:
                 # Relax: retry on a router with reduced clearance so a congested
                 # net can still find an orthogonal detour before giving up.
                 for relaxed in (max(0, clearance - GRID), 0):
                     relaxed_router = Router(_obstacles(), bounds, clearance=relaxed)
-                    path = relaxed_router.route(start, goal, soft=used_cells)
+                    relaxed_stub = relaxed + 2 * GRID
+                    start_stub = _outside_port(start, exit_xy, relaxed_stub)
+                    goal_stub = _outside_port(goal, entry_xy, relaxed_stub)
+                    path = relaxed_router.route(start_stub, goal_stub, soft=used_cells)
                     if path is not None:
                         break
             if path is None:
-                path = [start, (goal[0], start[1]), goal]
+                routes[ek] = []
+                endpoints[ek] = (exit_xy, entry_xy)
+                unrouted.append(ek)
+                continue
+            path = [start, start_stub, *path[1:-1], goal_stub, goal]
             routes[ek] = path
             endpoints[ek] = (exit_xy, entry_xy)
-            used_cells |= router.cells_for(path)
+            used_cells |= router.cells_for(path[1:-1])
         conflicts = find_conflicts(routes, icon_boxes)
+        conflicts.extend(("edge_unrouted", edge, None) for edge in unrouted)
         if best_conflicts is None or len(conflicts) < len(best_conflicts):
             best_routes, best_endpoints, best_conflicts = routes, endpoints, conflicts
         if not conflicts:
@@ -637,6 +671,19 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
         clearance += GRID  # widen clearance and retry
 
     return best_routes, best_endpoints, best_conflicts or []
+
+
+def _outside_port(point, xy_frac, distance):
+    """Move an endpoint straight out from its selected box side."""
+    x, y = point
+    fx, fy = xy_frac
+    if fx == 0.0:
+        return x - distance, y
+    if fx == 1.0:
+        return x + distance, y
+    if fy == 0.0:
+        return x, y - distance
+    return x, y + distance
 
 
 def _fan_out(box, point, xy_frac, node_id, counter):
@@ -663,4 +710,3 @@ def _fan_out(box, point, xy_frac, node_id, counter):
         new_frac = (fx, round((ny - y) / h, 2))
         return (px, ny), new_frac
     return point, xy_frac
-

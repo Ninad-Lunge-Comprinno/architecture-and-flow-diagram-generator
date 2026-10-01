@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 from pathlib import Path
+import textwrap
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -45,7 +47,9 @@ PAGE_ATTRS = {
 }
 
 ICON_SIZE = 120
-EDGE_STYLE = ("edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;""strokeWidth=4;fontStyle=1;fontSize=11;fontColor=#000000;")
+EDGE_STYLE = ("edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
+              "strokeWidth=4;fontStyle=0;fontSize=14;fontColor=#232F3E;"
+              "labelBackgroundColor=#FFFFFF;spacing=5;whiteSpace=wrap;")
 
 
 # --------------------------------------------------------------------------
@@ -70,6 +74,8 @@ class Cell:
     source: Optional[str] = None
     target: Optional[str] = None
     waypoints: list[tuple[float, float]] = field(default_factory=list)
+    # Shift of the edge label away from draw.io's default path midpoint
+    label_offset: Optional[tuple[float, float]] = None
 
 
 def _label_html(text: str, font_size: int = 18, bold: bool = True) -> str:
@@ -85,17 +91,26 @@ def _label_html(text: str, font_size: int = 18, bold: bool = True) -> str:
     return f'<font style="font-size: {font_size}px;">{inner}</font>'
 
 
+def _edge_label_html(text: str, width: int = 22) -> str:
+    """Wrap edge labels into short, readable lines with a plain-text backing."""
+    lines = textwrap.wrap(text, width=width, break_long_words=True,
+                          break_on_hyphens=False) or [""]
+    return '<div style="text-align:center;line-height:1.2;">' + "<br>".join(
+        html.escape(line) for line in lines
+    ) + "</div>"
+
+
 def title_block_value(meta: dict) -> str:
     """Build the standardized title-block HTML (raw HTML; escaped once by ET)."""
-    project = str(meta.get("project", "Architecture Diagram"))
-    lines = [f'<h1 style="text-align:left"><b style="font-size:32px;">{project}</b></h1>']
+    client_name = meta.get("client_name") or meta.get("project") or "To be filled"
+    lines = [
+        '<h1 style="text-align:left"><b style="font-size:32px;">'
+        f'{client_name}</b></h1>'
+    ]
     for field_name in ("version", "date", "creator", "reviewer"):
-        val = meta.get(field_name)
-        if val:
-            label = field_name.capitalize()
-            lines.append(
-                f'<div style="text-align:left;font-size:20px;">{label}: {val}</div>'
-            )
+        val = meta.get(field_name) or "To be filled"
+        label = field_name.capitalize()
+        lines.append(f'<div style="text-align:left;font-size:20px;">{label}: {val}</div>')
     return "".join(lines)
 
 
@@ -247,6 +262,7 @@ class Diagram:
         waypoints: Optional[list[tuple[float, float]]] = None,
         exit_xy: Optional[tuple[float, float]] = None,
         entry_xy: Optional[tuple[float, float]] = None,
+        label_offset: Optional[tuple[float, float]] = None,
     ) -> str:
         cid = self._next_id("e")
         full_style = style or EDGE_STYLE
@@ -259,12 +275,13 @@ class Diagram:
         cell = Cell(
             id=cid,
             parent=parent,
-            value=label if label else "",
+            value=_edge_label_html(label) if label else "",
             style=full_style,
             edge=True,
             source=source,
             target=target,
             waypoints=waypoints or [],
+            label_offset=label_offset,
         )
         self.cells.append(cell)
         return cid
@@ -372,6 +389,12 @@ class Diagram:
                 arr = ET.SubElement(geo, "Array", {"as": "points"})
                 for wx, wy in cell.waypoints:
                     ET.SubElement(arr, "mxPoint", {"x": _num(wx), "y": _num(wy)})
+            if cell.label_offset:
+                ET.SubElement(geo, "mxPoint", {
+                    "x": _num(cell.label_offset[0]),
+                    "y": _num(cell.label_offset[1]),
+                    "as": "offset",
+                })
 
 
 def _num(value: Optional[float]) -> str:
@@ -662,6 +685,99 @@ def _check_edges(edges: list[dict], ids: set[str], page_name: str) -> None:
                 )
 
 
+def _architecture_connectivity_warnings(page: dict) -> list[str]:
+    """Flag common missing paths and AZ-specific targets on shared ingress."""
+    elements = _collect_arch_ids(page)
+    pairs = {(edge.get("source"), edge.get("target"))
+             for edge in (page.get("edges", []) or [])}
+    warnings: list[str] = []
+
+    def ids_for(service: str) -> list[str]:
+        return [node_id for node_id, node in elements if node.get("service") == service]
+
+    actors = [node_id for node_id, node in elements
+              if node.get("service") in {"user", "users", "mobile_client", "iot_device"}]
+    cdns = ids_for("cloudfront")
+    wafs = ids_for("waf")
+    shields = ids_for("shield")
+    igws = ids_for("internet_gateway")
+    albs = [node_id for node_id, node in elements
+            if node.get("service") in {"application_load_balancer", "network_load_balancer"}]
+
+    adjacency: dict[str, set[str]] = {}
+    for source, target in pairs:
+        adjacency.setdefault(source, set()).add(target)
+
+    def has_path(source: str, target: str) -> bool:
+        pending, visited = [source], set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current in visited:
+                continue
+            visited.add(current)
+            pending.extend(adjacency.get(current, set()) - visited)
+        return False
+
+    public_entry_services = {
+        "cloudfront", "route_53", "api_gateway", "shield", "waf",
+        "application_load_balancer", "network_load_balancer",
+    }
+    public_entries = [node_id for node_id, node in elements
+                      if node.get("service") in public_entry_services]
+    if actors and public_entries:
+        for actor in actors:
+            if not any(has_path(actor, entry) for entry in public_entries):
+                warnings.append(
+                    f"External actor {actor!r} has no path to a public entry service."
+                )
+    elif actors and (wafs or shields or albs):
+        for actor in actors:
+            if not any(has_path(actor, target) for target in (shields or wafs or albs)):
+                warnings.append(
+                    f"External actor {actor!r} has no edge to the ingress path."
+                )
+
+    origins = [node_id for node_id, node in elements
+               if "origin" in f"{node_id} {node.get('label', '')}".lower()]
+    for cdn in cdns:
+        if origins and not any((cdn, origin) in pairs for origin in origins):
+            warnings.append(
+                f"CloudFront {cdn!r} has no edge to a named origin."
+            )
+
+    if wafs and igws and albs:
+        if (wafs[0], igws[0]) not in pairs:
+            warnings.append("Ingress path is missing the WAF → Internet Gateway connection.")
+        if (igws[0], albs[0]) not in pairs:
+            warnings.append("Ingress path is missing the Internet Gateway → load balancer connection.")
+
+    vpc = (page.get("region", {}) or {}).get("vpc", {}) or {}
+    groups = vpc.get("compute_groups", []) or []
+    for group in groups:
+        group_id = group.get("id")
+        if not group_id or group.get("kind") not in {"ecs_cluster", "eks_cluster"}:
+            continue
+        az_children = {f"{group_id}-{az.get('id')}"
+                       for az in (vpc.get("azs", []) or []) if az.get("id")}
+        for alb in albs:
+            for target in az_children:
+                if (alb, target) in pairs:
+                    explicit_az_route = any(
+                        edge.get("source") == alb and edge.get("target") == target
+                        and edge.get("az_specific") is True
+                        for edge in (page.get("edges", []) or [])
+                    )
+                    if explicit_az_route:
+                        continue
+                    warnings.append(
+                        f"Load balancer {alb!r} targets AZ task {target!r}; "
+                        f"use shared cluster {group_id!r} unless the route is AZ-specific."
+                    )
+    return warnings
+
+
 def _edge_style(edge: dict) -> str:
     style = EDGE_STYLE
     if edge.get("dashed"):
@@ -824,6 +940,751 @@ def _route_edge(src_box, tgt_box, label_band: float = 50.0,
     else:
         waypoints = []
     return exit_xy, entry_xy, _dedup(waypoints)
+
+
+def _route_flow_edge(src_box, tgt_box):
+    """Choose directional anchors; Draw.io supplies the orthogonal path."""
+    sx, sy, sw, sh = src_box
+    tx, ty, tw, th = tgt_box
+    source_cy = sy + sh / 2
+    target_cy = ty + th / 2
+    source_cx = sx + sw / 2
+    target_cx = tx + tw / 2
+    dx = target_cx - source_cx
+    dy = target_cy - source_cy
+    source_fraction = max(0.15, min(0.85, 0.5 + dy / 400))
+    target_fraction = max(0.15, min(0.85, 0.5 - dy / 400))
+    if abs(dx) >= abs(dy):
+        exit_xy, entry_xy = ((1.0, source_fraction), (0.0, target_fraction)) if dx >= 0 else ((0.0, source_fraction), (1.0, target_fraction))
+    else:
+        source_fraction = max(0.15, min(0.85, 0.5 + dx / 400))
+        target_fraction = max(0.15, min(0.85, 0.5 - dx / 400))
+        exit_xy, entry_xy = ((source_fraction, 1.0), (target_fraction, 0.0)) if dy >= 0 else ((source_fraction, 0.0), (target_fraction, 1.0))
+    return exit_xy, entry_xy, []
+
+
+# ---------------------------------------------------------------------------
+# Flow edge routing
+# ---------------------------------------------------------------------------
+# A flow page reads left to right, so a well-formed flow is mostly straight
+# runs joined by a single bend. The router below keeps that property: a span
+# whose two ends line up stays one segment, and every other edge takes a
+# channel from the gutter it has to cross. Channels are tried from the gutter
+# centre outwards, and one already claimed by another edge is only reused when
+# the clean ones run out, so parallel arrows run side by side instead of
+# stacking on top of each other.
+FLOW_CHANNEL_STEP = 20.0   # pitch between parallel channels inside a gutter
+FLOW_MIN_CHANNEL = 16.0    # keep channels this far clear of any box border
+FLOW_PORT_MARGIN = 0.06    # keep ports inside this fraction of a box side
+# Ports are allocated in 0..1 border fractions, so spacing is expressed in
+# fractions too. 0.25 is one anchor step on the icon's declared connection
+# points, which is what keeps two arrows off the same attachment point.
+FLOW_PORT_STEP = 0.25
+# Edge labels are drawn by draw.io at the path midpoint, so two arrows whose
+# midpoints land in the same spot print their text on top of each other. The
+# router shifts a label along its own segment instead, which keeps it on the
+# line it belongs to.
+FLOW_LABEL_FONT = 14.0
+FLOW_LABEL_PAD = 10.0
+FLOW_LABEL_LINE = 17.0
+FLOW_LABEL_SLIDES = (0.0, 34.0, -34.0, 68.0, -68.0, 102.0, -102.0)
+
+
+def _flow_label_size(label: str) -> tuple[float, float]:
+    """Approximate the drawn size of a wrapped edge label.
+
+    Mirrors :func:`_edge_label_html` so the estimate matches what draw.io wraps.
+    """
+    lines = textwrap.wrap(label, width=22, break_long_words=True,
+                          break_on_hyphens=False) or [""]
+    widest = max(len(line) for line in lines)
+    return (widest * FLOW_LABEL_FONT * 0.55 + FLOW_LABEL_PAD,
+            len(lines) * FLOW_LABEL_LINE + 8.0)
+
+
+def _flow_path_length(path: list) -> float:
+    return sum(abs(b[0] - a[0]) + abs(b[1] - a[1])
+               for a, b in zip(path, path[1:]))
+
+
+def _flow_point_at(path: list, distance: float) -> tuple:
+    """Point ``distance`` arc-lengths along ``path``."""
+    remaining = distance
+    for a, b in zip(path, path[1:]):
+        step = abs(b[0] - a[0]) + abs(b[1] - a[1])
+        if step <= 0:
+            continue
+        if remaining <= step:
+            ratio = remaining / step
+            return (a[0] + (b[0] - a[0]) * ratio,
+                    a[1] + (b[1] - a[1]) * ratio)
+        remaining -= step
+    return path[-1]
+
+
+def _flow_rects_overlap(a: tuple, b: tuple, gap: float = 0.0) -> bool:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return (ax < bx + bw + gap and bx < ax + aw + gap
+            and ay < by + bh + gap and by < ay + ah + gap)
+
+
+def _flow_label_offsets(edges, boxes, paths) -> dict:
+    """Pick a per-edge label nudge that keeps label boxes clear of each other.
+
+    draw.io centres an edge label on the path midpoint, so two arrows that
+    share a midpoint region print their text on top of one another. Each label
+    slides along its own segment — which keeps it on its own line — until its
+    box clears every label already placed and every icon.
+    """
+    obstacles: list = [tuple(box) for box in boxes.values()]
+    offsets: dict = {}
+    for index, edge in enumerate(edges):
+        path = paths[index]
+        if path is None or not edge.get("label"):
+            continue
+        width, height = _flow_label_size(edge["label"])
+        half = width / 2
+        length = _flow_path_length(path)
+        if length <= 0:
+            continue
+        middle = length / 2
+        centre = _flow_point_at(path, middle)
+        chosen = None
+        for slide in FLOW_LABEL_SLIDES:
+            distance = min(max(middle + slide, 0.0), length)
+            spot = _flow_point_at(path, distance)
+            delta = (spot[0] - centre[0], spot[1] - centre[1])
+            box = (spot[0] - half, spot[1] - height / 2, width, height)
+            if any(_flow_rects_overlap(box, other) for other in obstacles):
+                continue
+            chosen = delta
+            break
+        if chosen is None:
+            chosen = (0.0, 0.0)
+            spot = centre
+        else:
+            spot = (centre[0] + chosen[0], centre[1] + chosen[1])
+        offsets[index] = chosen
+        obstacles.append((spot[0] - half, spot[1] - height / 2, width, height))
+    return offsets
+FLOW_BEND_COST = 260.0     # cost of an extra bend, in pixels of length
+FLOW_CHANNEL_COST = 150.0  # cost of reusing a channel another edge already took
+# An arrow drawn through an icon is worse than two arrows meeting at a point, so
+# it outweighs several crossings and is never traded away for them.
+FLOW_ICON_COST = 60000.0
+FLOW_CROSS_COST = 6000.0   # cost of crossing or overlapping another arrow
+FLOW_DETOUR_OFFSETS = (44.0, 74.0, 104.0)  # heights tried for a blocked span
+FLOW_BAND_REACH = 260.0    # how far a blocked span may look for a clear row
+# Free vertical band the flow layout leaves between stacked rows, on top of a
+# node's label. It has to exceed the padded routing obstacle on both sides or
+# a vertical run has nowhere to cross.
+FLOW_ROW_GUTTER = 110.0
+
+
+def _flow_obstacle(box) -> tuple:
+    """Routing obstacle for a flow node: the icon plus its label band, padded."""
+    x, y, w, h = box
+    return (x - 10, y - 10, w + 20, h + layout.LABEL_BAND + 20)
+
+
+def _flow_center(box) -> tuple:
+    x, y, w, h = box
+    return (x + w / 2, y + h / 2)
+
+
+def _flow_side_span(box, side: str) -> tuple:
+    """The (lo, hi) range a port can slide along on one side of a box."""
+    x, y, w, h = box
+    return (y, y + h) if side in ("left", "right") else (x, x + w)
+
+
+# The AWS resourceIcon stencil declares its legal connection points on
+# ``points=`` in the style string. Landing an arrow anywhere else makes draw.io
+# push the exit off the shape's outline, so ports are snapped to these anchors.
+# A side has 5 of them: the two corners, the centre, and two quarter points.
+FLOW_PORT_ANCHORS = (0.0, 0.25, 0.5, 0.75, 1.0)
+# The two end anchors are the icon's corners, and a corner belongs to two sides
+# at once — an arrow leaving the right side there would sit on the same pixel
+# as one leaving the bottom side. Ports are therefore allocated from the three
+# interior anchors only, which no other side can reach.
+FLOW_PORT_CHOICES = (0.25, 0.5, 0.75)
+
+
+def _flow_snap(value: float) -> float:
+    """Snap a 0..1 border position to the nearest declared connection point."""
+    return min(FLOW_PORT_ANCHORS, key=lambda anchor: (abs(anchor - value), anchor))
+
+
+def _flow_port_point(box, side: str, along: float) -> tuple:
+    """Absolute point on ``box``'s border at ``along`` on the given side."""
+    x, y, w, h = box
+    if side == "right":
+        return (x + w, along)
+    if side == "left":
+        return (x, along)
+    if side == "bottom":
+        return (along, y + h)
+    return (along, y)
+
+
+def _flow_port_fraction(box, side: str, along: float) -> tuple:
+    """draw.io exit/entry fractions for a point on a box border.
+
+    The cross-axis fraction is snapped to a declared connection point so the
+    arrow attaches to the icon's outline instead of being pulled off it.
+    """
+    x, y, w, h = box
+    if side in ("left", "right"):
+        return ((1.0 if side == "right" else 0.0),
+                _flow_snap((along - y) / h))
+    return (_flow_snap((along - x) / w), (1.0 if side == "bottom" else 0.0))
+
+
+def _flow_simplify(points: list) -> list:
+    """Drop duplicate and colinear waypoints so a path shows only real bends."""
+    result: list = []
+    for point in points:
+        if result and abs(point[0] - result[-1][0]) < 0.01 \
+                and abs(point[1] - result[-1][1]) < 0.01:
+            continue
+        result.append(point)
+    index = 1
+    while index < len(result) - 1:
+        a, b, c = result[index - 1], result[index], result[index + 1]
+        if (abs(a[0] - b[0]) < 0.01 and abs(b[0] - c[0]) < 0.01) or \
+           (abs(a[1] - b[1]) < 0.01 and abs(b[1] - c[1]) < 0.01):
+            del result[index]
+            continue
+        index += 1
+    return result
+
+
+def _flow_channels(band: tuple, used: set,
+                   step: float = FLOW_CHANNEL_STEP) -> list:
+    """Candidate offsets inside a gutter band, centre-out and reuse-last.
+
+    A band is the free stretch of a gutter between the icon an edge leaves and
+    the icon it enters, so a channel picked from it always clears both ends.
+    """
+    lo, hi = band
+    if hi <= lo:
+        return [round(lo, 1)]
+    values = [lo + index * step for index in range(int((hi - lo) / step) + 1)]
+    if hi - values[-1] > step * 0.4:
+        values.append(hi)
+    mid = (lo + hi) / 2
+    return sorted({round(value, 1) for value in values},
+                  key=lambda value: (value in used, abs(value - mid), value))
+
+
+def _flow_shape(index, edges, boxes, forced: Optional[str] = None) -> str:
+    """Pick the routing shape for one edge: ``"h"`` for a side-to-side run,
+    ``"v"`` for a top-to-bottom one.
+
+    The house bias prefers ``"h"`` for left-to-right flows so the main lane of
+    the page stays one straight horizontal run. ``forced`` overrides that, which
+    the rework loop uses to flip an edge whose preferred shape has nowhere to
+    cross.
+
+    Threshold: prefer "h" only when the horizontal distance clearly dominates
+    (dx >= dy), so diagonally-placed icons (e.g. client above-left of cognito)
+    get a "v" routing that exits top/bottom rather than side-to-side.
+    """
+    if forced:
+        return forced
+    scx, scy = _flow_center(boxes[edges[index]["source"]])
+    tcx, tcy = _flow_center(boxes[edges[index]["target"]])
+    dx, dy = tcx - scx, tcy - scy
+    if abs(dx) < 1:
+        return "v"
+    if abs(dy) < 1:
+        return "h"
+    return "h" if abs(dx) >= abs(dy) else "v"
+
+
+def _flow_sides(shape: str, dx: float, dy: float) -> tuple:
+    """Source and target sides for a shape, facing each other."""
+    if shape == "h":
+        return ("right", "left") if dx >= 0 else ("left", "right")
+    return ("bottom", "top") if dy >= 0 else ("top", "bottom")
+
+
+def _flow_side_size(box, side: str) -> float:
+    return _flow_side_span(box, side)[1] - _flow_side_span(box, side)[0]
+
+
+def _flow_place_ports(desired: list, lo: float, hi: float, step: float,
+                      pinned: list) -> dict:
+    """Place ports along one box side, keeping room between them.
+
+    ``pinned`` lists the positions that must keep their exact coordinate — an
+    end that sits directly opposite its partner needs it to stay a straight
+    arrow. Everything else takes the nearest free spot, so a fan-out opens up
+    without pushing a straight run out of line.
+
+    Results are snapped to the icon's declared connection points, so two arrows
+    that land close together still leave from two distinct anchors.
+    """
+    def to_fraction(value: float) -> float:
+        return _flow_snap((min(hi, max(lo, value)) - lo) / (hi - lo)
+                           if hi > lo else 0.5)
+
+    placed: dict = {}
+    taken: list = []
+    for index in pinned:
+        value = to_fraction(desired[index])
+        # Two ends can both be pinned to the same spot when several partners
+        # line up. Only the first keeps it; the rest step aside, otherwise both
+        # arrows leave from one connection point.
+        if any(abs(value - other) < step for other in taken):
+            value = next((anchor for anchor in FLOW_PORT_CHOICES
+                          if all(abs(anchor - other) >= step
+                                 for other in taken)), value)
+        placed[index] = value
+        taken.append(value)
+    for index in sorted(set(range(len(desired))) - set(pinned)):
+        # Prefer the anchor nearest the wanted spot, otherwise the first free
+        # anchor scanning outwards, so a fan-out spreads while a lone arrow
+        # still points straight at its partner.
+        wanted = to_fraction(desired[index])
+        candidates = sorted(FLOW_PORT_CHOICES,
+                            key=lambda anchor: (abs(anchor - wanted), anchor))
+        free = [anchor for anchor in candidates
+                if all(abs(anchor - other) >= step for other in taken)]
+        if not free:
+            continue
+        placed[index] = free[0]
+        taken.append(free[0])
+    if len(placed) < len(desired):
+        # More arrows than anchors on this side: share anchors evenly rather
+        # than dropping arrows off the icon altogether.
+        slots = sorted(range(len(desired)), key=lambda i: (desired[i], i))
+        count = len(slots)
+        for position, index in enumerate(slots):
+            placed[index] = FLOW_PORT_CHOICES[
+                min(len(FLOW_PORT_CHOICES) - 1,
+                    position * len(FLOW_PORT_CHOICES) // max(1, count))]
+    return placed
+
+
+def _plan_flow_ports(edges, boxes, order, shapes) -> dict:
+    """Choose a side, and a position on that side, for both ends of every edge.
+
+    Ports are allocated per (node, side) so several arrows leaving the same
+    border fan out instead of stacking, while an end whose partner sits
+    directly opposite stays pinned and keeps a single straight segment.
+    """
+    slots: dict = {}
+    for index in order:
+        edge = edges[index]
+        s, t = edge.get("source"), edge.get("target")
+        if s not in boxes or t not in boxes:
+            continue
+        sb, tb = boxes[s], boxes[t]
+        scx, scy = _flow_center(sb)
+        tcx, tcy = _flow_center(tb)
+        shape = shapes[index]
+        s_side, t_side = _flow_sides(shape, tcx - scx, tcy - scy)
+        if shape == "h":
+            wants, cross = (tcy, scy), abs(tcy - scy)
+        else:
+            wants, cross = (tcx, scx), abs(tcx - scx)
+        for which, node_id, side, want in (
+                ("source", s, s_side, wants[0]),
+                ("target", t, t_side, wants[1])):
+            slots.setdefault((node_id, side), []).append(
+                (index, which, want, cross < 1))
+    plan: dict = {}
+    for (node_id, side), keys in slots.items():
+        box = boxes[node_id]
+        span = _flow_side_span(box, side)
+        size = span[1] - span[0]
+        lo, hi = span[0] + size * FLOW_PORT_MARGIN, \
+            span[1] - size * FLOW_PORT_MARGIN
+        desired = [want for _, _, want, _ in keys]
+        pinned = [position for position, key in enumerate(keys) if key[3]]
+        fractions = _flow_place_ports(desired, lo, hi, FLOW_PORT_STEP, pinned)
+        for position, key in enumerate(keys):
+            plan[(key[0], key[1])] = (side, lo + (hi - lo) * fractions[position])
+    return plan
+
+
+def _flow_options(index, edges, boxes, plan, rects, used_channels):
+    """Candidate ``(channel, points)`` routes for one edge.
+
+    An aligned pair gets a single segment plus a few over/under detours. Any
+    other pair gets a one-bend route through a channel taken from the gutter it
+    has to cross, ordered from the gutter centre outwards. When that channel
+    would have to cross another arrow, a two-bend variant steps sideways into
+    the gutter of a neighbouring row first, so the edge goes around the
+    crossing instead of through it.
+    """
+    edge = edges[index]
+    s, t = edge["source"], edge["target"]
+    sb, tb = boxes[s], boxes[t]
+    s_side, s_along = plan[(index, "source")]
+    t_side, t_along = plan[(index, "target")]
+    # Snap s_along / t_along to the nearest declared connection-point anchor
+    # on their respective box side.  _flow_port_fraction does the same snap
+    # when computing exit/entry fractions, so the path endpoint and the
+    # draw.io connection-point fraction always agree — eliminating the
+    # sub-pixel y-mismatch that caused diagonal attachment at icon borders.
+    def _snap_along(box, side, along):
+        span = _flow_side_span(box, side)
+        lo_s, hi_s = span
+        size = hi_s - lo_s
+        if size <= 0:
+            return along
+        frac = _flow_snap((along - lo_s) / size)
+        return lo_s + frac * size
+
+    s_along = _snap_along(sb, s_side, s_along)
+    t_along = _snap_along(tb, t_side, t_along)
+    start = _flow_port_point(sb, s_side, s_along)
+    goal = _flow_port_point(tb, t_side, t_along)
+    so, to = rects[s], rects[t]
+    found: list = []
+    if s_side in ("left", "right"):
+        if start[0] <= goal[0]:
+            lo, hi = so[0] + so[2] + FLOW_MIN_CHANNEL, to[0] - FLOW_MIN_CHANNEL
+            near, far = so, to
+        else:
+            lo, hi = to[0] + to[2] + FLOW_MIN_CHANNEL, so[0] - FLOW_MIN_CHANNEL
+            near, far = to, so
+        if hi < lo:  # the two icons touch: cross the seam itself
+            lo = hi = (lo + hi) / 2
+        if abs(start[1] - goal[1]) < 0.01:
+            found.append((None, [start, goal]))
+            mid_x = (start[0] + goal[0]) / 2
+            for offset in FLOW_DETOUR_OFFSETS:
+                for level in (start[1] - offset, start[1] + offset):
+                    found.append((None, [start, (mid_x, start[1]), (mid_x, level),
+                                         (goal[0], level), goal]))
+            # A node sitting between two aligned ends blocks the straight shot
+            # for good. Step out into a free column, use a free row band, then
+            # step back in, so the span goes around the blocker.
+            for column in _flow_columns(rects, start[0], goal[0], used_channels):
+                for level in _flow_bands(rects, start[1], used_channels):
+                    found.append((("y", level),
+                                  [start, (column, start[1]), (column, level),
+                                   (goal[0], level), goal]))
+        else:
+            channels = _flow_channels((lo, hi), used_channels)
+            for value in channels:
+                found.append((("x", value),
+                              [start, (value, start[1]), (value, goal[1]), goal]))
+            # Escape routes: leave the gutter sideways at once, run along a
+            # free row band, then come back in. Two extra bends, but they pass
+            # arrows that a straight channel would have to cross.
+            for level in _flow_rows(rects, min(start[1], goal[1]),
+                                    max(start[1], goal[1]), used_channels):
+                found.append((("y", level),
+                              [start, (start[0], level), (goal[0], level), goal]))
+    else:
+        if start[1] <= goal[1]:
+            lo, hi = so[1] + so[3] + FLOW_MIN_CHANNEL, to[1] - FLOW_MIN_CHANNEL
+        else:
+            lo, hi = to[1] + to[3] + FLOW_MIN_CHANNEL, so[1] - FLOW_MIN_CHANNEL
+        if hi < lo:
+            lo = hi = (lo + hi) / 2
+        if abs(start[0] - goal[0]) < 0.01:
+            found.append((None, [start, goal]))
+            mid_y = (start[1] + goal[1]) / 2
+            for offset in FLOW_DETOUR_OFFSETS:
+                for column in (start[0] - offset, start[0] + offset):
+                    found.append((None, [start, (start[0], mid_y), (column, mid_y),
+                                         (column, goal[1]), goal]))
+        else:
+            channels = _flow_channels((lo, hi), used_channels)
+            for value in channels:
+                found.append((("y", value),
+                              [start, (start[0], value), (goal[0], value), goal]))
+            for column in _flow_columns(rects, min(start[0], goal[0]),
+                                        max(start[0], goal[0]), used_channels):
+                found.append((("x", column),
+                              [start, (column, start[1]), (column, goal[1]), goal]))
+    return found
+
+
+def _flow_rows(rects, lo: float, hi: float, used: set,
+               step: float = FLOW_CHANNEL_STEP) -> list:
+    """Horizontal bands between stacked icons that span the y range ``lo..hi``.
+
+    These are the clear rows an edge can duck into to get around an arrow
+    crossing its gutter.
+    """
+    return _flow_corridors(rects, lo, hi, used, 1, step)
+
+
+def _flow_bands(rects, around: float, used: set,
+                reach: float = FLOW_BAND_REACH,
+                step: float = FLOW_CHANNEL_STEP) -> list:
+    """Free row bands within ``reach`` of ``around``, used to bypass a blocker.
+
+    A straight span with a node in the middle of it has to leave its own row to
+    get past, so the candidate heights come from every clear horizontal band
+    near the row rather than a fixed set of offsets that may all be occupied.
+    """
+    return _flow_corridors(rects, around - reach, around + reach, used, 1, step)
+
+
+def _flow_columns(rects, lo: float, hi: float, used: set,
+                  step: float = FLOW_CHANNEL_STEP) -> list:
+    """Vertical corridors between side-by-side icons spanning ``lo..hi``."""
+    return _flow_corridors(rects, lo, hi, used, 0, step)
+
+
+def _flow_corridors(rects, lo: float, hi: float, used: set, axis: int,
+                    step: float) -> list:
+    """Free offsets along one axis between the icons, for the other axis's
+    detours. ``axis`` 0 is a column corridor (a free x), 1 a row band (a free
+    y). Only offsets that no icon occupies within the span are returned, so a
+    detour never needs to be checked against the source or the target again.
+    """
+    if hi - lo < 1:
+        return []
+    blocked: list = []
+    for rx, ry, rw, rh in rects.values():
+        if axis == 0:
+            blocked.append((rx, rx + rw))
+        else:
+            blocked.append((ry, ry + rh))
+    free: list = []
+    cursor = lo
+    for begin, end in sorted(blocked):
+        if end <= cursor or begin >= hi:
+            continue
+        # An obstacle that starts above the range still blocks from ``cursor``
+        # onwards, so the free gap before it is the one already collected.
+        if begin - FLOW_MIN_CHANNEL >= cursor:
+            free.append((cursor, begin - FLOW_MIN_CHANNEL))
+        cursor = max(cursor, end + FLOW_MIN_CHANNEL)
+    if hi - FLOW_MIN_CHANNEL >= cursor:
+        free.append((cursor, hi - FLOW_MIN_CHANNEL))
+    values: list = []
+    for begin, end in free:
+        if end < begin:
+            continue
+        count = int((end - begin) / step) + 1
+        for index in range(count):
+            values.append(begin + index * step)
+    mid = (lo + hi) / 2
+    return sorted({round(value, 1) for value in values},
+                  key=lambda value: (value in used, abs(value - mid), value))
+
+
+def _flow_crossing_edges(paths, order, clashes) -> set:
+    """Edges taking part in a crossing, keeping the longer one of each pair.
+
+    The longer edge of a pair is the one worth re-planning: it has more room to
+    step aside than the short hop that both arrows want to make.
+    """
+    out: set = set()
+    for a in range(len(order)):
+        for b in range(a + 1, len(order)):
+            if clashes(paths[order[a]], paths[order[b]]):
+                out.add(order[b])
+    return out
+
+
+def _flow_penalty(points, source, target, others, over_icon, clashes) -> float:
+    """Cost of one candidate route: length, bends, and every conflict it makes.
+
+    Routing, the repair pass, and the pass selection all rank candidates with
+    this one function. A single scale is what keeps them from disagreeing — a
+    repair that lowers the total here is never rejected by the outer loop for
+    moving a crossing from one arrow to another.
+    """
+    cost = sum(abs(a[0] - b[0]) + abs(a[1] - b[1])
+               for a, b in zip(points, points[1:]))
+    cost += FLOW_BEND_COST * (len(points) - 2)
+    cost += FLOW_ICON_COST * int(over_icon(points, source, target))
+    cost += FLOW_CROSS_COST * sum(1 for other in others if clashes(points, other))
+    return cost
+
+
+def _flow_conflict_score(paths, usable, edges, over_icon, clashes) -> float:
+    """Total conflict cost of a whole set of routed paths."""
+    routed = [paths[index] for index in usable]
+    total = 0.0
+    for position, index in enumerate(usable):
+        total += FLOW_ICON_COST * int(
+            over_icon(paths[index], edges[index]["source"],
+                      edges[index]["target"]))
+        total += FLOW_CROSS_COST * sum(
+            1 for other in routed[position + 1:] if clashes(paths[index], other))
+    return total
+
+
+def _flow_repair(paths, order, edges, boxes, plan, rects, over_icon, clashes,
+                 rounds: int = 3):
+    """Re-pick the route of every clashing edge against the finished routes.
+
+    Routing one edge at a time lets an early, long edge claim the only clean
+    channel and leave a later one with nothing better than a crossing. Here the
+    paths are already fixed, so each clashing edge is re-evaluated against all
+    the others and only moved when that lowers the conflict cost.
+    """
+    for _ in range(rounds):
+        improved = False
+        for position, index in enumerate(order):
+            s, t = edges[index]["source"], edges[index]["target"]
+            others = [paths[other] for other in order if other != index]
+            if not over_icon(paths[index], s, t) and \
+                    not any(clashes(paths[index], path) for path in others):
+                continue
+            current = _flow_penalty(paths[index], s, t, others,
+                                    over_icon, clashes)
+            best = None
+            for _, points in _flow_options(index, edges, boxes, plan, rects, set()):
+                points = _flow_simplify(points)
+                cost = _flow_penalty(points, s, t, others, over_icon, clashes)
+                if best is None or cost < best[0]:
+                    best = (cost, points)
+            if best is not None and best[0] < current:
+                paths[index] = best[1]
+                improved = True
+        if not improved:
+            break
+    return paths
+
+
+def _route_flow_edges(edges, boxes, max_passes: int = 3):
+    """Route flow edges through the gutters between nodes.
+
+    Each pass picks a routing shape per edge, allocates ports on the borders
+    those shapes need, and then lets every edge choose between the channels of
+    its gutter. A pass that still leaves an edge crossing an icon is retried
+    with that edge's shape flipped, so a target sitting in an occupied column
+    is approached from the side instead. The best pass wins.
+
+    Returns a list aligned with ``edges`` holding
+    ``(exit_xy, entry_xy, waypoints)`` for every edge whose endpoints are
+    placed, or None for an edge that references an unknown node.
+    """
+    import routing as shared_routing
+
+    rects = {node_id: _flow_obstacle(box) for node_id, box in boxes.items()}
+    usable = [index for index, edge in enumerate(edges)
+              if edge.get("source") in boxes and edge.get("target") in boxes]
+
+    def span(index) -> float:
+        scx, scy = _flow_center(boxes[edges[index]["source"]])
+        tcx, tcy = _flow_center(boxes[edges[index]["target"]])
+        return abs(tcx - scx) + abs(tcy - scy)
+
+    def over_icon(points, source, target) -> bool:
+        return any(node_id not in (source, target)
+                   and shared_routing._polyline_hits_rect(points, rect)
+                   for node_id, rect in rects.items())
+
+    def clashes(points, other) -> bool:
+        for a, b in zip(points, points[1:]):
+            for c, d in zip(other, other[1:]):
+                if shared_routing._segments_overlap(a, b, c, d) or \
+                        shared_routing._segments_cross(a, b, c, d):
+                    return True
+        return False
+
+    by_span = sorted(usable, key=lambda i: -span(i))
+    forced: dict = {}
+    best = None
+    for _ in range(max_passes):
+        shapes = {index: _flow_shape(index, edges, boxes, forced.get(index))
+                  for index in usable}
+        plan = _plan_flow_ports(edges, boxes, by_span, shapes)
+
+        def straight(index) -> bool:
+            return abs(plan[(index, "source")][1]
+                       - plan[(index, "target")][1]) < 0.01
+
+        # Straight spans go down first: they are the backbone every detour has
+        # to dodge, so they should not have to move for a longer edge later on.
+        order = sorted(usable, key=lambda i: (0 if straight(i) else 1, -span(i)))
+        used_channels: set = set()
+        routed: list = []
+        paths: dict = {}
+        for index in order:
+            s, t = edges[index]["source"], edges[index]["target"]
+            best_edge = None
+            for channel, points in _flow_options(
+                    index, edges, boxes, plan, rects, used_channels):
+                points = _flow_simplify(points)
+                cost = _flow_penalty(points, s, t, routed, over_icon, clashes)
+                if channel is not None and channel[1] in used_channels:
+                    cost += FLOW_CHANNEL_COST
+                if best_edge is None or cost < best_edge[0]:
+                    best_edge = (cost, channel, points)
+            _, channel, points = best_edge
+            if channel is not None:
+                used_channels.add(channel[1])
+            routed.append(points)
+            paths[index] = points
+
+        # Repair first: it can clear crossings that another pass would only
+        # shuffle around, and it runs against the same cost the passes use.
+        paths = _flow_repair(paths, order, edges, boxes, plan, rects,
+                             over_icon, clashes)
+        score = _flow_conflict_score(paths, usable, edges, over_icon, clashes)
+        if best is None or score < best[0]:
+            best = (score, plan, paths, shapes)
+        if score == 0:
+            break
+        # Edges still in conflict are candidates for a shape flip: an arrow that
+        # has to cross another one on this axis may clear it on the other. Only
+        # the longer edge of a crossing pair is flipped, so short backbone runs
+        # stay put.
+        blocked = {index for index in usable
+                   if over_icon(paths[index], edges[index]["source"],
+                                edges[index]["target"])}
+        stuck = set(blocked) | _flow_crossing_edges(paths, order, clashes)
+        progressed = False
+        for index in sorted(stuck, key=lambda i: -span(i)):
+            if forced.get(index) != shapes[index]:
+                forced[index] = "v" if shapes[index] == "h" else "h"
+                progressed = True
+        if not progressed:
+            break
+
+    _, plan, paths, _ = best
+    label_offsets = _flow_label_offsets(edges, boxes, paths)
+    result: list = [None] * len(edges)
+    for index in usable:
+        sb, tb = boxes[edges[index]["source"]], boxes[edges[index]["target"]]
+        s_side, s_along = plan[(index, "source")]
+        t_side, t_along = plan[(index, "target")]
+        # Snap to the nearest icon anchor so exit/entry fractions exactly
+        # match the first/last path segment — preventing diagonal attachment.
+        def _snap_along(box, side, along):
+            lo_s, hi_s = _flow_side_span(box, side)
+            size = hi_s - lo_s
+            if size <= 0:
+                return along
+            frac = _flow_snap((along - lo_s) / size)
+            return lo_s + frac * size
+        s_along = _snap_along(sb, s_side, s_along)
+        t_along = _snap_along(tb, t_side, t_along)
+        points = paths[index]
+        result[index] = (_flow_port_fraction(sb, s_side, s_along),
+                         _flow_port_fraction(tb, t_side, t_along),
+                         points[1:-1],
+                         label_offsets.get(index))
+
+    routed = [paths[index] for index in usable]
+    icon_hits = sum(1 for index in usable
+                    if over_icon(paths[index], edges[index]["source"],
+                                 edges[index]["target"]))
+    edge_hits = sum(1 for a in range(len(routed)) for b in range(a + 1, len(routed))
+                    if clashes(routed[a], routed[b]))
+    if icon_hits or edge_hits:
+        print(f"  ⚠  FLOW ROUTING: {len(routed)} edges routed with "
+              f"{icon_hits} icon and {edge_hits} edge crossings",
+              flush=True)
+    else:
+        print(f"  ✓  FLOW ROUTING: {len(routed)} edges routed with no "
+              f"icon/edge conflicts", flush=True)
+    return result
 
 
 def _row_containing(y: float, az_rows: list) -> Optional[tuple]:
@@ -1044,7 +1905,8 @@ def _ensure_aws_foundation_services(page: dict, default_provider: str) -> None:
 
 
 def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
-                            meta: Optional[dict] = None) -> Diagram:
+                            meta: Optional[dict] = None,
+                            strict_connectivity: bool = False) -> Diagram:
     """Build an architecture page from the grid-model spec."""
     layout = _import_layout()
 
@@ -1061,6 +1923,15 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     ids = _check_unique_ids(elements, page.get("name", "architecture"))
     _validate_services(elements, default_provider)
     _check_edges(page.get("edges", []), ids, page.get("name", "architecture"))
+    connectivity_warnings = _architecture_connectivity_warnings(page)
+    for warning in connectivity_warnings:
+        print(f"  ⚠  ARCHITECTURE CHECK: {warning}", flush=True)
+    if strict_connectivity and connectivity_warnings:
+        raise SpecError(
+            "Architecture connectivity checks failed:\n  - "
+            + "\n  - ".join(connectivity_warnings)
+            + "\nResolve or clarify these paths before generating the diagram."
+        )
 
     diagram = Diagram(name=page.get("name", "Architecture Diagram"), diagram_id=diagram_id)
 
@@ -1078,9 +1949,9 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     brand_width = 240.9
     title_x = max(title_node.x if title_node is not None else lo.border_x,
                   brand_x + brand_width + 20)
-    if meta and title_node is not None:
+    if meta is not None and title_node is not None:
         diagram.add_title_block(meta, x=title_x, y=title_node.y)
-    elif meta:
+    elif meta is not None:
         diagram.add_title_block(meta, x=title_x)
 
     # Outer border enclosing the title block AND the cloud.
@@ -1512,64 +2383,201 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     return diagram
 
 
-def _flow_layout(nodes: list[dict], edges: list[dict]) -> dict[str, tuple[float, float]]:
-    """Compute a layered (top-down) layout for flow nodes.
+def _flow_layout(nodes: list[dict], edges: list[dict],
+                 groups: Optional[list[dict]] = None) -> dict[str, tuple[float, float]]:
+    """Lay out a directed flow in left-to-right ranks and scope lanes.
 
-    Nodes with no incoming edges form the first layer (top).
-    Each subsequent layer contains nodes whose predecessors are all placed.
-    Within a layer, nodes are spread horizontally centred on the canvas.
-    If a node has an explicit x/y in its spec dict those override the computed position.
-
-    Returns: {node_id: (x, y)} in absolute page coordinates.
+    Connected peers are ordered to reduce crossings. Non-VPC AWS nodes use the
+    main left-to-right lane; VPC members use a right-hand lane so the VPC frame
+    never encloses unrelated Cloud services. Shared external clients stay on
+    the left even when response edges point back to them; terminal external
+    destinations sit beyond the Cloud boundary.
     """
-    STEP_X = ICON_SIZE + 220   # horizontal spacing
-    STEP_Y = ICON_SIZE + layout.LABEL_BAND + 160   # vertical spacing
-    PAD_X = 60
-    PAD_Y = 60
+    # Keep a readable gutter for labels without stretching simple flows across
+    # the page. Rows must clear a node's whole routing obstacle (icon plus its
+    # wrapped label, padded) with room to spare, otherwise vertically adjacent
+    # icons leave no free band for an edge to cross and every vertical run is
+    # forced through a neighbour.
+    step_x = ICON_SIZE + 160
+    step_y = ICON_SIZE + layout.LABEL_BAND + FLOW_ROW_GUTTER
+    pad_x = pad_y = 100
+    ids = [node["id"] for node in nodes]
+    node_by_id = {node["id"]: node for node in nodes}
+    order = {nid: i for i, nid in enumerate(ids)}
+    incoming = {nid: [] for nid in ids}
+    outgoing = {nid: [] for nid in ids}
+    actor_services = {"user", "users", "mobile_client", "iot_device"}
+    scope = {}
+    for nid, node in node_by_id.items():
+        declared = node.get("scope")
+        if declared is not None and declared not in {"external", "cloud", "vpc"}:
+            raise SpecError(f"Node {nid!r} has invalid flow scope {declared!r}.")
+        scope[nid] = declared or (
+            "external" if node.get("service") in actor_services else "cloud"
+        )
+    vpc_members = {nid for nid, node_scope in scope.items() if node_scope == "vpc"}
+    for group in groups or []:
+        if group.get("kind", "vpc") == "vpc":
+            vpc_members.update(group.get("members", []) or [])
+    for nid in vpc_members:
+        if nid in scope:
+            scope[nid] = "vpc"
 
-    # Build adjacency
-    incoming: dict[str, set] = {n["id"]: set() for n in nodes}
-    for e in edges:
-        if e["target"] in incoming:
-            incoming[e["target"]].add(e["source"])
+    for edge in edges:
+        src, tgt = edge.get("source"), edge.get("target")
+        if src in outgoing and tgt in incoming:
+            outgoing[src].append(tgt)
+            incoming[tgt].append(src)
 
-    # Topological layers
-    placed: set = set()
-    layers: list[list[str]] = []
-    remaining = [n["id"] for n in nodes]
-    while remaining:
-        layer = [nid for nid in remaining if incoming[nid] <= placed]
-        if not layer:
-            # Cycle or disconnected — put remaining in a layer
-            layer = remaining[:]
-        layers.append(layer)
-        for nid in layer:
-            placed.add(nid)
-        remaining = [nid for nid in remaining if nid not in placed]
+    # A client actor can both initiate requests and receive responses/events.
+    # Treat its incoming response edges as feedback for ranking so they do not
+    # turn an otherwise left-to-right flow into a cycle. Keep the full graph
+    # below for branch ordering, placement, and routing.
+    rank_incoming = {nid: [] for nid in ids}
+    rank_outgoing = {nid: [] for nid in ids}
+    for edge in edges:
+        src, tgt = edge.get("source"), edge.get("target")
+        if src not in rank_outgoing or tgt not in rank_incoming:
+            continue
+        if scope[tgt] == "external" and outgoing[tgt]:
+            continue
+        rank_outgoing[src].append(tgt)
+        rank_incoming[tgt].append(src)
 
-    # Compute max layer width for centering
-    max_layer_w = max(len(l) for l in layers) if layers else 1
-    canvas_w = max_layer_w * STEP_X
+    indegree = {nid: len(rank_incoming[nid]) for nid in ids}
+    queue = [nid for nid in ids if indegree[nid] == 0]
+    external_sources = {nid for nid in queue if scope[nid] == "external"}
+    rank = {nid: (1 if external_sources and nid not in external_sources else 0)
+            for nid in queue}
+    placed = []
+    while queue:
+        nid = queue.pop(0)
+        placed.append(nid)
+        for child in rank_outgoing[nid]:
+            rank[child] = max(rank.get(child, 0), rank[nid] + 1)
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
 
+    cyclic = [nid for nid in ids if nid not in placed]
+    if cyclic:
+        final_rank = max((rank[nid] for nid in placed), default=-1) + 1
+        rank.update({nid: final_rank for nid in cyclic})
+
+    layers: dict[int, list[str]] = {}
+    for nid in ids:
+        layers.setdefault(rank.get(nid, 0), []).append(nid)
+    layer_ids = sorted(layers)
+    order_in_layer = {nid: i for layer in layers.values()
+                      for i, nid in enumerate(layer)}
+
+    # Stable barycenter sweeps keep connected branches near each other.
+    for _ in range(4):
+        for layer_index in layer_ids[1:]:
+            layer = layers[layer_index]
+            layer.sort(key=lambda nid: (
+                sum(order_in_layer.get(p, 0) for p in incoming[nid]) /
+                max(1, len(incoming[nid])), order[nid]))
+            order_in_layer.update({nid: i for i, nid in enumerate(layer)})
+        for layer_index in reversed(layer_ids[:-1]):
+            layer = layers[layer_index]
+            layer.sort(key=lambda nid: (
+                sum(order_in_layer.get(c, 0) for c in outgoing[nid]) /
+                max(1, len(outgoing[nid])), order[nid]))
+            order_in_layer.update({nid: i for i, nid in enumerate(layer)})
+
+    # Carry each chain's row through the graph, then pack siblings only when
+    # they share a rank and scope. Cross-scope edges inherit the parent's row,
+    # which keeps a Cloud-to-VPC path aligned instead of stretching it across
+    # a separate vertical band.
+    #
+    # Rows are whole steps apart. Averaging two parents' rows would otherwise
+    # place a node half a step from its neighbour, and half a step is less than
+    # an icon plus its label — the two obstacles then overlap and an edge has
+    # no clear band left to cross between them.
+    row_pos: dict[str, float] = {}
+    for layer_index in layer_ids:
+        layer = layers[layer_index]
+        for node_scope in ("external", "cloud", "vpc"):
+            members = [nid for nid in layer if scope[nid] == node_scope]
+            if not members:
+                continue
+            desired = {}
+            for row, nid in enumerate(members):
+                parents = [p for p in incoming[nid] if p in row_pos]
+                if parents:
+                    parent_row = sum(row_pos[p] for p in parents) / len(parents)
+                    # When a VPC producer has parallel outputs, put its Cloud
+                    # dependency on a neighboring row. This keeps the VPC frame
+                    # external and leaves the main horizontal continuation clear.
+                    vpc_parents = [p for p in parents if scope[p] == "vpc"]
+                    leaves_vpc = node_scope == "cloud" and bool(vpc_parents)
+                    has_sibling_path = any(len(outgoing[p]) > 1 for p in vpc_parents)
+                    if leaves_vpc and has_sibling_path:
+                        desired[nid] = (parent_row - 2 if parent_row >= 2
+                                        else parent_row + 2)
+                    else:
+                        desired[nid] = parent_row
+                else:
+                    desired[nid] = float(row)
+            occupied_rows: list[int] = []
+            for nid in sorted(members, key=lambda item: (desired[item],
+                                                         order_in_layer[item])):
+                target_row = max(0, int(round(desired[nid])))
+                candidates = [target_row]
+                for offset in range(1, len(members) + 2):
+                    candidates.extend((target_row - offset, target_row + offset))
+                row = next(candidate for candidate in sorted(
+                    candidates, key=lambda value: (abs(value - target_row), value)
+                ) if candidate >= 0 and all(
+                    abs(candidate - placed) >= 1 for placed in occupied_rows
+                ))
+                row_pos[nid] = float(row)
+                occupied_rows.append(row)
+
+    cloud_nodes = [nid for nid in ids if scope[nid] == "cloud"]
+    vpc_nodes = [nid for nid in ids if scope[nid] == "vpc"]
+    cloud_max_rank = max((rank[nid] for nid in cloud_nodes), default=0)
+    vpc_min_rank = min((rank[nid] for nid in vpc_nodes), default=0)
+    # Keep the complete VPC frame to the right of non-VPC AWS services. This
+    # preserves scope without reserving a tall, empty band beneath every flow.
+    vpc_rank_offset = max(0, cloud_max_rank + 1 - vpc_min_rank)
     positions: dict[str, tuple[float, float]] = {}
-    y = PAD_Y
-    for layer in layers:
-        layer_w = len(layer) * STEP_X - (STEP_X - ICON_SIZE)
-        x_start = PAD_X + (canvas_w - layer_w) / 2
-        for col_i, nid in enumerate(layer):
-            positions[nid] = (x_start + col_i * STEP_X, y)
-        y += STEP_Y
+    for nid in cloud_nodes:
+        positions[nid] = (pad_x + rank[nid] * step_x,
+                          pad_y + row_pos[nid] * step_y)
+    for nid in vpc_nodes:
+        positions[nid] = (pad_x + (rank[nid] + vpc_rank_offset) * step_x,
+                          pad_y + row_pos[nid] * step_y)
+
+    # Shared client actors remain on the left even when response/event edges
+    # point back to them. Only terminal external destinations sit beyond AWS.
+    external_targets = [nid for nid in ids if scope[nid] == "external"
+                        and incoming[nid] and not outgoing[nid]]
+    internal_right = max((x + ICON_SIZE for nid, (x, _) in positions.items()
+                          if scope[nid] != "external"), default=pad_x + ICON_SIZE)
+    target_x = internal_right + step_x - ICON_SIZE
+    for nid in ids:
+        if scope[nid] != "external":
+            continue
+        # A client that both receives content and sends telemetry belongs
+        # between all adjacent steps, not on top of only its return path.
+        neighbors = incoming[nid] + outgoing[nid]
+        neighbor_ys = [positions[n][1] for n in neighbors if n in positions]
+        y = (sum(neighbor_ys) / len(neighbor_ys)) if neighbor_ys else pad_y
+        x = target_x if nid in external_targets else pad_x
+        positions[nid] = (x, y)
 
     return positions
 
 
 def build_flow_page(page: dict, default_provider: str, diagram_id: str,
                     meta: Optional[dict] = None) -> Diagram:
-    """Build a flow page using a layered top-down layout.
+    """Build a flow page using a layered left-to-right layout.
 
-    Nodes are arranged in topological layers (sources at top, sinks at bottom).
-    An outer border encloses the whole page. Edges use connection-point routing.
-    Spec nodes may override position with explicit 'x' and 'y' fields.
+    Nodes follow topological ranks, with branches stacked in rows and VPC
+    members separated from other AWS services. Spec nodes may override layout
+    positions with explicit 'x' and 'y' fields.
     """
     nodes = page.get("nodes", [])
     if not nodes:
@@ -1588,15 +2596,70 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
 
     diagram = Diagram(name=page.get("name", "Flow Diagram"), diagram_id=diagram_id)
 
-    # Compute layered positions (spec x/y overrides if provided)
-    auto_pos = _flow_layout(nodes, page.get("edges", []))
+    # Compute left-to-right layered positions (spec x/y overrides if provided).
+    auto_pos = _flow_layout(nodes, page.get("edges", []), page.get("groups", []))
+    header_y = 280 if meta is not None else 0
     boxes: dict[str, tuple[float, float, float, float]] = {}
+    frame_boxes: list[tuple[float, float, float, float]] = []
 
     for node in nodes:
         nid = node["id"]
         auto_x, auto_y = auto_pos.get(nid, (40, 60))
         x = node.get("x", auto_x)
-        y = node.get("y", auto_y)
+        y = node.get("y", auto_y + header_y)
+        boxes[nid] = (x, y, ICON_SIZE, ICON_SIZE)
+
+    # AWS flow pages use the same cloud boundary as the architecture examples.
+    # Source actors stay outside; AWS service nodes sit within the boundary.
+    aws_boxes = [boxes[node["id"]] for node in nodes
+                 if node.get("provider", default_provider) == "aws"
+                 and node.get("scope") != "external"
+                 and node.get("service") not in {
+                     "user", "users", "mobile_client", "iot_device",
+                 }]
+    if aws_boxes:
+        cloud_left = min(box[0] for box in aws_boxes) - 80
+        cloud_top = max(20, min(box[1] for box in aws_boxes) - 120)
+        cloud_right = max(box[0] + box[2] for box in aws_boxes) + 80
+        cloud_bottom = max(box[1] + box[3] for box in aws_boxes) + layout.LABEL_BAND + 60
+        diagram.add_container(
+            "cloud", label=page.get("cloud_label", "AWS Cloud"),
+            x=cloud_left, y=cloud_top,
+            width=cloud_right - cloud_left, height=cloud_bottom - cloud_top,
+            cell_id=f"{diagram_id}-cloud",
+        )
+        frame_boxes.append((cloud_left, cloud_top,
+                            cloud_right - cloud_left, cloud_bottom - cloud_top))
+
+    node_ids = {node["id"] for node in nodes}
+    for group in page.get("groups", []) or []:
+        members = group.get("members", []) or []
+        missing = set(members) - node_ids
+        if not members or missing:
+            raise SpecError(
+                f"Flow group {group.get('id')!r} needs valid member node ids; "
+                f"unknown: {', '.join(sorted(missing)) or '(no members)'}."
+            )
+        kind = group.get("kind", "vpc")
+        try:
+            shapes.get_container(kind)
+        except shapes.UnknownContainerError as exc:
+            raise SpecError(f"Flow group {group.get('id')!r} has invalid kind {kind!r}.") from exc
+        member_boxes = [boxes[nid] for nid in members]
+        left = min(box[0] for box in member_boxes) - 55
+        top = min(box[1] for box in member_boxes) - 75
+        right = max(box[0] + box[2] for box in member_boxes) + 55
+        bottom = max(box[1] + box[3] + layout.LABEL_BAND for box in member_boxes) + 45
+        diagram.add_container(
+            kind, label=group.get("label"), x=left, y=top,
+            width=right - left, height=bottom - top,
+            cell_id=f"{diagram_id}-{group.get('id', 'group')}",
+        )
+        frame_boxes.append((left, top, right - left, bottom - top))
+
+    for node in nodes:
+        nid = node["id"]
+        x, y, _, _ = boxes[nid]
         diagram.add_icon(
             provider=node.get("provider", default_provider),
             service=node["service"],
@@ -1605,38 +2668,61 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
             y=y,
             cell_id=nid,
         )
-        boxes[nid] = (x, y, ICON_SIZE, ICON_SIZE)
 
-    # Title block (page 1 only, meta provided by build_document)
-    if meta:
-        # Place title above the flow nodes (negative y so it sits above)
-        diagram.add_title_block(meta, x=40, y=-220)
+    # Keep the branded title in the page header, as in the flow examples.
+    if meta is not None:
+        brand_x, brand_width = 40, 240.9
+        diagram.add_comprinno_mark(x=brand_x, y=45)
+        diagram.add_title_block(meta, x=brand_x + brand_width + 20, y=0)
 
     # Outer border enclosing all flow nodes
     if boxes:
-        all_x = [b[0] for b in boxes.values()]
-        all_y = [b[1] for b in boxes.values()]
-        bx = min(all_x) - 40
-        by = min(all_y) - 40
-        bw = max(b[0] + b[2] for b in boxes.values()) - bx + 40
-        bh = max(b[1] + b[3] for b in boxes.values()) - by + 40 + layout.LABEL_BAND
-        diagram.add_outer_border(bx, by, bw, bh, margin=0)
+        content = list(boxes.values()) + frame_boxes
+        bx = 0 if meta is not None else min(b[0] for b in content) - 40
+        by = 0 if meta is not None else min(b[1] for b in content) - 40
+        right = max([b[0] + b[2] for b in content] + ([780] if meta is not None else []))
+        bottom = max(
+            max(b[1] + b[3] + layout.LABEL_BAND for b in boxes.values()),
+            max((b[1] + b[3] for b in frame_boxes), default=0),
+        )
+        diagram.add_outer_border(bx, by, right - bx + 40, bottom - by + 40, margin=0)
 
-    for edge in page.get("edges", []):
+    flow_routes = _route_flow_edges(page.get("edges", []), boxes)
+    for edge_index, edge in enumerate(page.get("edges", [])):
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
         waypoints = None
-        if src in boxes and tgt in boxes and not edge.get("style"):
-            exit_xy, entry_xy, waypoints = _route_edge(boxes[src], boxes[tgt],
-                                                       label_band=layout.LABEL_BAND)
+        label_offset = None
+        if edge_index < len(flow_routes) and flow_routes[edge_index] is not None:
+            exit_xy, entry_xy, waypoints, label_offset = flow_routes[edge_index]
+            if edge.get("waypoints"):
+                waypoints = [tuple(point) for point in edge["waypoints"]]
+            if edge.get("source_point") or edge.get("target_point") \
+                    or edge.get("waypoints"):
+                # Hand-placed geometry wins, and it no longer matches the route
+                # the label offset was measured against.
+                label_offset = None
+            if edge.get("source_point"):
+                exit_xy = tuple(float(value) for value in edge["source_point"].split(","))
+            if edge.get("target_point"):
+                entry_xy = tuple(float(value) for value in edge["target_point"].split(","))
+        solid_edge = dict(edge)
+        solid_edge.pop("dashed", None)
+        if solid_edge.get("style"):
+            style_parts = str(solid_edge["style"]).split(";")
+            solid_edge["style"] = ";".join(
+                part for part in style_parts
+                if part and not part.startswith("dashed=")
+            )
         diagram.add_edge(
             source=src,
             target=tgt,
             label=edge.get("label", ""),
-            style=_edge_style(edge),
+            style=_edge_style(solid_edge),
             waypoints=waypoints,
             exit_xy=exit_xy,
             entry_xy=entry_xy,
+            label_offset=label_offset,
         )
     return diagram
 
@@ -1662,13 +2748,11 @@ def _normalize_pages(spec: dict) -> list[dict]:
     raise SpecError("Spec must contain 'pages', or a top-level 'region'/'nodes'.")
 
 
-def build_document(spec: dict) -> ET.Element:
+def build_document(spec: dict, strict_connectivity: bool = False) -> ET.Element:
     """Validate a full spec and build the complete (possibly multi-page) mxfile."""
     if not isinstance(spec, dict):
         raise SpecError("Spec must be a mapping/object.")
     meta = spec.get("metadata") or {}
-    if not meta.get("project"):
-        raise SpecError("metadata.project is required (used in the title block).")
     default_provider = _validate_provider(spec.get("provider", "aws"))
 
     pages = _normalize_pages(spec)
@@ -1680,10 +2764,13 @@ def build_document(spec: dict) -> ET.Element:
         if page_id in seen_page_ids:
             raise SpecError(f"Duplicate page id {page_id!r}.")
         seen_page_ids.add(page_id)
-        # Only the first page carries the title block.
-        page_meta = meta if idx == 1 else None
+        # Every page carries the same client and document metadata in its header.
+        page_meta = dict(meta)
         if ptype == "architecture":
-            diagrams.append(build_architecture_page(page, default_provider, page_id, page_meta))
+            diagrams.append(build_architecture_page(
+                page, default_provider, page_id, page_meta,
+                strict_connectivity=strict_connectivity,
+            ))
         elif ptype == "flow":
             diagrams.append(build_flow_page(page, default_provider, page_id, page_meta))
         else:
@@ -1701,6 +2788,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a draw.io diagram from a spec.")
     parser.add_argument("--input", required=True, help="Path to spec YAML/JSON.")
     parser.add_argument("--output", required=True, help="Path to write .drawio.xml.")
+    parser.add_argument(
+        "--strict-connectivity", action="store_true",
+        help="Do not emit diagrams with unresolved architecture connectivity warnings.",
+    )
     args = parser.parse_args(argv)
 
     import yaml  # local import so the module loads without PyYAML for unit tests
@@ -1709,7 +2800,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         spec = yaml.safe_load(fh)
 
     try:
-        mxfile = build_document(spec)
+        mxfile = build_document(spec, strict_connectivity=args.strict_connectivity)
     except (SpecError, ValidationError) as exc:
         parser.exit(2, f"error: {exc}\n")
 

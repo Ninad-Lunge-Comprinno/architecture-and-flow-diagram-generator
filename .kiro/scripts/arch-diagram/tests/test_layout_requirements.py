@@ -249,7 +249,7 @@ class TestIngressPath:
     def test_ingress_items_do_not_overlap_region(self):
         """Ingress services are placed inside their containers per the new model:
 
-        Shield/WAF live inside the Region (outside the VPC); ALB/API Gateway
+        Shield/WAF live in AWS Cloud outside the Region; ALB/API Gateway
         live inside the VPC. They must be contained by the correct box and must
         not overlap the AZ rows.
         """
@@ -263,6 +263,7 @@ class TestIngressPath:
         ]
         lo = _build_minimal_arch(edge_items=edge_items)
         region_box = lo.abs_boxes.get("region")
+        cloud_box = lo.abs_boxes.get("cloud")
         vpc_box = lo.abs_boxes.get("vpc")
         if region_box is None or vpc_box is None:
             return
@@ -273,12 +274,13 @@ class TestIngressPath:
             return (ix >= ox - tol and iy >= oy - tol
                     and ix + iw <= ox + ow + tol and iy + ih <= oy + oh + tol)
 
-        # Shield/WAF inside the Region but NOT inside the VPC.
+        # Shield/WAF inside the Cloud but outside the Region and VPC.
         for svc in ["shield", "waf"]:
             box = lo.abs_boxes.get(svc)
             if box is None:
                 continue
-            assert _contained(box, region_box), f"{svc} must be inside the Region"
+            assert _contained(box, cloud_box), f"{svc} must be inside AWS Cloud"
+            assert not _contained(box, region_box), f"{svc} must be outside the Region"
             assert not _contained(box, vpc_box), (
                 f"{svc} must be OUTSIDE the VPC (regional service)"
             )
@@ -708,7 +710,7 @@ class TestDataForgeFullBuild:
 # ---- VPC Centering + Entry Gutter Placement (new requirements) ------------
 
 class TestVpcCenteringAndGutters:
-    """Shield/WAF inside Region, ALB/APIGW inside VPC, VPC centred in Cloud."""
+    """Shield/WAF outside Region, ALB/APIGW inside VPC, VPC in Cloud."""
 
     def _gutter_layout(self):
         edge_items = [
@@ -727,8 +729,9 @@ class TestVpcCenteringAndGutters:
         return _build_minimal_arch(edge_items=edge_items,
                                    region_services=region_services)
 
-    def test_shield_waf_inside_region_not_vpc(self):
+    def test_shield_waf_inside_cloud_outside_region_and_vpc(self):
         lo = self._gutter_layout()
+        cloud = lo.abs_boxes["cloud"]
         region = lo.abs_boxes["region"]
         vpc = lo.abs_boxes["vpc"]
 
@@ -741,8 +744,20 @@ class TestVpcCenteringAndGutters:
         for svc in ["shield", "waf"]:
             box = lo.abs_boxes.get(svc)
             assert box is not None, f"{svc} must be placed"
-            assert contained(box, region), f"{svc} must be inside the Region"
+            assert contained(box, cloud), f"{svc} must be inside AWS Cloud"
+            assert not contained(box, region), f"{svc} must be outside the Region"
             assert not contained(box, vpc), f"{svc} must be outside the VPC"
+
+    def test_region_border_falls_between_waf_and_igw(self):
+        lo = self._gutter_layout()
+        region_left = lo.abs_boxes["region"][0]
+        waf = lo.abs_boxes["waf"]
+        igw = lo.abs_boxes["igw"]
+        assert waf[0] + waf[2] < region_left < igw[0]
+        cloud_y = lo.abs_boxes["cloud"][1]
+        nodes = {node.node_id: node for node in lo.nodes}
+        for service in ("shield", "waf"):
+            assert nodes[service].y + cloud_y == lo.abs_boxes[service][1]
 
     def test_alb_apigw_inside_vpc(self):
         lo = self._gutter_layout()
@@ -805,6 +820,15 @@ class TestVpcCenteringAndGutters:
             f"WAF y={waf[1]:.0f} and ALB y={alb[1]:.0f} should align"
         )
         assert waf[0] < alb[0], "WAF must be left of ALB (traffic order)"
+
+    def test_shield_waf_igw_alb_have_clear_horizontal_spacing(self):
+        lo = self._gutter_layout()
+        shield, waf, igw, alb = (lo.abs_boxes[key]
+                                 for key in ("shield", "waf", "igw", "alb"))
+        region_left = lo.abs_boxes["region"][0]
+        assert shield[0] < waf[0] < region_left < igw[0] < alb[0]
+        for left, right in ((shield, waf), (waf, igw), (igw, alb)):
+            assert right[0] - (left[0] + left[2]) >= lo_mod.ICON_GAP
 
     def test_users_outside_cloud_with_gutters(self):
         lo = self._gutter_layout()

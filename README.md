@@ -39,12 +39,17 @@ services row, plus Secrets Manager, CloudWatch, CloudTrail, and KMS in the
 regional services area. A service already present in the spec is not added a
 second time. These defaults apply to architecture pages, not flow diagrams.
 
-The renderer balances regional services across rows, keeps the AWS Cloud sized
-close to its contents, and routes edges to avoid icons. Customer ingress can be
-laid out on a single row through WAF, Internet Gateway, and ALB when those
-components and connections are part of the design. ECS and EKS cluster headers
-show the service logo beside the cluster name. The Comprinno logo is embedded
-in the diagram header.
+The renderer balances regional services across rows and keeps the AWS Cloud
+sized close to its contents. Flow diagrams use compact left-to-right steps
+and stack independent branches. Their arrows use the shared orthogonal router,
+which avoids icons, spreads shared paths into separate channels, and checks for
+conflicts. When the same viewer/client sends requests and receives responses,
+model it as one external endpoint on the left. Dense systems can use focused
+flow pages for separate journeys. Customer
+ingress can be laid out on a single row through WAF, Internet Gateway, and ALB
+when those components and connections are part of the design.
+ECS and EKS cluster headers show the service logo beside the cluster name. The
+Comprinno logo is embedded in the diagram header.
 
 ## Usage
 
@@ -66,9 +71,15 @@ render a PNG.
 ```bash
 source .venv/bin/activate
 python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --strict-connectivity \
   --input my-project.spec.yaml \
   --output my-project.drawio.xml
 ```
+
+`--strict-connectivity` blocks output when common architecture paths are
+missing or an ALB targets an AZ-specific ECS/EKS task without an explicit
+`az_specific: true` edge declaration. This lets the skill resolve or ask about
+ambiguous paths before delivering a diagram.
 
 See `.kiro/scripts/arch-diagram/tests/fixtures/demo_grid.yaml` for a worked example.
 Open output at https://app.diagrams.net or in the draw.io desktop app.

@@ -73,7 +73,26 @@ def test_title_block_contains_metadata():
     xml = gd.render_xml(mxfile)
     assert "Test Architecture" in xml
     assert "Version: 1.0" in xml
+    assert "Date: 2026-09-22" in xml
     assert "Creator: Tester" in xml
+    assert "Reviewer: Reviewer" in xml
+
+
+def test_missing_metadata_fields_use_fill_in_placeholders_on_both_page_types():
+    spec = {
+        "provider": "aws",
+        "metadata": {},
+        "pages": [
+            {"name": "Architecture", "type": "architecture",
+             "region": {"vpc": {"azs": []}}, "edges": []},
+            {"name": "Flow", "type": "flow",
+             "nodes": [{"id": "s3", "service": "s3"}], "edges": []},
+        ],
+    }
+    xml = gd.render_xml(gd.build_document(spec))
+    assert xml.count("To be filled") == 10
+    for label in ("Version", "Date", "Creator", "Reviewer"):
+        assert xml.count(f"{label}: To be filled") == 2
 
 
 def test_vertex_and_edge_flags_mutually_exclusive():
@@ -89,6 +108,59 @@ def test_html_label_is_escaped_in_value():
     xml = gd.render_xml(gd.build_mxfile([d]))
     # raw special chars must not appear unescaped inside the value
     assert "A &amp; B &lt;test&gt;" in xml
+
+
+def test_architecture_connectivity_warnings_catch_missing_entry_and_origin_paths():
+    page = {
+        "global": [
+            {"id": "cdn", "service": "cloudfront"},
+            {"id": "video_origin", "service": "s3", "label": "Video Origin"},
+        ],
+        "edge": [{"id": "viewers", "service": "users"}],
+        "region": {"services": [], "vpc": {"azs": [], "compute_groups": []}},
+        "edges": [],
+    }
+    warnings = gd._architecture_connectivity_warnings(page)
+    assert any("no path to a public entry service" in warning for warning in warnings)
+    assert any("no edge to a named origin" in warning for warning in warnings)
+
+
+def test_architecture_connectivity_warning_prefers_shared_cluster_target():
+    page = {
+        "edge": [{"id": "alb", "service": "application_load_balancer"}],
+        "region": {
+            "services": [],
+            "vpc": {
+                "azs": [{"id": "az1"}],
+                "compute_groups": [
+                    {"id": "eks", "kind": "eks_cluster", "node_service": "ec2"},
+                ],
+            },
+        },
+        "edges": [{"source": "alb", "target": "eks-az1"}],
+    }
+    warnings = gd._architecture_connectivity_warnings(page)
+    assert any("use shared cluster 'eks'" in warning for warning in warnings)
+
+
+def test_strict_connectivity_blocks_incomplete_architecture():
+    spec = {
+        "provider": "aws",
+        "metadata": {"project": "Incomplete"},
+        "pages": [{
+            "name": "Architecture",
+            "type": "architecture",
+            "global": [
+                {"id": "cdn", "service": "cloudfront"},
+                {"id": "origin", "service": "s3", "label": "Video Origin"},
+            ],
+            "edge": [{"id": "viewers", "service": "users"}],
+            "region": {"services": [], "vpc": {"azs": [], "compute_groups": []}},
+            "edges": [],
+        }],
+    }
+    with pytest.raises(gd.SpecError, match="connectivity checks failed"):
+        gd.build_document(spec, strict_connectivity=True)
 
 
 def test_uncompressed_no_compressed_attr():
