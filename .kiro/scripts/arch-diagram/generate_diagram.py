@@ -2120,7 +2120,7 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     # the remaining channels. Previously-routed edge cells become soft obstacles
     # so subsequent routes spread into separate lanes automatically.
     def _edge_matches_semantic_case(src, tgt, src_box, tgt_box):
-        """Return True if the edge will be handled by Cases 1-4 (not BFS)."""
+        """Return True if the edge will be handled by Cases 0-4 (not BFS)."""
         is_target_tall = tgt_box[3] > TALL_CONTAINER_H
         region_box2 = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
         in_band = src_box[1] < region_box2[1]
@@ -2130,6 +2130,18 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                       and src_box[0] < lo.vpc_corridor_x
                       and tgt_box[0] > lo.vpc_corridor_x
                       and not in_band)
+        src_cx2 = src_box[0] + src_box[2] / 2
+        src_cy2 = src_box[1] + src_box[3] / 2
+        tgt_cy2 = tgt_box[1] + tgt_box[3] / 2
+        # Case 0: same-y straight horizontal — only when path is clear of icons
+        src_cy_c = src_box[1] + src_box[3] / 2
+        tgt_cy_c = tgt_box[1] + tgt_box[3] / 2
+        if (abs(src_cy_c - tgt_cy_c) < 5
+                and tgt_box[0] > src_box[0] + src_box[2] - 5
+                and not in_band):
+            cand = [(src_box[0] + src_box[2], src_cy_c), (tgt_box[0], src_cy_c)]
+            if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
+                return True
         # Case 1
         if in_band and (is_target_tall or tgt_in_vpc2) and not use_spine2:
             return True
@@ -2225,8 +2237,25 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 and dx > 100
             )
 
+            # Case 0: Same y-level, source left of target → clean straight horizontal.
+            # Covers region-service-to-region-service connections (e.g. apigw→lambda)
+            # that share the same row but aren't in an AZ row (so Case 4 misses them).
+            # Only used when the straight path is clear and there are no spec overrides
+            # (source_point overrides imply the caller wants explicit exit control).
+            has_spec_override = bool(edge.get("source_point") or edge.get("target_point")
+                                     or edge.get("waypoints"))
+            if (not has_spec_override
+                    and abs(src_cy - tgt_cy) < 5
+                    and tgt_box[0] > src_box[0] + src_box[2] - 5
+                    and not src_in_ingress_band):
+                cand_straight = [(src_box[0] + src_box[2], src_cy), (tgt_box[0], src_cy)]
+                if _seg_hits_resource(cand_straight, boxes, kind_of, src, tgt) is None:
+                    exit_xy = (1.0, 0.5)
+                    entry_xy = (0.0, 0.5)
+                    waypoints = []
+
             # Case 1: Ingress band → VPC or tall container
-            if src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
+            elif src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
                 exit_xy = (0.5, 1.0)
                 entry_xy = (0.5, 0.0)
                 if dx > layout.ICON:
@@ -2324,13 +2353,20 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 _stagger_tracker[up_key] = up_n + 1
                 exit_fx = round(min(PORT_MAX_FX, max(PORT_MIN_FX, SAME_ROW_EXIT_FX - up_n * 0.15)), 2)
                 exit_px = src_box[0] + src_box[2] * exit_fx
-                cloud_box = lo.abs_boxes.get("cloud", (0, 0, 0, 0))
-                above_all_y = cloud_box[1] + 30
+                # Use a corridor JUST BELOW the region services icons
+                # (svc_row_bottom = region.y + REGION_SERVICES_Y + ICON + LABEL_BAND).
+                # The midpoint of the gap often falls inside icon bounding boxes.
+                # Placing the corridor 10px below icon+label bottom clears all icons.
+                region_box3 = lo.abs_boxes.get("region", (0, 0, 0, 0))
+                svc_row_bottom = (region_box3[1] + layout.REGION_SERVICES_Y
+                                  + layout.ICON + layout.LABEL_BAND)
+                # Route below all icons in the row, above the VPC top.
+                gap_centre_y = svc_row_bottom + 10 - up_n * FAN_STAGGER_STEP
                 exit_xy = (exit_fx, 0.0)    # exit from TOP of cluster
                 entry_xy = (0.5, 1.0)       # enter target from bottom
                 waypoints = [
-                    (exit_px, above_all_y),  # go straight up to above cloud top
-                    (tgt_cx, above_all_y),   # cross right to target x
+                    (exit_px, gap_centre_y),  # rise to mid-gap corridor
+                    (tgt_cx, gap_centre_y),   # cross right to target
                 ]
 
             elif (kind_of.get(src) in ("asg", "ecs_cluster", "eks_cluster", "cluster")
