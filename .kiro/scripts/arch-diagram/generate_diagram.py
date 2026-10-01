@@ -2099,13 +2099,30 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 else:
                     waypoints = []
 
-            # Case 2: Region service → tall cluster (ECR→ECS/EKS deploy)
+            # Case 2: Region service → tall cluster (ECR→ECS/EKS deploy).
+            # Multiple region services connecting to the same cluster (e.g.
+            # api_gateway, cognito, ecr all → eks) would overlap because each
+            # source is independent and the old per-source stagger key never
+            # fired. Stagger is now keyed per TARGET so successive sources that
+            # all fan into the same cluster spread across its top border.
             elif (src_above_vpc and not src_in_ingress_band
                   and is_target_tall and not use_spine):
-                exit_xy = (0.5, 1.0)
-                entry_xy = (0.5, 0.0)
-                mid_y = tgt_box[1] - 40
-                waypoints = [(src_cx, mid_y), (tgt_cx, mid_y)]
+                # Count how many edges to this target have already been routed.
+                fan_key = (tgt, "fan_into")
+                fan_n = _stagger_tracker.get(fan_key, 0)
+                _stagger_tracker[fan_key] = fan_n + 1
+                # Spread exit and entry x: 0→0.5 (centre), 1→0.3 (left), 2→0.7 (right),
+                # 3→0.2, 4→0.8, … so each additional edge fans out symmetrically.
+                _fan_offsets = [0.0, -0.2, +0.2, -0.35, +0.35]
+                fan_offset = _fan_offsets[min(fan_n, len(_fan_offsets)-1)]
+                exit_fx = round(min(0.85, max(0.15, 0.5 + fan_offset)), 2)
+                entry_fx = exit_fx   # keep entry at same relative x as exit
+                exit_px = src_box[0] + src_box[2] * exit_fx
+                entry_px = tgt_box[0] + tgt_box[2] * entry_fx
+                mid_y = tgt_box[1] - 40 - fan_n * 24   # each route gets its own clear-y
+                exit_xy = (exit_fx, 1.0)
+                entry_xy = (entry_fx, 0.0)
+                waypoints = [(exit_px, mid_y), (entry_px, mid_y)]
 
             # Case 2b: Compute cluster → data store. Route above the subnet
             # contents, then use the free gap before each target for its drop.
@@ -2154,6 +2171,13 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                 if abs(tgt_cy - src_cy) > 10:
                     bus_y = tgt_box[1] - 75 if tgt_cy < src_cy else tgt_box[1] - 160
                     fexit = (bus_y - src_box[1]) / src_box[3]
+                    # If the target is above the source box top, fexit < 0 and
+                    # the guard below would reject it, falling back to a
+                    # diagonal. Clamp bus_y to just inside the source box top
+                    # so the exit is always valid.
+                    if fexit < 0.02:
+                        bus_y = src_box[1] + src_box[3] * 0.02
+                        fexit = 0.02
                     if 0.02 <= fexit <= 0.98:
                         exit_xy, entry_xy = (1.0, round(fexit, 2)), (0.5, 0.0)
                         waypoints = [(tgt_cx, bus_y)]
@@ -2269,16 +2293,38 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                         region_right_x=lo.region_right_x if use_right_corridor else None,
                     )
 
-            # Case 5: Fallback
+            # Case 5: Fallback — with same-y icon-crossing detection.
+            # When source and target are at the same y (e.g. global row icons)
+            # and the direct horizontal passes through an intervening icon,
+            # route via the TOP of the row instead (inverted-U above the row).
             else:
-                exit_xy, entry_xy, waypoints = _route_edge(
-                    src_box, tgt_box,
-                    label_band=layout.LABEL_BAND,
-                    az_gaps=lo.az_gaps,
-                    vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
-                    az_rows=lo.az_rows,
-                    region_right_x=lo.region_right_x if use_right_corridor else None,
-                )
+                clear_y_above = src_box[1] - 50   # 50px above the row
+                if abs(src_box[1] - tgt_box[1]) < 5 and tgt_box[0] > src_box[0]:
+                    cand_straight = [(src_box[0] + src_box[2], src_cy),
+                                     (tgt_box[0], src_cy)]
+                    if _seg_hits_resource(cand_straight, boxes, kind_of, src, tgt) is not None:
+                        # Straight line crosses an icon — go above the row.
+                        exit_xy = (0.5, 0.0)
+                        entry_xy = (0.5, 0.0)
+                        waypoints = [(src_cx, clear_y_above), (tgt_cx, clear_y_above)]
+                    else:
+                        exit_xy, entry_xy, waypoints = _route_edge(
+                            src_box, tgt_box,
+                            label_band=layout.LABEL_BAND,
+                            az_gaps=lo.az_gaps,
+                            vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                            az_rows=lo.az_rows,
+                            region_right_x=lo.region_right_x if use_right_corridor else None,
+                        )
+                else:
+                    exit_xy, entry_xy, waypoints = _route_edge(
+                        src_box, tgt_box,
+                        label_band=layout.LABEL_BAND,
+                        az_gaps=lo.az_gaps,
+                        vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                        az_rows=lo.az_rows,
+                        region_right_x=lo.region_right_x if use_right_corridor else None,
+                    )
 
             # Stagger top-exit corridors to prevent overlapping arrows.
             if waypoints and exit_xy and exit_xy[1] == 0.0:

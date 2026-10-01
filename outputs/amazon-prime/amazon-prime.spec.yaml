@@ -1,0 +1,167 @@
+provider: aws
+
+metadata:
+  project: "Amazon Prime Video"
+  version: "1.0"
+  date: "2026-10-01"
+  creator: "Architecture Team"
+
+pages:
+
+  - name: "Amazon Prime AWS Architecture"
+    type: architecture
+
+    global:
+      - { id: route53,       service: route_53,                      label: "Route 53" }
+      - { id: cloudfront,    service: cloudfront,                    label: "CloudFront CDN" }
+      - { id: video_origin,  service: s3,                            label: "Video Origin" }
+      - { id: artwork_origin,service: s3,                            label: "Artwork and Manifests" }
+      - { id: iam,           service: identity_and_access_management,label: "IAM" }
+
+    edge:
+      - { id: viewers, service: users,                       label: "Prime Viewers" }
+      - { id: shield,  service: shield,                      label: "AWS Shield" }
+      - { id: waf,     service: waf,                         label: "AWS WAF" }
+      - { id: alb,     service: application_load_balancer,   label: "Application Load Balancer" }
+      - { id: igw,     service: internet_gateway,            label: "Internet Gateway" }
+
+    region:
+      label: "us-east-1"
+
+      services:
+        - { id: media_convert,   service: elemental_mediaconvert, label: "MediaConvert" }
+        - { id: secrets,         service: secrets_manager,        label: "Secrets Manager" }
+        - { id: kms,             service: key_management_service, label: "KMS" }
+        - { id: cloudwatch,      service: cloudwatch_2,           label: "CloudWatch" }
+        - { id: cloudtrail,      service: cloudtrail,             label: "CloudTrail" }
+        - { id: guardduty,       service: guardduty,              label: "GuardDuty" }
+        - { id: playback_events, service: kinesis_data_streams,   label: "Playback Events" }
+        - { id: recommendations, service: personalize,            label: "Personalize Recommendations" }
+        - { id: cognito,         service: cognito,                label: "Cognito Identity" }
+        - { id: api_gateway,     service: api_gateway,            label: "API Gateway" }
+        - { id: session_store,   service: dynamodb,               label: "DynamoDB Sessions" }
+        - { id: ecr,             service: ecr,                    label: "Amazon ECR" }
+
+      vpc:
+        label: "Prime Streaming VPC"
+
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: public1
+              label: "Public Subnet 1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "Private App Subnet 1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "Private Data Subnet 1"
+              resources:
+                - { id: cache1,   service: elasticache, label: "ElastiCache Sessions" }
+                - { id: catalog1, service: aurora,       label: "Aurora Catalog" }
+
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: public2
+              label: "Public Subnet 2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "Private App Subnet 2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "Private Data Subnet 2"
+              resources:
+                - { id: cache2,   service: elasticache, label: "ElastiCache Replica" }
+                - { id: catalog2, service: aurora,       label: "Aurora Replica" }
+
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: public3
+              label: "Public Subnet 3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "Private App Subnet 3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "Private Data Subnet 3"
+              resources: []
+
+        compute_groups:
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Streaming Cluster" }
+
+    edges:
+      # Viewer ingress
+      - { source: viewers,       target: shield }
+      - { source: shield,        target: waf }
+      - { source: waf,           target: igw }
+      - { source: igw,           target: alb }
+      - { source: alb,           target: eks }
+
+      # CDN to content origins
+      - { source: cloudfront,    target: video_origin,   label: "video segments" }
+      - { source: cloudfront,    target: artwork_origin, label: "artwork and manifests" }
+
+      # Regional services into EKS
+      - { source: api_gateway,   target: eks,            label: "playback API" }
+      - { source: cognito,       target: eks,            label: "auth token" }
+
+      # EKS to data stores
+      - { source: eks,           target: cache1,         label: "session lookup" }
+      - { source: eks,           target: catalog1,       label: "catalog query" }
+      - { source: eks,           target: session_store,  label: "write session" }
+
+      # Streaming analytics
+      - { source: playback_events, target: recommendations, label: "watch events" }
+
+      # Deployment
+      - { source: ecr,           target: eks,            label: "deploy", dashed: true }
+
+      # DB replication
+      - { source: cache1,        target: cache2,         label: "replication", dashed: true }
+      - { source: catalog1,      target: catalog2,       label: "replication", dashed: true }
+
+  - name: "Amazon Prime Playback Flow"
+    type: flow
+
+    groups:
+      - id: streaming_vpc
+        kind: vpc
+        label: "Prime Streaming VPC"
+        members: [playback, catalog, cache]
+
+    nodes:
+      - { id: viewer,          service: users,                label: "Prime Viewer (Mobile, Web, TV)", scope: external }
+      - { id: cdn,             service: cloudfront,           label: "CloudFront CDN" }
+      - { id: gateway,         service: api_gateway,          label: "API Gateway" }
+      - { id: identity,        service: cognito,              label: "Cognito" }
+      - { id: manifests,       service: s3,                   label: "Manifests and Artwork" }
+      - { id: origin,          service: s3,                   label: "Encoded Video Origin" }
+      - { id: playback,        service: eks,                  label: "Playback Services", scope: vpc }
+      - { id: catalog,         service: aurora,               label: "Catalog and Subscriptions", scope: vpc }
+      - { id: cache,           service: elasticache,          label: "Session Cache", scope: vpc }
+      - { id: events,          service: kinesis_data_streams, label: "Playback Events" }
+      - { id: recommendations, service: personalize,          label: "Recommendations" }
+
+    edges:
+      - { source: viewer,          target: cdn,             label: "browse and play" }
+      - { source: viewer,          target: gateway,         label: "catalog API" }
+      - { source: cdn,             target: manifests,       label: "manifest and artwork request" }
+      - { source: cdn,             target: origin,          label: "video segment request" }
+      - { source: gateway,         target: identity,        label: "authenticate" }
+      - { source: identity,        target: playback,        label: "authorized request" }
+      - { source: gateway,         target: playback,        label: "playback session" }
+      - { source: playback,        target: catalog,         label: "entitlement and catalog" }
+      - { source: playback,        target: cache,           label: "session state" }
+      - { source: playback,        target: events,          label: "watch event" }
+      - { source: events,          target: recommendations, label: "personalize" }
+      - { source: recommendations, target: playback,        label: "recommended titles" }
