@@ -2056,6 +2056,81 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     all_edges = page.get("edges", []) or []
     computed_routes: dict = {}   # (src,tgt) → (exit_xy, entry_xy, waypoints)
 
+    # ---- Pre-compute BFS routes for all non-semantic edges --------------------
+    # Cases 1-4 handle edges with intentional visual patterns (ingress→VPC,
+    # lane→DB Sadhaka geometry, same-row jog). Everything else — region service
+    # connections, global row fan-outs, cross-container general paths — goes
+    # through the obstacle-aware BFS router (routing.route_all_edges) which
+    # finds the shortest orthogonal path around all icon obstacles.
+    #
+    # This is the classical approach: discretise the diagram to a 20px grid,
+    # mark icon+label boxes as blocked, run BFS/Dijkstra with a turn penalty
+    # (shortest path minimising length + direction changes) for each edge,
+    # longest-first so long edges claim corridors first and shorter edges fill
+    # the remaining channels. Previously-routed edge cells become soft obstacles
+    # so subsequent routes spread into separate lanes automatically.
+    def _edge_matches_semantic_case(src, tgt, src_box, tgt_box):
+        """Return True if the edge will be handled by Cases 1-4 (not BFS)."""
+        is_target_tall = tgt_box[3] > 240
+        region_box2 = lo.abs_boxes.get("region", (0, 9e9, 0, 0))
+        in_band = src_box[1] < region_box2[1]
+        above_vpc = src_box[1] < vpc_abs_top
+        tgt_in_vpc2 = tgt_box[1] >= vpc_abs_top
+        use_spine2 = (lo.vpc_corridor_x > 0
+                      and src_box[0] < lo.vpc_corridor_x
+                      and tgt_box[0] > lo.vpc_corridor_x
+                      and not in_band)
+        # Case 1
+        if in_band and (is_target_tall or tgt_in_vpc2) and not use_spine2:
+            return True
+        # Case 2
+        if above_vpc and not in_band and is_target_tall and not use_spine2:
+            return True
+        # Case 2b (cluster→DB)
+        if kind_of.get(src) in _CLUSTER_KINDS and svc_of.get(tgt) in _DB_SVCS:
+            return True
+        # Case 3 (lane→icon)
+        if (kind_of.get(src) in ("asg", "ecs_cluster", "eks_cluster", "cluster")
+                and kind_of.get(tgt) == "resource"
+                and tgt_box[0] > src_box[0]):
+            return True
+        # Case 4 (same-row)
+        src_cy2 = src_box[1] + src_box[3] / 2
+        tgt_cy2 = tgt_box[1] + tgt_box[3] / 2
+        if (not in_band and tgt_box[0] > src_box[0]
+                and _same_row(src_cy2, tgt_cy2, lo.az_rows) is not None):
+            return True
+        # Spine routing (also semantic)
+        if use_spine2:
+            return True
+        return False
+
+    # Collect edges that need BFS routing.
+    bfs_edge_pairs = []
+    for edge in all_edges:
+        src, tgt = edge["source"], edge["target"]
+        if src not in boxes or tgt not in boxes or edge.get("style"):
+            continue
+        sb, tb = boxes[src], boxes[tgt]
+        if not _edge_matches_semantic_case(src, tgt, sb, tb):
+            bfs_edge_pairs.append((src, tgt))
+
+    # Run the BFS router on all non-semantic edges together so they compete
+    # for channels globally rather than being routed one-at-a-time.
+    bfs_routes: dict = {}
+    bfs_endpoints: dict = {}
+    if bfs_edge_pairs:
+        bx_vals = [b[0] for b in boxes.values()] + [b[0]+b[2] for b in boxes.values()]
+        by_vals = [b[1] for b in boxes.values()] + [b[1]+b[3] for b in boxes.values()]
+        bounds = (min(bx_vals)-40, min(by_vals)-40, max(bx_vals)+40, max(by_vals)+40)
+        bfs_routes, bfs_endpoints, bfs_conflicts = _routing.route_all_edges(
+            bfs_edge_pairs, boxes, icon_ids, bounds)
+        if bfs_conflicts:
+            n_ic = sum(1 for c in bfs_conflicts if c[0] == "edge_icon")
+            n_ee = sum(1 for c in bfs_conflicts if c[0] == "edge_edge")
+            print(f"  ℹ  BFS ROUTING: {n_ic} residual icon, {n_ee} edge conflicts",
+                  flush=True)
+
     for edge in all_edges:
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
@@ -2293,20 +2368,40 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                         region_right_x=lo.region_right_x if use_right_corridor else None,
                     )
 
-            # Case 5: Fallback — with same-y icon-crossing detection.
-            # When source and target are at the same y (e.g. global row icons)
-            # and the direct horizontal passes through an intervening icon,
-            # route via the TOP of the row instead (inverted-U above the row).
+            # Case 5: Fallback — use BFS path if available, otherwise _route_edge.
+            # BFS provides an obstacle-aware orthogonal path computed globally
+            # (all non-semantic edges routed together, longest-first). For the
+            # rare case where BFS finds no path, _route_edge gives a geometric
+            # approximation. Same-y icon-crossing detection is kept as a
+            # lightweight check before invoking _route_edge.
             else:
-                clear_y_above = src_box[1] - 50   # 50px above the row
-                if abs(src_box[1] - tgt_box[1]) < 5 and tgt_box[0] > src_box[0]:
-                    cand_straight = [(src_box[0] + src_box[2], src_cy),
-                                     (tgt_box[0], src_cy)]
-                    if _seg_hits_resource(cand_straight, boxes, kind_of, src, tgt) is not None:
-                        # Straight line crosses an icon — go above the row.
-                        exit_xy = (0.5, 0.0)
-                        entry_xy = (0.5, 0.0)
-                        waypoints = [(src_cx, clear_y_above), (tgt_cx, clear_y_above)]
+                ekey = (src, tgt)
+                if ekey in bfs_routes and bfs_routes[ekey]:
+                    # BFS path: full absolute waypoints including endpoints.
+                    # Strip first/last points (icon border contacts); those are
+                    # expressed via exit_xy/entry_xy fractions.
+                    path = bfs_routes[ekey]
+                    exit_xy, entry_xy = bfs_endpoints[ekey]
+                    waypoints = [tuple(p) for p in path[1:-1]] if len(path) > 2 else []
+                else:
+                    # BFS unavailable — geometric fallback with same-y check.
+                    clear_y_above = src_box[1] - 50
+                    if abs(src_box[1] - tgt_box[1]) < 5 and tgt_box[0] > src_box[0]:
+                        cand_straight = [(src_box[0] + src_box[2], src_cy),
+                                         (tgt_box[0], src_cy)]
+                        if _seg_hits_resource(cand_straight, boxes, kind_of, src, tgt) is not None:
+                            exit_xy = (0.5, 0.0)
+                            entry_xy = (0.5, 0.0)
+                            waypoints = [(src_cx, clear_y_above), (tgt_cx, clear_y_above)]
+                        else:
+                            exit_xy, entry_xy, waypoints = _route_edge(
+                                src_box, tgt_box,
+                                label_band=layout.LABEL_BAND,
+                                az_gaps=lo.az_gaps,
+                                vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
+                                az_rows=lo.az_rows,
+                                region_right_x=lo.region_right_x if use_right_corridor else None,
+                            )
                     else:
                         exit_xy, entry_xy, waypoints = _route_edge(
                             src_box, tgt_box,
@@ -2316,15 +2411,6 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                             az_rows=lo.az_rows,
                             region_right_x=lo.region_right_x if use_right_corridor else None,
                         )
-                else:
-                    exit_xy, entry_xy, waypoints = _route_edge(
-                        src_box, tgt_box,
-                        label_band=layout.LABEL_BAND,
-                        az_gaps=lo.az_gaps,
-                        vpc_corridor_x=lo.vpc_corridor_x if use_spine else None,
-                        az_rows=lo.az_rows,
-                        region_right_x=lo.region_right_x if use_right_corridor else None,
-                    )
 
             # Stagger top-exit corridors to prevent overlapping arrows.
             if waypoints and exit_xy and exit_xy[1] == 0.0:
