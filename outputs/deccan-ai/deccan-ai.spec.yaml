@@ -133,7 +133,7 @@ pages:
       - { source: ecs-az1, target: cache1,  label: "cache", source_point: "0.75,1.0" }
       - { source: eks-az2, target: aurora2, label: "sql" }
 
-      # ML inference
+      # ML inference (dashed — conceptual connection, not a data path)
       - { source: eks, target: bedrock, label: "inference", dashed: true }
 
       # Analytics → data lake (BFS will route this cleanly around the region grid)

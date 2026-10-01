@@ -2089,10 +2089,16 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         # Case 2b (cluster→DB)
         if kind_of.get(src) in _CLUSTER_KINDS and svc_of.get(tgt) in _DB_SVCS:
             return True
-        # Case 3 (lane→icon)
+        # Case 2c (cluster→region-service above VPC — upward left-corridor route)
+        if (kind_of.get(src) in _CLUSTER_KINDS
+                and kind_of.get(tgt) == "resource"
+                and tgt_box[1] + tgt_box[3] < src_box[1]):
+            return True
+        # Case 3 (lane→icon) — only when target is not above the source top
         if (kind_of.get(src) in ("asg", "ecs_cluster", "eks_cluster", "cluster")
                 and kind_of.get(tgt) == "resource"
-                and tgt_box[0] > src_box[0]):
+                and tgt_box[0] > src_box[0]
+                and tgt_box[1] + tgt_box[3] / 2 >= src_box[1]):
             return True
         # Case 4 (same-row)
         src_cy2 = src_box[1] + src_box[3] / 2
@@ -2182,24 +2188,29 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
             # Case 2: Region service → tall cluster (ECR→ECS/EKS deploy).
             # Multiple region services connecting to the same cluster (e.g.
             # api_gateway, cognito, ecr all → eks) would overlap because each
-            # source is independent and the old per-source stagger key never
-            # fired. Stagger is now keyed per TARGET so successive sources that
-            # all fan into the same cluster spread across its top border.
+            # source is independent. Stagger keyed per TARGET so successive
+            # sources fan out symmetrically across the cluster top border.
             elif (src_above_vpc and not src_in_ingress_band
                   and is_target_tall and not use_spine):
-                # Count how many edges to this target have already been routed.
                 fan_key = (tgt, "fan_into")
                 fan_n = _stagger_tracker.get(fan_key, 0)
                 _stagger_tracker[fan_key] = fan_n + 1
-                # Spread exit and entry x: 0→0.5 (centre), 1→0.3 (left), 2→0.7 (right),
-                # 3→0.2, 4→0.8, … so each additional edge fans out symmetrically.
                 _fan_offsets = [0.0, -0.2, +0.2, -0.35, +0.35]
                 fan_offset = _fan_offsets[min(fan_n, len(_fan_offsets)-1)]
                 exit_fx = round(min(0.85, max(0.15, 0.5 + fan_offset)), 2)
-                entry_fx = exit_fx   # keep entry at same relative x as exit
+                entry_fx = exit_fx
                 exit_px = src_box[0] + src_box[2] * exit_fx
                 entry_px = tgt_box[0] + tgt_box[2] * entry_fx
-                mid_y = tgt_box[1] - 40 - fan_n * 24   # each route gets its own clear-y
+                # Place the corridor ABOVE the VPC boundary so the horizontal
+                # segment does not share space with BFS routes that also use
+                # the narrow band between the region services row and VPC top.
+                # Use a fixed clear band: midway between the source bottom and
+                # the VPC top, staggered by 28px per fan index.
+                vpc_top_abs = vpc_abs_top
+                services_bottom = src_box[1] + src_box[3] + layout.LABEL_BAND
+                # Target: corridor well above VPC top
+                base_mid_y = (services_bottom + vpc_top_abs) / 2
+                mid_y = base_mid_y - fan_n * 28
                 exit_xy = (exit_fx, 1.0)
                 entry_xy = (entry_fx, 0.0)
                 waypoints = [(exit_px, mid_y), (entry_px, mid_y)]
@@ -2242,10 +2253,40 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                              (corridor_x, tgt_box[1] - 12),
                              (drop_x, tgt_box[1] - 12)]
 
-            # Case 3: Lane → icon (Sadhaka geometry)
+            # Case 3: Lane → icon (Sadhaka geometry).
+            # Only applies when target is to the RIGHT of the lane AND is at
+            # or below the lane's top edge (same AZ row or DB subnet). Targets
+            # that are ABOVE the source box (e.g. a cluster connecting upward
+            # to a region service like Bedrock) are excluded — those go to BFS.
+
+            # Case 2c: Cluster → region service above the VPC (e.g. eks→bedrock).
+            # Exit from the TOP of the cluster (clear of DB icons at mid-height),
+            # go up through the gap between region services and VPC, then across
+            # to the target. This avoids the DB subnet icons at mid-cluster height.
+            elif (kind_of.get(src) in _CLUSTER_KINDS
+                  and kind_of.get(tgt) == "resource"
+                  and not tgt_in_vpc
+                  and src_box[1] + src_box[3] / 2 > tgt_box[1] + tgt_box[3]):
+                # Stagger x slightly so multiple upward edges from adjacent
+                # clusters don't share the same vertical.
+                up_key = (src, "upward")
+                up_n = _stagger_tracker.get(up_key, 0)
+                _stagger_tracker[up_key] = up_n + 1
+                exit_fx = round(min(0.85, max(0.15, 0.75 - up_n * 0.15)), 2)
+                exit_px = src_box[0] + src_box[2] * exit_fx
+                cloud_box = lo.abs_boxes.get("cloud", (0, 0, 0, 0))
+                above_all_y = cloud_box[1] + 30
+                exit_xy = (exit_fx, 0.0)    # exit from TOP of cluster
+                entry_xy = (0.5, 1.0)       # enter target from bottom
+                waypoints = [
+                    (exit_px, above_all_y),  # go straight up to above cloud top
+                    (tgt_cx, above_all_y),   # cross right to target x
+                ]
+
             elif (kind_of.get(src) in ("asg", "ecs_cluster", "eks_cluster", "cluster")
                     and kind_of.get(tgt) == "resource"
-                    and tgt_box[0] > src_box[0]):
+                    and tgt_box[0] > src_box[0]
+                    and tgt_box[1] + tgt_box[3] / 2 >= src_box[1]):  # target not above src top
                 src_right = src_box[0] + src_box[2]
                 cand = None
                 if abs(tgt_cy - src_cy) > 10:
