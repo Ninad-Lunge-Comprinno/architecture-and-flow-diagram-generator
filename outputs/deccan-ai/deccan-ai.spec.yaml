@@ -1,0 +1,165 @@
+provider: aws
+
+metadata:
+  client_name: "Deccan AI"
+  project: "Deccan AI"
+  version: "1.0"
+  date: "2026-10-01"
+  creator: "To be filled"
+  reviewer: "To be filled"
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+
+    # Account-level / global services (outside the Region box)
+    global:
+      - { id: s3,       service: s3,                            label: "S3 Standard" }
+      - { id: dynamodb, service: dynamodb,                      label: "DynamoDB" }
+      - { id: iam,      service: identity_and_access_management,label: "IAM" }
+
+    # Left ingress strip — correct traffic order: Users → WAF → IGW → ALB → compute
+    # API Gateway is a regional service; it lives in region.services, not the edge strip
+    edge:
+      - { id: users, service: users,                       label: "Users" }
+      - { id: waf,   service: waf,                         label: "WAF" }
+      - { id: alb,   service: application_load_balancer,   label: "Application Load Balancer" }
+      - { id: igw,   service: internet_gateway,            label: "IGW" }
+
+    region:
+      label: "ap-south-1 (Mumbai)"
+      services:
+        # serverless / api
+        - { id: apigw,      service: api_gateway,            label: "API Gateway" }
+        - { id: lambda,     service: lambda,                  label: "Lambda" }
+        # container registry / cicd
+        - { id: ecr,        service: ecr,                     label: "ECR" }
+        - { id: codebuild,  service: codebuild,               label: "CodeBuild" }
+        # analytics / ETL and querying
+        - { id: glue,       service: glue,                    label: "Glue ETL" }
+        - { id: athena,     service: athena,                  label: "Athena" }
+        - { id: redshift,   service: redshift,                label: "Redshift" }
+        - { id: emr,        service: emr,                     label: "EMR" }
+        # ai / ml
+        - { id: bedrock,    service: bedrock,                 label: "Bedrock (LLM inference)" }
+        # data movement
+        - { id: datasync,   service: datasync,                label: "DataSync" }
+        # security & governance
+        - { id: kms,        service: key_management_service,  label: "KMS" }
+        - { id: secrets,    service: secrets_manager,         label: "Secrets Manager" }
+        - { id: guardduty,  service: guardduty,               label: "GuardDuty" }
+        - { id: securityhub,service: security_hub,            label: "Security Hub" }
+        - { id: config,     service: config,                  label: "Config" }
+        # observability
+        - { id: cloudwatch, service: cloudwatch_2,            label: "CloudWatch" }
+        - { id: cloudtrail, service: cloudtrail,              label: "CloudTrail" }
+
+      vpc:
+        label: "Deccan AI VPC (Production)"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              # Single shared NAT Gateway in AZ1 only (cost-optimised; not HA)
+              resources: [ { id: nat1, service: nat_gateway, label: "NAT Gateway" } ]
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: aurora1, service: aurora,       label: "Aurora PostgreSQL (Primary)" }
+                - { id: cache1,  service: elasticache,  label: "ElastiCache Redis (Primary)" }
+
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: aurora2, service: aurora,       label: "Aurora PostgreSQL (Replica)" }
+                - { id: cache2,  service: elasticache,  label: "ElastiCache Redis (Replica)" }
+
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: aurora3, service: aurora,       label: "Aurora PostgreSQL (Replica)" }
+
+        compute_groups:
+          - { id: ecs,   kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
+          - { id: eks,   kind: eks_cluster, node_service: ec2,     label: "EKS Cluster" }
+          - { id: batch, kind: cluster,     node_service: ec2,     label: "AWS Batch (GPU)" }
+
+    edges:
+      # Ingress path: Users → WAF → IGW → ALB → compute clusters
+      - { source: users, target: waf }
+      - { source: waf,   target: igw }
+      - { source: igw,   target: alb }
+      - { source: alb,   target: ecs, label: "route" }
+      - { source: alb,   target: eks, label: "route" }
+
+      # API Gateway → Lambda (serverless path)
+      - { source: apigw,  target: lambda, label: "invoke" }
+
+      # Container deploys
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+      - { source: ecr, target: eks, label: "deploy", dashed: true }
+
+      # Compute → data stores (per-AZ task nodes for clean routing)
+      - { source: ecs-az1, target: aurora1, label: "sql",   source_point: "0.25,1.0" }
+      - { source: ecs-az1, target: cache1,  label: "cache", source_point: "0.75,1.0" }
+      - { source: eks-az2, target: aurora2, label: "sql" }
+
+      # ML inference
+      - { source: eks, target: bedrock, label: "inference", dashed: true }
+
+      # Analytics → data lake (BFS will route this cleanly around the region grid)
+      - { source: glue, target: s3, label: "ETL", dashed: true }
+
+  - name: "Data & ML Flow"
+    type: flow
+    nodes:
+      - { id: f_src,     service: datasync,          label: "1. DataSync ingest" }
+      - { id: f_s3,      service: s3,                label: "2. S3 data lake" }
+      - { id: f_glue,    service: glue,              label: "3. Glue ETL + Crawlers" }
+      - { id: f_athena,  service: athena,            label: "4a. Athena query" }
+      - { id: f_emr,     service: emr,               label: "4b. EMR / Spark" }
+      - { id: f_redshift,service: redshift,           label: "5. Redshift warehouse" }
+      - { id: f_batch,   service: batch,             label: "6. AWS Batch GPU jobs" }
+      - { id: f_bedrock, service: bedrock,           label: "7. Bedrock LLM inference" }
+      - { id: f_api,     service: api_gateway,       label: "8. API Gateway" }
+      - { id: f_user,    service: users,             label: "9. Users", scope: external }
+    edges:
+      - { source: f_src,     target: f_s3,      label: "land" }
+      - { source: f_s3,      target: f_glue,    label: "crawl" }
+      - { source: f_glue,    target: f_athena,  label: "catalog" }
+      - { source: f_glue,    target: f_emr,     label: "spark" }
+      - { source: f_glue,    target: f_redshift,label: "load" }
+      - { source: f_emr,     target: f_batch,   label: "features" }
+      - { source: f_batch,   target: f_bedrock, label: "model inputs" }
+      - { source: f_bedrock, target: f_api,     label: "responses" }
+      - { source: f_api,     target: f_user,    label: "results" }
+      - { source: f_redshift,target: f_api,     label: "analytics" }

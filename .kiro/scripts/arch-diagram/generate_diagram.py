@@ -2111,6 +2111,11 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         src, tgt = edge["source"], edge["target"]
         if src not in boxes or tgt not in boxes or edge.get("style"):
             continue
+        # Skip edges that have explicit spec overrides — BFS computes paths from
+        # the default border point, not the override fraction, which would create
+        # a mismatch between the exit fraction and the first waypoint.
+        if edge.get("source_point") or edge.get("target_point") or edge.get("waypoints"):
+            continue
         sb, tb = boxes[src], boxes[tgt]
         if not _edge_matches_semantic_case(src, tgt, sb, tb):
             bfs_edge_pairs.append((src, tgt))
@@ -2493,7 +2498,16 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         spec_tgt_point = edge.get("target_point")
         if spec_src_point:
             parts = [float(x) for x in spec_src_point.split(",")]
+            old_exit = exit_xy
             exit_xy = (parts[0], parts[1])
+            # When the exit x-fraction changes, the first waypoint's x must be
+            # updated to the new absolute exit x so the first segment stays
+            # orthogonal (no diagonal from icon border to waypoint).
+            if waypoints and old_exit and abs(parts[0] - old_exit[0]) > 0.01:
+                src_box2 = boxes.get(src)
+                if src_box2 is not None:
+                    new_exit_abs_x = src_box2[0] + parts[0] * src_box2[2]
+                    waypoints = [(new_exit_abs_x, waypoints[0][1])] + list(waypoints[1:])
         if spec_tgt_point:
             parts = [float(x) for x in spec_tgt_point.split(",")]
             entry_xy = (parts[0], parts[1])
