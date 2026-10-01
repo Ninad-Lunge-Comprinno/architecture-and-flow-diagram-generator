@@ -2,91 +2,61 @@
 
 A Kiro skill that turns cloud migration requirements into editable draw.io
 (`.drawio.xml`) architecture and flow diagrams, matching the firm's house style
-(AWS 2020 icon set, nested Cloud/Region/VPC/AZ/subnet grouping, standardized
+(AWS 2020 icon set, nested Cloud/Region/VPC/AZ/subnet grouping, standardised
 title block). Azure and GCP starter icon sets are included.
 
 No LLM API calls are made at generation time: the agent (guided by the skill and
 reference catalogs) authors a structured spec, and a deterministic Python helper
 computes the layout and emits valid XML.
 
-## Layout
+## Repository layout
 
 ```
+outputs/                         # ← all client work lives here
+│   Each subfolder = one client / project.
+│   The spec (.spec.yaml) is committed; the XML is generated and git-ignored.
+│
+├── acme-orders/
+│   └── acme-orders.spec.yaml
+├── dataforge/
+│   └── dataforge.spec.yaml
+├── healthbridge/
+│   └── healthbridge.spec.yaml
+├── jiohotstar/
+│   └── jiohotstar-architecture.spec.yaml
+└── ...                          # one folder per client
+
+diagram examples/                # reference PNGs and XMLs used during design
+flow diagram examples/           # reference flow-page examples
+
 .kiro/
 ├── agents/
 │   └── arch-diagram.json        # dedicated agent with awsdac MCP wired in
 ├── skills/arch-diagram/
-│   ├── SKILL.md                 # the procedure the agent follows (/arch-diagram)
+│   ├── SKILL.md                 # procedure the agent follows (/arch-diagram)
 │   └── references/
-│       ├── spec-schema.md       # the intermediate spec format
+│       ├── spec-schema.md       # intermediate spec format
 │       ├── shapes-aws.md        # AWS service catalog (mirrors shapes.py)
 │       ├── shapes-azure.md      # Azure starter catalog
 │       ├── shapes-gcp.md        # GCP starter catalog
-│       └── house-style.md       # hierarchy, colors, title block, edges
+│       └── house-style.md       # hierarchy, colours, title block, edges
 ├── steering/
-│   └── arch-diagram-conventions.md   # lean always-on rules + pointer to skill
+│   └── arch-diagram-conventions.md   # always-on rules + pointer to skill
 └── scripts/arch-diagram/
-    ├── generate_diagram.py      # spec -> .drawio.xml (CLI) + overlap checker
+    ├── generate_diagram.py      # spec → .drawio.xml (CLI)
     ├── layout.py                # grid-based layout engine with AZ routing
-    ├── shapes.py                # shape/color catalog (SOURCE OF TRUTH)
-    ├── assets/
-    │   └── comprinno-logo.png   # embedded in generated diagram headers
-    └── tests/                   # pytest suite
+    ├── routing.py               # edge routing and conflict checker
+    ├── shapes.py                # shape/colour catalog (SOURCE OF TRUTH)
+    └── tests/                   # pytest suite (187 tests)
 ```
 
-AWS architecture pages automatically include IAM and S3 in the global
-services row, plus Secrets Manager, CloudWatch, CloudTrail, and KMS in the
-regional services area. A service already present in the spec is not added a
-second time. These defaults apply to architecture pages, not flow diagrams.
+> **Rule:** committed files are specs only. Generated XMLs are git-ignored and
+> reproduced on demand by running the generator.
 
-The renderer balances regional services across rows and keeps the AWS Cloud
-sized close to its contents. Flow diagrams use compact left-to-right steps
-and stack independent branches. Their arrows use the shared orthogonal router,
-which avoids icons, spreads shared paths into separate channels, and checks for
-conflicts. When the same viewer/client sends requests and receives responses,
-model it as one external endpoint on the left. Dense systems can use focused
-flow pages for separate journeys. Customer
-ingress can be laid out on a single row through WAF, Internet Gateway, and ALB
-when those components and connections are part of the design.
-ECS and EKS cluster headers show the service logo beside the cluster name. The
-Comprinno logo is embedded in the diagram header.
-
-## Usage
-
-### Via the skill (recommended)
-Use the dedicated `arch-diagram` agent, or invoke the skill from any agent:
-
-```
-/arch-diagram our e-commerce app is migrating to AWS — 3-tier, 3 AZs, ECS Fargate + RDS
-```
-
-The agent will ask for architecture choices that are missing, summarize the
-proposed components and important flows, then create a focused spec and diagram.
-It does not assume a fixed pattern, AZ count, NAT design, or workload-specific
-service inventory. AWS architecture pages do include the shared foundation
-services listed above. If an awsdac preview tool is available, it may also
-render a PNG.
-
-### Via the CLI
-```bash
-source .venv/bin/activate
-python .kiro/scripts/arch-diagram/generate_diagram.py \
-  --strict-connectivity \
-  --input my-project.spec.yaml \
-  --output my-project.drawio.xml
-```
-
-`--strict-connectivity` blocks output when common architecture paths are
-missing or an ALB targets an AZ-specific ECS/EKS task without an explicit
-`az_specific: true` edge declaration. This lets the skill resolve or ask about
-ambiguous paths before delivering a diagram.
-
-See `.kiro/scripts/arch-diagram/tests/fixtures/demo_grid.yaml` for a worked example.
-Open output at https://app.diagrams.net or in the draw.io desktop app.
+---
 
 ## Setup
 
-### Python dependencies
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -95,30 +65,165 @@ pytest
 
 ### awsdac MCP server (optional — enables PNG preview)
 
-Install on macOS:
 ```bash
-brew install awsdac
-# Verify both binaries are available:
-which awsdac && which awsdac-mcp-server
+brew install awsdac          # macOS
+which awsdac && which awsdac-mcp-server   # verify
 ```
 
-The agent config at `.kiro/agents/arch-diagram.json` already references
-`awsdac-mcp-server`. Once installed, switching to the `arch-diagram` agent
-will automatically start the MCP server and make `generateDiagramToFile`
-available. The skill will call it after generating the draw.io XML to produce
-a `<project>.png` preview.
+Once installed, the `arch-diagram` agent starts it automatically and produces a
+`<project>.png` preview alongside the XML. Without it, only the XML is written.
 
-If awsdac is not installed, the skill falls back gracefully — it still
-generates the draw.io XML, it just won't produce the PNG preview.
+---
 
-## Skill discoverability
+## Creating a new diagram
 
-The default Kiro agent discovers skills via `skill://.kiro/skills/*/SKILL.md`.
-The dedicated `arch-diagram` agent (`.kiro/agents/arch-diagram.json`) is the
-recommended entry point — it has awsdac wired in and write permissions pre-approved
-for spec and diagram files.
+### 1. Via the Kiro agent (recommended)
 
-For a **custom agent** that needs access to this skill, add:
+Open the `arch-diagram` agent and describe the system:
+
+```
+/arch-diagram three-tier web app for Acme Orders — ECS Fargate, Aurora, 3 AZs,
+              one NAT Gateway, CloudFront in front of S3 static site
+```
+
+The agent asks for any missing choices, summarises the proposed design, writes a
+spec, and runs the generator. The output lands in `outputs/<project-slug>/`.
+
+### 2. Via the CLI — quick generation
+
+```bash
+source .venv/bin/activate
+
+# Auto-place in outputs/<project-slug>/ derived from metadata.project
+python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --input outputs/acme-orders/acme-orders.spec.yaml
+
+# Custom output directory
+python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --input outputs/acme-orders/acme-orders.spec.yaml \
+  --output-dir /path/to/deliverables
+
+# Explicit output path (original behaviour)
+python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --input outputs/acme-orders/acme-orders.spec.yaml \
+  --output /tmp/acme-orders.drawio.xml
+
+# Strict mode — fails if ingress paths or connectivity are incomplete
+python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --input outputs/acme-orders/acme-orders.spec.yaml \
+  --strict-connectivity
+```
+
+#### `--output-dir` behaviour
+
+| Scenario | What happens |
+|---|---|
+| `--output-dir outputs` (default) | Creates `outputs/<slug>/` from `metadata.project` and writes `<stem>.drawio.xml` there |
+| `--output-dir /path/to/dir` | Same, under that directory |
+| `--output path/to/file.drawio.xml` | Writes directly to the given path (no folder created) |
+| Neither flag given | Defaults to `--output-dir outputs` |
+
+Open the generated XML at <https://app.diagrams.net> or in the draw.io desktop app.
+
+### 3. Regenerate all outputs
+
+```bash
+source .venv/bin/activate
+for spec in outputs/**/*.spec.yaml; do
+  python .kiro/scripts/arch-diagram/generate_diagram.py --input "$spec"
+done
+```
+
+---
+
+## Adding a new client project
+
+1. Create the folder and spec:
+
+   ```bash
+   mkdir -p outputs/my-client
+   # Write outputs/my-client/my-client.spec.yaml
+   ```
+
+2. Populate the spec (see `references/spec-schema.md` for the full schema):
+
+   ```yaml
+   provider: aws
+   metadata:
+     project: "My Client"
+     version: "1.0"
+     date: "2026-10-01"
+     creator: "Your Name"
+   pages:
+     - name: "Architecture Diagram"
+       type: architecture
+       global: [ ... ]
+       edge:   [ ... ]
+       region:
+         label: "us-east-1"
+         services: [ ... ]
+         vpc:
+           label: "My VPC"
+           azs: [ ... ]
+           compute_groups: [ ... ]
+       edges: [ ... ]
+   ```
+
+3. Generate the diagram:
+
+   ```bash
+   source .venv/bin/activate
+   python .kiro/scripts/arch-diagram/generate_diagram.py \
+     --input outputs/my-client/my-client.spec.yaml
+   # → outputs/my-client/my-client.drawio.xml
+   ```
+
+4. Commit the spec only — the XML is git-ignored:
+
+   ```bash
+   git add outputs/my-client/my-client.spec.yaml
+   git commit -m "Add My Client architecture spec"
+   ```
+
+---
+
+## Running tests
+
+```bash
+source .venv/bin/activate
+pytest                           # run all 187 tests
+pytest -k "dataforge"            # run tests matching a keyword
+pytest --tb=short -q             # compact output
+```
+
+---
+
+## Extending the shape catalog
+
+`shapes.py` is the single source of truth; the `references/shapes-*.md` files
+mirror it and a drift test fails the build if they diverge.
+
+1. Add the service to the relevant dict in `shapes.py`:
+   - AWS: `_AWS[key] = (stencil_suffix, category, label)`
+   - Azure/GCP: `_AZURE[key]` / `_GCP[key] = (stencil, fill, category, label)`
+2. Add a matching row to the corresponding `references/shapes-<provider>.md`.
+3. Run `pytest` — `test_references.py` fails if the two drift apart.
+
+Stencil names follow draw.io conventions:
+`mxgraph.aws4.<name>` · `mxgraph.azure.<name>` · `mxgraph.gcp2.<name>`
+
+---
+
+## Design approach
+
+The agent asks for requirements that affect the architecture, models only the
+components and connections needed to explain the system, and writes a spec before
+rendering. The renderer handles coordinates and emits editable XML. Examples in
+`diagram examples/` and `flow diagram examples/` provide visual guidance — they
+are references, not templates.
+
+For a **custom agent** that needs access to this skill, add to its config:
+
 ```json
 {
   "resources": [
@@ -133,25 +238,3 @@ For a **custom agent** that needs access to this skill, add:
   }
 }
 ```
-
-## Design approach
-
-Kiro asks about requirements that affect the architecture, models only the
-components and important connections needed to explain the system, and writes a
-spec before rendering. The renderer handles coordinates and emits editable
-draw.io XML. The examples in `diagram examples/` provide visual guidance; they
-are not templates that every request must follow.
-
-## Extending the shape catalog
-
-`shapes.py` is the single source of truth; the `references/shapes-*.md` files
-mirror it and a drift test enforces the match.
-
-1. Add the service to the relevant dict in `shapes.py`:
-   - AWS: `_AWS[key] = (stencil_suffix, category, label)`
-   - Azure/GCP: `_AZURE[key]` / `_GCP[key] = (stencil, fill, category, label)`
-2. Add a matching row to the corresponding `references/shapes-<provider>.md`.
-3. Run `pytest` — `test_references.py` fails if the two drift apart.
-
-Stencil names follow draw.io conventions: AWS `mxgraph.aws4.<name>`, Azure
-`mxgraph.azure.<name>`, GCP `mxgraph.gcp2.<name>`.
