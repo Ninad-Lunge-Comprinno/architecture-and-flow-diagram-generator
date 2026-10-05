@@ -105,9 +105,21 @@ is part of the request path, and keep the Internet Gateway on the VPC boundary.
 For customer ingress diagrams, align Customers → WAF → Internet Gateway → ALB
 on one horizontal row when those components are present. Every AWS architecture
 page automatically includes IAM, S3, Secrets Manager, CloudWatch, CloudTrail,
-and KMS unless the service is already represented in the spec. For shared ECS/EKS services, connect
-the cluster boundary to shared data stores; connect individual AZ task nodes
-only when the AZ-specific path itself matters.
+and KMS unless the service is already represented in the spec.
+
+**Service placement rules (never deviate from these):**
+
+- `api_gateway`, `lambda`, `cognito`, `sagemaker`, `bedrock`, `ecr`, `codepipeline`,
+  `codebuild` and all other regional/serverless services go in `region.services`.
+  They are **never** placed in the `edge` strip.
+- The `edge` strip holds only: `users`, `mobile_client`, `iot_device`, `waf`,
+  `shield`, `application_load_balancer`, `network_load_balancer`,
+  `internet_gateway`, and `cloudfront` when it is the first hop for user traffic.
+- API Gateway in the request path means `users → (WAF → IGW →) API Gateway → Lambda`.
+  The users → WAF → IGW chain still applies; API Gateway stays in `region.services`
+  and the edge between them is declared in `edges`, not by placing API Gateway in `edge`.
+- Do not add explicit edges to NAT Gateway. It handles outbound routing
+  transparently at the network layer — there is no application-level connection to model.
 
 Before writing the spec, make a short connection inventory from the user's
 request. If both architecture and flow pages are requested, cross-check the
