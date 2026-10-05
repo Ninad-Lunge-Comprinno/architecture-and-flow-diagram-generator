@@ -19,8 +19,7 @@ focused questions for missing choices that would change the architecture:
 - workload purpose and users/entry path;
 - compute and data stores;
 - regions, availability zones, and resilience needs;
-- integrations or important data/deployment flows;
-- whether the user needs an architecture view, a flow view, or both.
+- integrations or important data/deployment flows.
 
 Do not ask for information already supplied. Use sensible defaults only when
 the user has stated them or they follow directly from the requested design.
@@ -28,6 +27,13 @@ Otherwise ask; do not silently invent components, availability guarantees, or
 network paths. Client name, version, date, creator, and reviewer are optional
 metadata fields; leave missing values as `To be filled` instead of blocking
 diagram generation to collect them.
+
+**Always generate both an architecture page and a flow page** unless the user
+explicitly says they only need one. The architecture page shows deployment
+boundaries and placement; the flow page shows the primary request or data path
+through the system. For most systems the primary flow is the user-facing request
+path (e.g. customer → CDN → ALB → compute → database). If the request describes
+a data pipeline or background process, use that as the flow instead.
 
 Before generating, summarize the proposed architecture, key connections, and
 any assumptions in a few bullets. Keep that review focused; do not make the
@@ -116,7 +122,9 @@ schema errors before delivery.
 For AWS multi-AZ VPC examples, use the existing AZ/subnet/compute-group schema.
 One NAT in a shared design is not a universal rule: model the user's stated
 resilience and egress requirements. Do not assume every architecture needs a
-VPC, three AZs, a CDN, a WAF, CI/CD, or a flow page.
+VPC, three AZs, a CDN, or a WAF. A single flow page is always included (see
+section 1); if independent journeys would create a crowded page, focus the flow
+on the primary request path.
 
 ## 3. Generate
 
