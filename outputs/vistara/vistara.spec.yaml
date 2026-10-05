@@ -1,0 +1,133 @@
+provider: aws
+
+metadata:
+  project: "Vistara"
+  version: "1.0"
+  date: "2026-10-05"
+  creator: "Architecture Team"
+  reviewer: "To be filled"
+
+pages:
+
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53,        service: route_53,    label: "Route 53" }
+      - { id: cf,         service: cloudfront,  label: "CloudFront CDN" }
+
+    edge:
+      - { id: users,  service: users,                      label: "Users" }
+      - { id: waf,    service: waf,                         label: "WAF" }
+      - { id: alb,    service: application_load_balancer,   label: "ALB (External)" }
+      - { id: igw,    service: internet_gateway,            label: "IGW" }
+
+    region:
+      label: "us-east-2 (Ohio)"
+
+      services:
+        - { id: ecr,       service: ecr,                    label: "ECR" }
+        - { id: kms,       service: key_management_service, label: "KMS" }
+        - { id: secrets,   service: secrets_manager,        label: "Secrets Manager" }
+        - { id: cloudwatch,service: cloudwatch_2,            label: "CloudWatch" }
+        - { id: grafana,   service: managed_grafana,         label: "Managed Grafana" }
+        - { id: amp,       service: cloudwatch_2,               label: "Managed Prometheus (AMP)" }
+
+      vpc:
+        label: "Vistara Prod VPC"
+
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources:
+                - { id: alb_int, service: application_load_balancer, label: "ALB (Internal)" }
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cassandra, service: ec2, label: "Cassandra (c6a.2xlarge)" }
+                - { id: clickhouse, service: ec2, label: "ClickHouse (m6a.4xlarge)" }
+                - { id: rds1, service: rds, label: "RDS PostgreSQL (Primary)" }
+
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: rds2, service: rds, label: "RDS PostgreSQL (Geo Replica)" }
+
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources: []
+
+        compute_groups:
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Cluster (vsg-prod01)" }
+
+    edges:
+      # Public ingress path
+      - { source: users, target: waf }
+      - { source: waf,   target: igw }
+      - { source: igw,   target: alb }
+      - { source: alb,   target: eks, label: "route" }
+
+      # EKS to data stores
+      - { source: eks,   target: alb_int,   label: "internal" }
+      - { source: eks,   target: rds1,      label: "SQL" }
+      - { source: eks,   target: cassandra, label: "NoSQL" }
+      - { source: eks,   target: clickhouse,label: "analytics" }
+
+      # RDS replication
+      - { source: rds1,  target: rds2, label: "geo-replica", dashed: true }
+
+      # Deployment
+      - { source: ecr,   target: eks, label: "deploy", dashed: true }
+
+  - name: "Request Flow"
+    type: flow
+
+    nodes:
+      - { id: user,       service: users,                     label: "User",               scope: external }
+      - { id: cdn,        service: cloudfront,                label: "CloudFront CDN" }
+      - { id: waf,        service: waf,                       label: "WAF" }
+      - { id: alb_ext,    service: application_load_balancer, label: "ALB (External)" }
+      - { id: eks_svc,    service: eks,                       label: "EKS Microservices",  scope: vpc }
+      - { id: alb_int,    service: application_load_balancer, label: "ALB (Internal)",     scope: vpc }
+      - { id: rds,        service: rds,                       label: "RDS PostgreSQL",     scope: vpc }
+      - { id: cassandra,  service: ec2,                       label: "Cassandra",          scope: vpc }
+
+    edges:
+      - { source: user,      target: cdn,      label: "HTTPS" }
+      - { source: cdn,       target: waf,      label: "origin request" }
+      - { source: waf,       target: alb_ext,  label: "filtered" }
+      - { source: alb_ext,   target: eks_svc,  label: "route" }
+      - { source: eks_svc,   target: alb_int,  label: "internal call" }
+      - { source: alb_int,   target: rds,      label: "SQL query" }
+      - { source: eks_svc,   target: cassandra, label: "NoSQL lookup" }
