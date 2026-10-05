@@ -107,21 +107,30 @@ pages:
         members: [eks, cache]
 
     nodes:
+      # Main request path — left to right on row 1
       - { id: user,          service: users,         label: "User",                  scope: external }
       - { id: apigw,         service: api_gateway,   label: "API Gateway" }
       - { id: lambda_infer,  service: lambda,        label: "Inference Lambda" }
-      - { id: cache,         service: elasticache,   label: "ElastiCache",           scope: vpc }
       - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)" }
       - { id: eks,           service: eks,           label: "EKS GPU Nodes",         scope: vpc }
+      # Cache sits below Lambda on row 2 so the hit/miss arrows are short
+      - { id: cache,         service: elasticache,   label: "ElastiCache",           scope: vpc }
+      # Model storage and training on row 3
       - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts" }
       - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training" }
 
     edges:
+      # Main request path
       - { source: user,          target: apigw,        label: "inference request" }
       - { source: apigw,         target: lambda_infer, label: "invoke" }
+      # Lambda checks cache first (short downward arrow)
       - { source: lambda_infer,  target: cache,        label: "check cache" }
-      - { source: cache,         target: user,         label: "cache hit — response", dashed: true }
-      - { source: lambda_infer,  target: bedrock,      label: "cache miss: LLM call" }
-      - { source: lambda_infer,  target: eks,          label: "cache miss: GPU inference" }
+      # Cache hit: short response back up to Lambda, Lambda returns to User
+      - { source: cache,         target: lambda_infer, label: "cache hit", dashed: true }
+      # Cache miss: go to Bedrock or EKS
+      - { source: lambda_infer,  target: bedrock,      label: "LLM call" }
+      - { source: lambda_infer,  target: eks,          label: "GPU inference" }
+      # EKS loads model from S3
       - { source: eks,           target: s3_artifacts, label: "load model" }
-      - { source: sagemaker,     target: s3_artifacts, label: "publish trained model", dashed: true }
+      # SageMaker publishes to S3
+      - { source: sagemaker,     target: s3_artifacts, label: "publish model", dashed: true }
