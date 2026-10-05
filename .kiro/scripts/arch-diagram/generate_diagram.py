@@ -3104,6 +3104,8 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
                 if len(path) > 2 else []
             # Apply anchor snapping: snap port fractions to declared connection
             # points to prevent diagonal attachment (same fix as arch page).
+            # When the fraction changes, also update the first waypoint coordinate
+            # so the first segment stays orthogonal.
             if src in boxes and exit_xy:
                 sb = boxes[src]
                 side = ("right" if exit_xy[0] == 1.0
@@ -3116,10 +3118,21 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
                     along = lo_s + (exit_xy[1] if side in ("left", "right")
                                     else exit_xy[0]) * size
                     snapped_frac = _flow_snap((along - lo_s) / size)
+                    snapped_along = lo_s + snapped_frac * size
                     if side in ("left", "right"):
+                        old_frac = exit_xy[1]
                         exit_xy = (exit_xy[0], snapped_frac)
+                        # Update first waypoint to match snapped y so first segment stays horizontal
+                        if waypoints and abs(old_frac - snapped_frac) > 0.01:
+                            wp0 = waypoints[0]
+                            waypoints = [(wp0[0], snapped_along)] + list(waypoints[1:])
                     else:
+                        old_frac = exit_xy[0]
                         exit_xy = (snapped_frac, exit_xy[1])
+                        # Update first waypoint to match snapped x so first segment stays vertical
+                        if waypoints and abs(old_frac - snapped_frac) > 0.01:
+                            wp0 = waypoints[0]
+                            waypoints = [(snapped_along, wp0[1])] + list(waypoints[1:])
         # Spec overrides always win.
         if edge.get("source_point"):
             exit_xy = tuple(float(v) for v in edge["source_point"].split(","))
