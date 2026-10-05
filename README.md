@@ -123,6 +123,8 @@ python .kiro/scripts/arch-diagram/generate_diagram.py \
 | `--output path/to/file.drawio.xml` | Writes directly to the given path (no folder created) |
 | Neither flag given | Defaults to `--output-dir outputs` |
 
+> **Note:** The folder slug is derived from `metadata.project` (e.g. `"Acme Orders"` → `acme-orders/`). If you run the generator on a spec that already has a folder under a different name (e.g. `outputs/acme-orders/`) the generator may create a second folder with the slug name. Keep the spec's `metadata.project` consistent with the folder name to avoid duplicates.
+
 Open the generated XML at <https://app.diagrams.net> or in the draw.io desktop app.
 
 ### 3. Regenerate all outputs
@@ -191,7 +193,7 @@ done
 
 ```bash
 source .venv/bin/activate
-pytest                           # run all 187 tests
+pytest                           # run all 185 tests
 pytest -k "dataforge"            # run tests matching a keyword
 pytest --tb=short -q             # compact output
 ```

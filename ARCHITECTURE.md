@@ -158,16 +158,23 @@ YAML, calls `build_document`, and writes the XML.
 **Architecture page pipeline** (`build_architecture_page`):
 
 ```
-_fix_regional_placement(page)          # auto-migrate regional services out of VPC subnets
+_fix_regional_placement(page)          # silently move regional services (Lambda, DynamoDB, etc.)
+                                       # out of VPC subnets into region.services before layout
 routing.plan_region_service_order(page) # sort region services: VPC-connected go last (nearest VPC)
 _check_unique_ids / _validate_services  # spec validation — raises SpecError on bad input
 layout.build(page)  →  Layout           # compute all node positions + container sizes
 overlap_check(lo)                       # warn on sibling-icon collisions
 emit nodes (add_icon / append Cell)     # write every positioned node to the Diagram
-route_edges(all_edges, lo)              # compute exit/entry ports + waypoints per edge
+BFS pre-routing (route_all_edges)       # batch-route non-semantic edges obstacle-aware
+semantic case routing (Cases 0-5)       # per-edge intent-aware routing
+spec overrides applied                  # source_point / target_point / waypoints win
 find_conflicts(routes, icon_boxes)      # report icon-crossings and edge-edge overlaps
 render_xml(mxfile)                      # ET.tostring → UTF-8 XML with declaration
 ```
+
+> `_fix_regional_placement` silently migrates services like DynamoDB, Lambda,
+> SQS that are incorrectly placed inside VPC subnets in the spec. It prints an
+> `ℹ AUTO-FIXED` message per migrated service but does not block generation.
 
 **Flow page pipeline** (`build_flow_page`):
 
@@ -247,20 +254,47 @@ lands adjacent to the ECS lane — keeping their edges short.
 
 #### 3b. Architecture edge routing
 
-Architecture page edges are routed by the inline case-based router in
-`generate_diagram.py` (with `routing.find_conflicts()` for validation):
+Architecture page edges go through two stages:
+
+**Stage 1 — BFS pre-routing** (`routing.route_all_edges`): Before the per-edge
+loop, edges that don't match any semantic case are batched and routed together
+through the BFS obstacle-aware router. It discretises the diagram to a 20 px
+grid, marks icon+label boxes as blocked, routes longest-first so long edges
+claim corridors first, and applies soft-obstacle penalties so successive edges
+spread into separate channels automatically. This handles general connections
+like `glue→s3` (region service to global icon) cleanly without crossing other
+icons.
+
+**Stage 2 — Semantic case routing**: Edges with intentional visual patterns
+bypass BFS and use one of these cases (in priority order):
 
 | Case | Condition | Route strategy |
 |---|---|---|
-| 1 | Source in ingress band → VPC/tall container | Exit bottom → horizontal waypoint above VPC → enter top |
-| 2 | Region service → tall cluster (ECR deploy) | Exit bottom → horizontal at midpoint → enter top |
-| 3 | Lane → icon (Sadhaka geometry) | Exit right at bus_y (AZ-gap centre) → horizontal → enter top |
-| 4 | Same-row left→right | Straight; or upper/lower band jog if blocked (obstacle-checked) |
-| 5 | Fallback | `_route_edge()` with AZ-gap corridors and VPC spine |
+| 0 | Same y-level, source left of target, path is clear | Straight horizontal, 0 waypoints |
+| 1 | Source in ingress band → VPC/tall container | Exit bottom → horizontal above VPC → enter top |
+| 2 | Region service → tall cluster (ECR deploy) | Exit bottom → staggered horizontal in svc-VPC gap → enter top; multiple sources fan-in symmetrically |
+| 2b | Cluster → DB icon (same AZ row) | Exit right at row-top band → drop into DB icon top; preceding stores use gap corridors |
+| 2c | Cluster → region service above VPC | Exit cluster top → rise to gap between svc row bottom and VPC top → enter target from below |
+| 3 | Lane → icon (Sadhaka geometry, target at or below lane top) | Exit right at bus_y (AZ-gap centre) → horizontal → enter top |
+| 4 | Same-row left→right (in AZ row) | Straight; or upper/lower band jog verified by `_seg_hits_resource()` |
+| 5 | Fallback | BFS result if available; else `_route_edge()` geometric fallback |
+
+**Spec overrides**: Any edge can specify `source_point: "fx,fy"`, `target_point:
+"fx,fy"`, or `waypoints: [[x,y],...]` to force explicit geometry. These always
+win over computed routing. When `source_point` changes the exit x-fraction, the
+first waypoint's x is updated to match, keeping the first segment orthogonal.
+
+**House style**: `label=""` is enforced on all architecture page edges. Spec
+`label` values are documentation only and are not rendered as connector text.
 
 The `_seg_hits_resource()` function checks whether a candidate polyline crosses
-any resource icon before committing to a path. If it does, the router tries the
-next candidate (upper-band jog → lower-band jog → fallback).
+any resource icon before committing to a path, enabling straight → upper-band →
+lower-band fallback in Case 4.
+
+**All routing thresholds are named constants** defined at the top of
+`generate_diagram.py` (e.g. `TALL_CONTAINER_H = 240`, `BUS_ABOVE_TARGET = 75`,
+`FAN_STAGGER_STEP = 28`) and in `routing.py` (`TASKDB_CLEAR_BASE`,
+`DB_EXIT_LEFT_FX`, etc.). See source for the full list.
 
 #### 3c. Flow edge routing — `_route_flow_edges()`
 
@@ -391,7 +425,7 @@ existing entries in `shapes.py` for the pattern.
 
 ```bash
 source .venv/bin/activate
-pytest                        # 187 tests
+pytest                        # 185 tests
 pytest -k "layout"            # run a subset
 pytest --tb=short -q          # compact output
 ```
@@ -404,8 +438,10 @@ Key test files:
 | `test_polish.py` | Icon styles, edge stroke widths, label wrapping, routing heuristics |
 | `test_overlap.py` | Overlap checker: detects collisions, skips intentional lane-over-AZ overlaps |
 | `test_layout_requirements.py` | Regression tests: WAF+ALB side-by-side, external actors outside cloud, Lambda row, boundary containment |
-| `test_routing.py` | `plan_region_service_order`: Lambda ends up in last row, ECR at end |
+| `test_routing.py` | `plan_region_service_order`: APIGW-connected services land in last row; ECR at end |
 | `test_regional_fix.py` | Auto-migration of regional services out of VPC subnets |
 | `test_references.py` | `shapes.py` ↔ `shapes-aws.md` drift; SKILL.md front-matter; house-style container list |
 | `test_generate.py` | XML validity, unique IDs, edge references, title block |
 | `test_shapes.py` | Shape lookup, style strings, dynamic fallback, unknown service handling |
+| `test_flow_layout.py` | Flow page layout: topological ordering, fan-out, explicit position overrides |
+| `test_dynamic_catalog.py` | AWS dynamic shape fallback for unknown service keys |
