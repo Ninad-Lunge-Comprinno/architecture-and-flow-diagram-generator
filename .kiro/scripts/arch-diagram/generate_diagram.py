@@ -2887,7 +2887,14 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
         nid = node["id"]
         auto_x, auto_y = auto_pos.get(nid, (40, 60))
         x = node.get("x", auto_x)
-        y = node.get("y", auto_y + header_y)
+        # Explicit y values are spec-relative (0 = top of content area).
+        # Add header_y so they align with the auto-positioned nodes which
+        # already include the header offset. Without this, explicit positions
+        # overlap the title block and Comprinno logo.
+        if "y" in node:
+            y = node["y"] + header_y
+        else:
+            y = auto_y + header_y
         boxes[nid] = (x, y, ICON_SIZE, ICON_SIZE)
 
     # AWS flow pages use the same cloud boundary as the architecture examples.
