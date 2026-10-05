@@ -2133,15 +2133,14 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
         src_cx2 = src_box[0] + src_box[2] / 2
         src_cy2 = src_box[1] + src_box[3] / 2
         tgt_cy2 = tgt_box[1] + tgt_box[3] / 2
-        # Case 0: same-y straight horizontal — only when path is clear of icons
+        # Case 0: same-y straight horizontal (or above-row if blocked) —
+        # always handled here, never sent to BFS
         src_cy_c = src_box[1] + src_box[3] / 2
         tgt_cy_c = tgt_box[1] + tgt_box[3] / 2
         if (abs(src_cy_c - tgt_cy_c) < 5
                 and tgt_box[0] > src_box[0] + src_box[2] - 5
                 and not in_band):
-            cand = [(src_box[0] + src_box[2], src_cy_c), (tgt_box[0], src_cy_c)]
-            if _seg_hits_resource(cand, boxes, kind_of, src, tgt) is None:
-                return True
+            return True
         # Case 1
         if in_band and (is_target_tall or tgt_in_vpc2) and not use_spine2:
             return True
@@ -2250,9 +2249,18 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
                     and not src_in_ingress_band):
                 cand_straight = [(src_box[0] + src_box[2], src_cy), (tgt_box[0], src_cy)]
                 if _seg_hits_resource(cand_straight, boxes, kind_of, src, tgt) is None:
+                    # Clear path — simple straight horizontal.
                     exit_xy = (1.0, 0.5)
                     entry_xy = (0.0, 0.5)
                     waypoints = []
+                else:
+                    # Blocked by an icon in between — route ABOVE the row.
+                    # This is cleaner than falling to BFS which struggles in
+                    # the tight gap between the region services row and the cloud top.
+                    above_y = src_box[1] - SAME_Y_ABOVE_CLEARANCE
+                    exit_xy = (0.5, 0.0)   # exit top of source
+                    entry_xy = (0.5, 0.0)  # enter top of target
+                    waypoints = [(src_cx, above_y), (tgt_cx, above_y)]
 
             # Case 1: Ingress band → VPC or tall container
             elif src_in_ingress_band and (is_target_tall or tgt_in_vpc) and not use_spine:
