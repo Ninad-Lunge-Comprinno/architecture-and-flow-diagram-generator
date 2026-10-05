@@ -72,6 +72,48 @@ def test_merge_waits_for_latest_predecessor():
     assert pos["a"][0] < pos["b"][0] == pos["c"][0] < pos["d"][0]
 
 
+def test_parallel_paths_no_crossing():
+    """Two independent paths A→C and B→D must not cross.
+
+    A and B share the source rank (same x); C and D share the target rank
+    (same x). Sugiyama ordering should keep the paths parallel: whichever of
+    A/B is on top, its target should be on top too.
+    """
+    spec = {
+        "nodes": [{"id": "A", "service": "ecs"}, {"id": "B", "service": "ecs"},
+                  {"id": "C", "service": "rds"}, {"id": "D", "service": "rds"}],
+        "edges": [{"source": "A", "target": "C"},
+                  {"source": "B", "target": "D"}],
+    }
+    pos = gd._flow_layout(**spec)
+    # A and B are in the same layer (rank 0) -> same x.
+    assert abs(pos["A"][0] - pos["B"][0]) < 5
+    # C and D are in the same layer (rank 1) -> same x, right of the sources.
+    assert abs(pos["C"][0] - pos["D"][0]) < 5
+    assert pos["C"][0] > pos["A"][0]
+    # No crossing: the vertical order of sources matches that of their targets.
+    assert (pos["A"][1] < pos["B"][1]) == (pos["C"][1] < pos["D"][1])
+
+
+def test_fan_from_single_source_same_layer():
+    """A single source fanning out to two targets puts the targets together.
+
+    lambda→bedrock and lambda→eks: bedrock and eks share the same rank (same
+    x), landing on sibling rows rather than different layers.
+    """
+    spec = {
+        "nodes": [{"id": "lambda", "service": "lambda"},
+                  {"id": "bedrock", "service": "bedrock"},
+                  {"id": "eks", "service": "eks"}],
+        "edges": [{"source": "lambda", "target": "bedrock"},
+                  {"source": "lambda", "target": "eks"}],
+    }
+    pos = gd._flow_layout(**spec)
+    # Both targets sit in the same layer (same x), one rank right of the source.
+    assert abs(pos["bedrock"][0] - pos["eks"][0]) < 5
+    assert pos["bedrock"][0] > pos["lambda"][0]
+
+
 def test_layout_is_deterministic_for_same_graph():
     spec = _flow_spec_fan()
     assert gd._flow_layout(**spec) == gd._flow_layout(**spec)
@@ -673,3 +715,35 @@ def test_flow_label_offset_is_dropped_for_hand_placed_geometry():
                    "waypoints": [[300, 200]]}],
     }, "aws", "page")
     assert not any(cell.label_offset for cell in diagram.cells if cell.edge)
+
+
+def test_fan_out_port_order():
+    """A fan-out must assign source ports in spatial order: the arrow heading to
+    the top target leaves from a lower port (smaller y) than the arrow heading
+    to the bottom target. Edges are accumulated in arbitrary order, so the
+    planner has to sort by the opposite endpoint's position, not arrival order."""
+    size = gd.ICON_SIZE
+    # Source on the left; three targets to the right at increasing y. The edges
+    # are deliberately NOT listed top-to-bottom to prove the sort does the work.
+    boxes = {
+        "src": (0, 400, size, size),
+        "t_mid": (500, 400, size, size),
+        "t_top": (500, 100, size, size),
+        "t_bot": (500, 700, size, size),
+    }
+    edges = [
+        {"source": "src", "target": "t_mid"},
+        {"source": "src", "target": "t_top"},
+        {"source": "src", "target": "t_bot"},
+    ]
+    order = list(range(len(edges)))
+    shapes = {index: "h" for index in order}  # all side-to-side runs
+    plan = gd._plan_flow_ports(edges, boxes, order, shapes)
+
+    # On the source's right side the port coordinate is a y value; the arrow to
+    # the top target (lowest y) must sit above the one to the bottom target.
+    y_top = plan[(1, "source")][1]
+    y_mid = plan[(0, "source")][1]
+    y_bot = plan[(2, "source")][1]
+    assert plan[(1, "source")][0] == "right"
+    assert y_top < y_mid < y_bot

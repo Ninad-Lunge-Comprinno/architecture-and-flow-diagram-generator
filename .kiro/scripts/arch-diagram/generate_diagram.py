@@ -1352,6 +1352,13 @@ def _plan_flow_ports(edges, boxes, order, shapes) -> dict:
         size = span[1] - span[0]
         lo, hi = span[0] + size * FLOW_PORT_MARGIN, \
             span[1] - size * FLOW_PORT_MARGIN
+        # Order the arrows on this side by where their opposite ends sit, so a
+        # fan-out assigns ports top-to-bottom (left/right sides) or
+        # left-to-right (top/bottom sides) instead of in arrival order. The
+        # ``want`` field already holds the opposite endpoint's coordinate on
+        # the relevant axis (y for left/right, x for top/bottom), and the
+        # original index is the deterministic tie-break.
+        keys = sorted(keys, key=lambda key: (key[2], key[0]))
         desired = [want for _, _, want, _ in keys]
         pinned = [position for position, key in enumerate(keys) if key[3]]
         fractions = _flow_place_ports(desired, lo, hi, FLOW_PORT_STEP, pinned)
@@ -2664,6 +2671,36 @@ def build_architecture_page(page: dict, default_provider: str, diagram_id: str,
     return diagram
 
 
+def _count_crossings(layers: dict[int, list[str]], layer_ids: list[int],
+                     order_in_layer: dict[str, int],
+                     outgoing: dict[str, list[str]]) -> int:
+    """Count edge crossings between every pair of adjacent layers.
+
+    For an A->B edge pair (a1->b1, a2->b2) with a1,a2 in layer A and b1,b2 in
+    layer B, the two edges cross when their endpoints are in opposite vertical
+    order on each side, i.e. (order[a1] < order[a2]) != (order[b1] < order[b2]).
+    """
+    total = 0
+    for upper, lower in zip(layer_ids, layer_ids[1:]):
+        lower_set = set(layers[lower])
+        # Collect A->B edges as (order_in_layer[a], order_in_layer[b]) pairs.
+        pairs: list[tuple[int, int]] = []
+        for a in layers[upper]:
+            oa = order_in_layer.get(a, 0)
+            for b in outgoing.get(a, []):
+                if b in lower_set:
+                    pairs.append((oa, order_in_layer.get(b, 0)))
+        for i in range(len(pairs)):
+            a1, b1 = pairs[i]
+            for j in range(i + 1, len(pairs)):
+                a2, b2 = pairs[j]
+                if a1 == a2 or b1 == b2:
+                    continue
+                if (a1 < a2) != (b1 < b2):
+                    total += 1
+    return total
+
+
 def _flow_layout(nodes: list[dict], edges: list[dict],
                  groups: Optional[list[dict]] = None) -> dict[str, tuple[float, float]]:
     """Lay out a directed flow in left-to-right ranks and scope lanes.
@@ -2752,20 +2789,58 @@ def _flow_layout(nodes: list[dict], edges: list[dict],
     order_in_layer = {nid: i for layer in layers.values()
                       for i, nid in enumerate(layer)}
 
-    # Stable barycenter sweeps keep connected branches near each other.
-    for _ in range(4):
+    # Sugiyama-style crossing minimisation: sweep the layers forward and
+    # backward, reordering each layer by the MEDIAN position of a node's
+    # neighbours in the adjacent layer. Median (not average) is the classic
+    # Eades-Wei heuristic and resists outliers pulling a node off-centre.
+    # After each full pass we count crossings and keep the best ordering seen.
+    def _median(values: list[int]) -> float:
+        values = sorted(values)
+        count = len(values)
+        mid = count // 2
+        if count % 2:
+            return float(values[mid])
+        return (values[mid - 1] + values[mid]) / 2.0
+
+    best_order = dict(order_in_layer)
+    best_crossings = _count_crossings(layers, layer_ids, order_in_layer, outgoing)
+    for _ in range(8):
+        # Forward sweep: order each layer by the median of its predecessors.
         for layer_index in layer_ids[1:]:
             layer = layers[layer_index]
-            layer.sort(key=lambda nid: (
-                sum(order_in_layer.get(p, 0) for p in incoming[nid]) /
-                max(1, len(incoming[nid])), order[nid]))
+            keys = {}
+            for nid in layer:
+                preds = incoming[nid]
+                if preds:
+                    med = _median([order_in_layer.get(p, 0) for p in preds])
+                else:
+                    med = order_in_layer.get(nid, 0)
+                keys[nid] = (med, order[nid])
+            layer.sort(key=lambda nid: keys[nid])
             order_in_layer.update({nid: i for i, nid in enumerate(layer)})
+        # Backward sweep: order each layer by the median of its successors.
         for layer_index in reversed(layer_ids[:-1]):
             layer = layers[layer_index]
-            layer.sort(key=lambda nid: (
-                sum(order_in_layer.get(c, 0) for c in outgoing[nid]) /
-                max(1, len(outgoing[nid])), order[nid]))
+            keys = {}
+            for nid in layer:
+                succs = outgoing[nid]
+                if succs:
+                    med = _median([order_in_layer.get(c, 0) for c in succs])
+                else:
+                    med = order_in_layer.get(nid, 0)
+                keys[nid] = (med, order[nid])
+            layer.sort(key=lambda nid: keys[nid])
             order_in_layer.update({nid: i for i, nid in enumerate(layer)})
+        crossings = _count_crossings(layers, layer_ids, order_in_layer, outgoing)
+        if crossings < best_crossings:
+            best_crossings = crossings
+            best_order = dict(order_in_layer)
+
+    # Use the best ordering seen for row packing, and restore each layer's
+    # node sequence to match it so downstream enumeration stays consistent.
+    order_in_layer = best_order
+    for layer_index in layer_ids:
+        layers[layer_index].sort(key=lambda nid: order_in_layer[nid])
 
     # Carry each chain's row through the graph, then pack siblings only when
     # they share a rank and scope. Cross-scope edges inherit the parent's row,
@@ -2968,25 +3043,91 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
         )
         diagram.add_outer_border(bx, by, right - bx + 40, bottom - by + 40, margin=0)
 
-    flow_routes = _route_flow_edges(page.get("edges", []), boxes)
-    for edge_index, edge in enumerate(page.get("edges", [])):
+    # Local import keeps the module importable without the routing engine
+    # (e.g. lightweight unit tests) and avoids any circular-import risk.
+    import routing as _flow_routing
+
+    all_flow_edges = page.get("edges", []) or []
+    icon_ids_flow = {node["id"] for node in nodes if node["id"] in boxes}
+
+    # Build bounds from all node positions.
+    bx_vals = [b[0] for b in boxes.values()] + [b[0] + b[2] for b in boxes.values()]
+    by_vals = [b[1] for b in boxes.values()] + [b[1] + b[3] for b in boxes.values()]
+    flow_bounds = (min(bx_vals) - 40, min(by_vals) - 40,
+                   max(bx_vals) + 40, max(by_vals) + 40)
+
+    # Separate auto-routable edges from spec-overridden ones. Edges carrying
+    # hand-placed geometry keep their explicit ports/waypoints below.
+    auto_edge_pairs = [
+        (e["source"], e["target"])
+        for e in all_flow_edges
+        if e.get("source") in boxes and e.get("target") in boxes
+        and not (e.get("source_point") or e.get("target_point") or e.get("waypoints"))
+    ]
+
+    # Route with the A* grid router (same engine as the architecture page).
+    try:
+        bfs_routes, bfs_endpoints, bfs_conflicts = _flow_routing.route_all_edges(
+            auto_edge_pairs, boxes, icon_ids_flow, flow_bounds)
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        # Fall back to the legacy channel router if the grid router fails.
+        print(f"  ⚠  FLOW ROUTING: A* router failed ({exc}); "
+              f"falling back to channel router", flush=True)
+        bfs_routes, bfs_endpoints, bfs_conflicts = {}, {}, None
+        _legacy = _route_flow_edges(all_flow_edges, boxes)
+        for edge_index, edge in enumerate(all_flow_edges):
+            if edge_index < len(_legacy) and _legacy[edge_index] is not None:
+                e_xy, en_xy, wps, _lbl = _legacy[edge_index]
+                ekey = (edge["source"], edge["target"])
+                bfs_endpoints[ekey] = (e_xy, en_xy)
+                bfs_routes[ekey] = ([None] + list(wps or []) + [None])
+
+    # Report conflicts.
+    if bfs_conflicts:
+        n_ic = sum(1 for c in bfs_conflicts if c[0] == "edge_icon")
+        n_ee = sum(1 for c in bfs_conflicts if c[0] == "edge_edge")
+        print(f"  ⚠  FLOW ROUTING: {len(auto_edge_pairs)} edges routed with "
+              f"{n_ic} icon and {n_ee} edge crossings", flush=True)
+    elif bfs_conflicts is not None:
+        print(f"  ✓  FLOW ROUTING: {len(auto_edge_pairs)} edges routed with no "
+              f"icon/edge conflicts", flush=True)
+
+    for edge in all_flow_edges:
         src, tgt = edge["source"], edge["target"]
         exit_xy = entry_xy = None
         waypoints = None
-        label_offset = None
-        if edge_index < len(flow_routes) and flow_routes[edge_index] is not None:
-            exit_xy, entry_xy, waypoints, label_offset = flow_routes[edge_index]
-            if edge.get("waypoints"):
-                waypoints = [tuple(point) for point in edge["waypoints"]]
-            if edge.get("source_point") or edge.get("target_point") \
-                    or edge.get("waypoints"):
-                # Hand-placed geometry wins, and it no longer matches the route
-                # the label offset was measured against.
-                label_offset = None
-            if edge.get("source_point"):
-                exit_xy = tuple(float(value) for value in edge["source_point"].split(","))
-            if edge.get("target_point"):
-                entry_xy = tuple(float(value) for value in edge["target_point"].split(","))
+        ekey = (src, tgt)
+        if ekey in bfs_routes and bfs_routes[ekey]:
+            path = bfs_routes[ekey]
+            exit_xy, entry_xy = bfs_endpoints[ekey]
+            waypoints = [tuple(p) for p in path[1:-1] if p is not None] \
+                if len(path) > 2 else []
+            # Apply anchor snapping: snap port fractions to declared connection
+            # points to prevent diagonal attachment (same fix as arch page).
+            if src in boxes and exit_xy:
+                sb = boxes[src]
+                side = ("right" if exit_xy[0] == 1.0
+                        else "left" if exit_xy[0] == 0.0
+                        else "bottom" if exit_xy[1] == 1.0
+                        else "top")
+                lo_s, hi_s = _flow_side_span(sb, side)
+                size = hi_s - lo_s
+                if size > 0:
+                    along = lo_s + (exit_xy[1] if side in ("left", "right")
+                                    else exit_xy[0]) * size
+                    snapped_frac = _flow_snap((along - lo_s) / size)
+                    if side in ("left", "right"):
+                        exit_xy = (exit_xy[0], snapped_frac)
+                    else:
+                        exit_xy = (snapped_frac, exit_xy[1])
+        # Spec overrides always win.
+        if edge.get("source_point"):
+            exit_xy = tuple(float(v) for v in edge["source_point"].split(","))
+        if edge.get("target_point"):
+            entry_xy = tuple(float(v) for v in edge["target_point"].split(","))
+        if edge.get("waypoints"):
+            waypoints = [tuple(p) for p in edge["waypoints"]]
+        # Strip any dashed styling: flow edges render solid.
         solid_edge = dict(edge)
         solid_edge.pop("dashed", None)
         if solid_edge.get("style"):
@@ -3003,7 +3144,6 @@ def build_flow_page(page: dict, default_provider: str, diagram_id: str,
             waypoints=waypoints,
             exit_xy=exit_xy,
             entry_xy=entry_xy,
-            label_offset=label_offset,
         )
     return diagram
 
