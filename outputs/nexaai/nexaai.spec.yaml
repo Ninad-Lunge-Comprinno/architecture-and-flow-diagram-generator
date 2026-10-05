@@ -107,19 +107,19 @@ pages:
         members: [eks, cache]
 
     nodes:
-      # Explicit positions so the flow reads cleanly:
-      # Row 1 (y=100): API GW → Lambda → EKS  (main request path)
-      # Row 2 (y=380): Cache (below Lambda)  S3 Artefacts (below EKS)
-      # Row 3 (y=660): Bedrock (below Cache)  SageMaker (below S3)
-      # User sits to the left, centred on rows 1-2
-      - { id: user,          service: users,         label: "User",              scope: external, y: 240 }
-      - { id: apigw,         service: api_gateway,   label: "API Gateway",       x: 380,  y: 100 }
-      - { id: lambda_infer,  service: lambda,        label: "Inference Lambda",  x: 660,  y: 100 }
-      - { id: eks,           service: eks,           label: "EKS GPU Nodes",     scope: vpc, x: 940, y: 100 }
-      - { id: cache,         service: elasticache,   label: "ElastiCache",       scope: vpc, x: 940, y: 380 }
-      - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts", x: 660, y: 380 }
-      - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)",     x: 660,  y: 660 }
-      - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training", x: 380, y: 660 }
+      # Explicit absolute y positions (include 280px header offset):
+      # Row 1 (y=380): API GW → Lambda → EKS  (main request path)
+      # Row 2 (y=660): S3 Artefacts, Cache    (dependencies, below row 1)
+      # Row 3 (y=940): SageMaker, Bedrock      (training / LLM, bottom)
+      # User at x=100, y=520 (centred between rows 1 and 2)
+      - { id: user,          service: users,         label: "User",              scope: external, y: 520 }
+      - { id: apigw,         service: api_gateway,   label: "API Gateway",       x: 380,  y: 380 }
+      - { id: lambda_infer,  service: lambda,        label: "Inference Lambda",  x: 660,  y: 380 }
+      - { id: eks,           service: eks,           label: "EKS GPU Nodes",     scope: vpc, x: 940, y: 380 }
+      - { id: cache,         service: elasticache,   label: "ElastiCache",       scope: vpc, x: 940, y: 660 }
+      - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts", x: 660, y: 660 }
+      - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)",     x: 660,  y: 940 }
+      - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training", x: 380, y: 940 }
 
     edges:
       # Main request path
