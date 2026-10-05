@@ -107,29 +107,29 @@ pages:
         members: [eks, cache]
 
     nodes:
-      # Positions are computed by the Sugiyama flow layout (crossing-minimised
-      # median barycenter). Explicit x/y overrides are no longer needed.
-      - { id: user,          service: users,         label: "User",              scope: external }
-      - { id: apigw,         service: api_gateway,   label: "API Gateway" }
-      - { id: lambda_infer,  service: lambda,        label: "Inference Lambda" }
-      - { id: eks,           service: eks,           label: "EKS GPU Nodes",     scope: vpc }
-      - { id: cache,         service: elasticache,   label: "ElastiCache",       scope: vpc }
-      - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts" }
-      - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)" }
-      - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training" }
+      # Main path: User → APIGW → Lambda, then Lambda fans to Bedrock and EKS.
+      # Explicit positions (absolute, including 280px header offset) so EKS and
+      # Bedrock land side-by-side on the main row rather than in a chain.
+      # Row 1 (y=380): User  APIGW  Lambda  EKS   Bedrock
+      # Row 2 (y=660): SageMaker   S3      Cache
+      - { id: user,          service: users,         label: "User",              scope: external, y: 380 }
+      - { id: apigw,         service: api_gateway,   label: "API Gateway",       x:  380, y: 380 }
+      - { id: lambda_infer,  service: lambda,        label: "Inference Lambda",  x:  660, y: 380 }
+      - { id: eks,           service: eks,           label: "EKS GPU Nodes",     scope: vpc, x:  940, y: 380 }
+      - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)",     x: 1220, y: 380 }
+      - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training", x: 380, y: 660 }
+      - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts", x: 660, y: 660 }
+      - { id: cache,         service: elasticache,   label: "ElastiCache",       scope: vpc, x: 940, y: 660 }
 
     edges:
-      # Main request path
-      - { source: user,          target: apigw,        label: "inference request" }
+      # Primary request path (left to right)
+      - { source: user,          target: apigw,        label: "request" }
       - { source: apigw,         target: lambda_infer, label: "invoke" }
-      # Lambda checks cache first (short downward arrow)
-      - { source: lambda_infer,  target: cache,        label: "check cache" }
-      # Cache hit: short response back up to Lambda, Lambda returns to User
-      - { source: cache,         target: lambda_infer, label: "cache hit", dashed: true }
-      # Cache miss: go to Bedrock or EKS
-      - { source: lambda_infer,  target: bedrock,      label: "LLM call" }
+      # Lambda fans to Bedrock (LLM) and EKS (GPU) — parallel branches
       - { source: lambda_infer,  target: eks,          label: "GPU inference" }
-      # EKS loads model from S3
+      - { source: lambda_infer,  target: bedrock,      label: "LLM call" }
+      # EKS pulls model from S3; SageMaker publishes models
       - { source: eks,           target: s3_artifacts, label: "load model" }
-      # SageMaker publishes to S3
       - { source: sagemaker,     target: s3_artifacts, label: "publish model", dashed: true }
+      # Cache side-lookup from Lambda
+      - { source: lambda_infer,  target: cache,        label: "cache lookup" }
