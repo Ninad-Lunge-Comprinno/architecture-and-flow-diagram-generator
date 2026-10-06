@@ -120,9 +120,62 @@ def plan_region_service_order(page: dict) -> None:
             return 1          # connected to another region service → middle
         return 0              # unconnected → front
 
-    order = sorted(range(len(services)),
-                   key=lambda i: (_score(services[i]["id"]), i))
-    region_spec["services"] = [services[i] for i in order]
+    # Primary order: by score band, then spec order (stable).
+    index_of = {s["id"]: i for i, s in enumerate(services)}
+    primary = sorted(range(len(services)),
+                     key=lambda i: (_score(services[i]["id"]), i))
+
+    # Refinement: keep connected service↔service chains CONTIGUOUS and in flow
+    # order. Without this, a pair like API Gateway → Lambda can land at opposite
+    # ends of the row (because scoring buckets them separately), forcing one long
+    # back-edge that crosses every edge in between. We walk the directed
+    # service-only subgraph and emit each chain as a block, anchored at the
+    # position of its earliest member in the primary order.
+    svc_edges = [(e.get("source"), e.get("target")) for e in edges
+                 if e.get("source") in svc_ids and e.get("target") in svc_ids]
+    succ: dict = {}
+    pred_count: dict = {sid: 0 for sid in svc_ids}
+    for s, t in svc_edges:
+        succ.setdefault(s, []).append(t)
+        pred_count[t] = pred_count.get(t, 0) + 1
+
+    def _chain_from(start: str, visited: set) -> list:
+        """Follow successors from a chain head into a single ordered block."""
+        block = []
+        node = start
+        while node is not None and node not in visited:
+            visited.add(node)
+            block.append(node)
+            # Follow the successor that appears earliest in the primary order so
+            # the block stays left→right consistent; stop on branches/cycles.
+            nexts = [n for n in succ.get(node, []) if n not in visited]
+            node = min(nexts, key=lambda n: index_of[n]) if nexts else None
+        return block
+
+    ordered: list = []
+    emitted: set = set()
+    for i in primary:
+        sid = services[i]["id"]
+        if sid in emitted:
+            continue
+        # Only start a block at a chain HEAD (no service predecessor); other
+        # nodes are pulled in when their head is emitted. Nodes with a
+        # predecessor but whose head was already placed fall through naturally.
+        if pred_count.get(sid, 0) == 0 and sid in succ:
+            block = _chain_from(sid, emitted)
+            ordered.extend(block)
+        elif sid not in emitted:
+            emitted.add(sid)
+            ordered.append(sid)
+
+    # Any service not yet emitted (e.g. mid-chain nodes reached only via a
+    # branch) are appended in primary order as a safety net.
+    for i in primary:
+        sid = services[i]["id"]
+        if sid not in set(ordered):
+            ordered.append(sid)
+
+    region_spec["services"] = [services[index_of[sid]] for sid in ordered]
 
 
 # ---------------------------------------------------------------------------

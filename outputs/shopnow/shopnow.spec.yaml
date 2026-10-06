@@ -86,7 +86,6 @@ pages:
       - { source: alb, target: ecs, label: "route" }
       - { source: ecs, target: cache1, label: "cache" }
       - { source: ecs, target: aurora1, label: "queries" }
-      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
       - { source: ecr, target: ecs, label: "deploy", dashed: true }
 
   - name: "Request Flow"

@@ -215,14 +215,13 @@ edges:
   - { source: alb, target: ecs, label: "route" }            # shared cluster boundary
   - { source: ecs, target: cache1, label: "cache" }
   - { source: ecs, target: rds1, label: "queries" }
-  - { source: rds1, target: rds2, label: "replication", dashed: true }
   - { source: ecr, target: ecs, label: "deploy", dashed: true }
 ```
 | field | required | description |
 |-------|----------|-------------|
 | `source` / `target` | yes | ids of existing elements; `<group>-<az>` targets are for AZ-specific paths |
 | `label` | no | edge label |
-| `dashed` | no | `true` for async/deploy/replication flows |
+| `dashed` | no | `true` for async or deploy flows |
 | `az_specific` | no | `true` when an edge intentionally targets one ECS/EKS AZ task |
 | `style` | no | raw draw.io style override (disables auto-routing) |
 

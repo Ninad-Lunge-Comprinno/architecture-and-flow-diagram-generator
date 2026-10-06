@@ -144,17 +144,27 @@ Write `<project-slug>.spec.yaml`, then run:
 
 ```bash
 .venv/bin/python .kiro/scripts/arch-diagram/generate_diagram.py \
-  --strict-connectivity --input <project-slug>.spec.yaml \
-  --output <project-slug>.drawio.xml
+  --strict-connectivity --png --input <project-slug>.spec.yaml
 ```
 
+The `--png` flag generates a structural PNG preview of each page. After
+generation, **read each PNG** back (using the image-reading tool) and visually
+verify layout, grouping, edge routing, and label legibility. This self-review
+step catches overlapping arrows, disconnected nodes, and crowding that XML
+validation alone cannot establish. If Pillow is not installed (the `--png` flag
+warns and skips), say so and report the checks actually completed.
+
 Resolve connectivity errors before delivery; ask the user about any path the
-requirements do not establish. Review warnings and the resulting
-diagram at normal viewing size when a renderer/preview is available. XML
-validity alone does not establish visual quality. If a preview is unavailable,
-say so and report the checks actually completed. Keep the output landscape and
-readable, with a clear hierarchy, aligned groups, restrained crossings, legible
-labels, and a title block populated from available metadata.
+requirements do not establish. Keep the output landscape and readable, with a
+clear hierarchy, aligned groups, restrained crossings, legible labels, and a
+title block populated from available metadata.
+
+Standalone rendering (without regenerating XML):
+
+```bash
+.venv/bin/python .kiro/scripts/arch-diagram/render_png.py \
+  --input <project-slug>.drawio.xml
+```
 
 ## 4. Deliver
 

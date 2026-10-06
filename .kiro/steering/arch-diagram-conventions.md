@@ -30,3 +30,11 @@ focused pages when combining them creates long crossovers or a crowded canvas.
 The local provider shape catalogs define supported service keys. Do not invent
 stencil names. If a needed service is unsupported, explain that and extend the
 catalog only when that work is part of the request.
+
+For a multi-AZ relational database (RDS or Aurora) spanning three AZs, show one
+database node per AZ (primary plus standby/replica in each remaining AZ) so the
+three-node multi-AZ topology is explicit. Do not draw replication edges between
+the nodes — the AZ placement already communicates multi-AZ; adding replication
+arrows clutters the diagram without adding information. This applies only when
+the user asks for a multi-AZ relational database; do not add database nodes to
+designs that do not include one.

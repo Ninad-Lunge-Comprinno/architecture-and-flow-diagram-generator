@@ -94,8 +94,6 @@ pages:
       - { source: alb, target: ecs, label: "route" }
       - { source: ecs-az1, target: valkey1, label: "cache" }
       - { source: ecs-az1, target: aurora1, label: "SQL" }
-      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
-      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
       - { source: ecr, target: ecs, label: "deploy", dashed: true }
 
   - name: "Flow Diagram"

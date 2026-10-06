@@ -236,7 +236,21 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     lanes_w = (len(groups) * LANE_W + max(0, len(groups) - 1) * LANE_GAP) if groups else 0
     app_res_w = max((_subnet_width(len((az.get("app_subnet") or {}).get("resources", [])))
                      for az in azs), default=SUBNET_MIN_W)
-    app_w = max(lanes_w + 2 * SUBNET_PAD_X, app_res_w, SUBNET_MIN_W)
+    max_app_res = max((len((az.get("app_subnet") or {}).get("resources", []))
+                       for az in azs), default=0)
+    # When compute lanes AND app-subnet resources coexist, they must sit
+    # SIDE BY SIDE (lanes overlay the left of the app band; resources go to the
+    # right of the lanes). Reserve the lane footprint, then add room for the
+    # app resources. When one of them is absent, fall back to the single width.
+    if lanes_w and max_app_res:
+        app_res_content = (max_app_res * max(ICON, LABEL_WIDTH)
+                           + max(0, max_app_res - 1) * ICON_GAP)
+        app_reserve_left = lanes_w + LANE_GAP
+        app_w = max(SUBNET_MIN_W,
+                    app_reserve_left + app_res_content + 2 * SUBNET_PAD_X)
+    else:
+        app_reserve_left = 0
+        app_w = max(lanes_w + 2 * SUBNET_PAD_X, app_res_w, SUBNET_MIN_W)
 
     # ---- AZ column offsets (relative to AZ content origin) ---------------
     col_pub_x = AZ_INNER_PAD_X
@@ -572,7 +586,9 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                              width=w, height=th,
                              abs_x=az_abs_x + col_x,
                              abs_y=az_abs_y + AZ_INNER_PAD_TOP,
-                             default_provider=default_provider)
+                             default_provider=default_provider,
+                             reserve_left=(app_reserve_left
+                                           if tier == "app_subnet" else 0))
 
     # ---- VPC corridor x and region right corridor ------------------------
     lo.vpc_corridor_x = vpc_abs_x + VPC_LEFT_MARGIN / 2
@@ -673,7 +689,8 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 
 def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
                  rel_x: float, rel_y: float, width: float, height: float,
-                 abs_x: float, abs_y: float, default_provider: str):
+                 abs_x: float, abs_y: float, default_provider: str,
+                 reserve_left: float = 0):
     lo.add(Node(subnet["id"], kind, parent, rel_x, rel_y, width, height,
                 label=subnet.get("label", subnet["id"])),
            abs_x, abs_y)
@@ -689,7 +706,13 @@ def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
     rows = (n + actual_cols - 1) // actual_cols
     grid_w = actual_cols * ICON + (actual_cols - 1) * ICON_GAP
     grid_h = rows * ICON + (rows - 1) * ICON_GAP
-    start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
+    if reserve_left:
+        # Resources sit to the RIGHT of a reserved band (the compute lanes
+        # overlay the left of the app subnet). Left-align them in the
+        # remaining space so they never sit under a lane node.
+        start_x = reserve_left + max(SUBNET_PAD_X, (width - reserve_left - grid_w) / 2)
+    else:
+        start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
     for idx, res in enumerate(resources):
         col_i = idx % actual_cols
         row_i = idx // actual_cols

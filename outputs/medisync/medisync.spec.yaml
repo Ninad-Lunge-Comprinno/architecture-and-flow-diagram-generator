@@ -85,9 +85,6 @@ pages:
       # ECS tasks (AZ1) to data tier
       - { source: ecs-az1, target: cache1, label: "cache" }
       - { source: ecs-az1, target: aurora1, label: "SQL" }
-      # Aurora replication primary -> replicas
-      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
-      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
       # CI/CD deploy to ECS cluster boundary
       - { source: ecr, target: ecs, label: "deploy", dashed: true }
 

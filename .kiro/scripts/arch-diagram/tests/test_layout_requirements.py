@@ -173,7 +173,7 @@ def _full_dataforge_layout():
             ],
         }],
     }
-    lo = gd._import_layout()
+    lo = gd.layout
     page = spec["pages"][0]
     gd._fix_regional_placement(page)
     gd._reorder_services_for_vpc_proximity(page)
