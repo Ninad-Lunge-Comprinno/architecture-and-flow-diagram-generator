@@ -1,0 +1,130 @@
+provider: aws
+metadata:
+  project: "HealthBridge Patient Portal Migration"
+  version: "1.0"
+  date: "2026-09-23"
+  creator: "Kiro"
+  reviewer: ""
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: cf, service: cloudfront, label: "CloudFront" }
+      - { id: r53, service: route_53, label: "Route 53" }
+      - { id: s3, service: s3, label: "S3 (Images & Docs)" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+
+    edge:
+      - { id: users, service: user, label: "Users" }
+      - { id: waf, service: waf, label: "AWS WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+
+    region:
+      label: "eu-west-1"
+      services:
+        - { id: acm, service: certificate_manager_3, label: "ACM" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: guardduty, service: guardduty, label: "GuardDuty" }
+        - { id: securityhub, service: security_hub, label: "Security Hub" }
+        - { id: cloudtrail, service: cloudtrail, label: "CloudTrail" }
+        - { id: codepipeline, service: codepipeline, label: "CodePipeline" }
+        - { id: codebuild, service: codebuild, label: "CodeBuild" }
+        - { id: ecr, service: ecr, label: "ECR" }
+
+      vpc:
+        label: "HealthBridge VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds1, service: rds, label: "RDS PostgreSQL (Primary)" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds2, service: rds, label: "RDS PostgreSQL (Replica)" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: cache3, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds3, service: rds, label: "RDS PostgreSQL (Replica)" }
+
+        compute_groups:
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Cluster (Fargate)" }
+
+    edges:
+      # Ingress: users connect to WAF. CloudFront (global row) provides CDN
+      # context only; the User->CloudFront->WAF path is implied, not drawn.
+      - { source: users, target: waf, label: "HTTPS" }
+      - { source: waf, target: alb, label: "filter" }
+      - { source: alb, target: ecs, label: "route" }
+      - { source: ecs-az1, target: cache1, label: "session" }
+      - { source: ecs-az1, target: rds1, label: "SQL" }
+      - { source: rds1, target: rds2, label: "replication", dashed: true }
+      - { source: rds1, target: rds3, label: "replication", dashed: true }
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+
+  - name: "Flow Diagram"
+    type: flow
+    nodes:
+      - { id: f_users, service: user, label: "Users" }
+      - { id: f_cf, service: cloudfront, label: "CloudFront" }
+      - { id: f_waf, service: waf, label: "WAF" }
+      - { id: f_alb, service: application_load_balancer, label: "ALB" }
+      - { id: f_ecs, service: fargate, label: "ECS Fargate" }
+      - { id: f_cache, service: elasticache, label: "ElastiCache" }
+      - { id: f_rds, service: rds, label: "RDS PostgreSQL" }
+      - { id: f_s3, service: s3, label: "S3" }
+      - { id: f_pipeline, service: codepipeline, label: "CodePipeline" }
+      - { id: f_build, service: codebuild, label: "CodeBuild" }
+      - { id: f_ecr, service: ecr, label: "ECR" }
+    edges:
+      - { source: f_users, target: f_cf, label: "1. HTTPS request" }
+      - { source: f_cf, target: f_waf, label: "2. CDN + filter" }
+      - { source: f_waf, target: f_alb, label: "3. route" }
+      - { source: f_alb, target: f_ecs, label: "4. dispatch" }
+      - { source: f_ecs, target: f_cache, label: "5. session lookup" }
+      - { source: f_ecs, target: f_rds, label: "6. query records" }
+      - { source: f_ecs, target: f_s3, label: "7. images/docs" }
+      - { source: f_pipeline, target: f_build, label: "A. build", dashed: true }
+      - { source: f_build, target: f_ecr, label: "B. push image", dashed: true }
+      - { source: f_ecr, target: f_ecs, label: "C. deploy", dashed: true }

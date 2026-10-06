@@ -1,0 +1,168 @@
+provider: aws
+
+metadata:
+  project: "Three-Tier EKS + ECS Architecture"
+  version: "14.0"
+  date: "2026-09-29"
+  creator: "Kiro"
+  reviewer: "Cloud Team"
+
+pages:
+
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53,  service: route_53,                       label: "Route 53" }
+      - { id: cf,   service: cloudfront,                     label: "CloudFront" }
+      - { id: s3,   service: s3,                             label: "S3" }
+      - { id: iam,  service: identity_and_access_management, label: "IAM" }
+
+    edge:
+      - { id: users,  service: user,                         label: "Users" }
+      - { id: waf,    service: waf,                          label: "AWS WAF" }
+      - { id: alb,    service: application_load_balancer,    label: "Application Load Balancer" }
+      - { id: igw,    service: internet_gateway,             label: "Internet Gateway" }
+
+    region:
+      label: "us-east-1"
+
+      services:
+        - { id: kms,     service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager,        label: "Secrets Manager" }
+        - { id: cw,      service: cloudwatch_2,           label: "CloudWatch" }
+        - { id: ct,      service: cloudtrail,             label: "CloudTrail" }
+        - { id: gd,      service: guardduty,              label: "GuardDuty" }
+        - { id: ecr,     service: ecr,                    label: "Amazon ECR" }
+
+      vpc:
+        label: "Main VPC"
+
+        azs:
+
+          - id: az1
+            label: "Availability Zone 1"
+
+            public_subnet:
+              id: pub1
+              label: "Public Subnet 1"
+              resources:
+                - { id: nat1,     service: nat_gateway, label: "NAT Gateway" }
+                - { id: bastion1, service: ec2,         label: "Bastion Host" }
+
+            app_subnet:
+              id: app1
+              label: "Private App Subnet 1"
+              resources: []
+
+            db_subnet:
+              id: db1
+              label: "Private DB Subnet 1"
+              resources:
+                - { id: valkey1, service: elasticache, label: "Valkey / Redis" }
+                - { id: aurora1, service: aurora,      label: "Aurora PostgreSQL" }
+
+          - id: az2
+            label: "Availability Zone 2"
+
+            public_subnet:
+              id: pub2
+              label: "Public Subnet 2"
+              resources: []
+
+            app_subnet:
+              id: app2
+              label: "Private App Subnet 2"
+              resources: []
+
+            db_subnet:
+              id: db2
+              label: "Private DB Subnet 2"
+              resources:
+                - { id: valkey2, service: elasticache, label: "Valkey / Redis" }
+                - { id: aurora2, service: aurora,      label: "Aurora PostgreSQL" }
+
+          - id: az3
+            label: "Availability Zone 3"
+
+            public_subnet:
+              id: pub3
+              label: "Public Subnet 3"
+              resources: []
+
+            app_subnet:
+              id: app3
+              label: "Private App Subnet 3"
+              resources: []
+
+            db_subnet:
+              id: db3
+              label: "Private DB Subnet 3"
+              resources:
+                - { id: valkey3, service: elasticache, label: "Valkey / Redis" }
+                - { id: aurora3, service: aurora,      label: "Aurora PostgreSQL" }
+
+        compute_groups:
+          - { id: eks, kind: eks_cluster, node_service: ec2,     label: "EKS Cluster (EC2)" }
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Cluster (Fargate)" }
+
+    edges:
+
+      # Internet traffic path (all solid)
+      - { source: users,  target: waf,    label: "HTTPS" }
+      - { source: waf,    target: igw,    label: "HTTPS" }
+      - { source: igw,    target: alb,    label: "HTTPS" }
+
+      # ALB to compute clusters (cluster boundary, not individual tasks)
+      - { source: alb, target: eks, label: "route" }
+      - { source: alb, target: ecs, label: "route" }
+
+      # Bastion admin access (solid)
+      - { source: bastion1, target: eks-az1, label: "SSH" }
+
+      # Compute lanes to RDS (one line per group box into RDS top, as in Sadhaka)
+      - { source: eks, target: aurora1, label: "SQL" }
+      - { source: ecs, target: aurora3, label: "SQL" }
+
+      # Cache in front of DB (as in MediaMint: ElastiCache -> Aurora)
+      - { source: valkey2, target: aurora2, label: "cache" }
+
+      # ECR deploy to clusters (solid)
+      - { source: ecr, target: eks, label: "pull image" }
+      - { source: ecr, target: ecs, label: "pull image" }
+
+
+  - name: "Flow Diagram"
+    type: flow
+
+    groups:
+      - id: vpc
+        kind: vpc
+        label: "VPC"
+        members: [f_alb, f_eks, f_ecs, f_valkey, f_aurora]
+
+    nodes:
+      - { id: f_users,   service: user,                      label: "Users" }
+      - { id: f_waf,     service: waf,                       label: "AWS WAF" }
+      - { id: f_alb,     service: application_load_balancer, label: "ALB" }
+      - { id: f_eks,     service: eks,                       label: "EKS (EC2)" }
+      - { id: f_ecs,     service: fargate,                   label: "ECS Fargate" }
+      - { id: f_valkey,  service: elasticache,               label: "Valkey / Redis" }
+      - { id: f_aurora,  service: aurora,                    label: "Aurora PostgreSQL" }
+      - { id: f_secrets, service: secrets_manager,           label: "Secrets Manager" }
+      - { id: f_kms,     service: key_management_service,    label: "KMS" }
+
+    edges:
+      # Primary request path (linear top-down, all solid)
+      - { source: f_users,  target: f_waf,     label: "HTTPS" }
+      - { source: f_waf,    target: f_alb,     label: "HTTPS" }
+      - { source: f_alb,    target: f_eks,     label: "route" }
+      - { source: f_alb,    target: f_ecs,     label: "route" }
+      # Data access (siblings under compute — side by side)
+      - { source: f_eks,    target: f_valkey,  label: "cache" }
+      - { source: f_eks,    target: f_aurora,  label: "SQL" }
+      - { source: f_ecs,    target: f_valkey,  label: "cache" }
+      - { source: f_ecs,    target: f_aurora,  label: "SQL" }
+      # Secrets path (solid)
+      - { source: f_eks,    target: f_secrets, label: "fetch secrets" }
+      - { source: f_secrets, target: f_kms,   label: "decrypt" }

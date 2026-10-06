@@ -1,0 +1,144 @@
+provider: aws
+metadata:
+  project: "JioHotstar Streaming Platform"
+  version: "1.0"
+  date: "2026-09-30"
+  creator: "Architecture Generator"
+  reviewer: "Cloud Team"
+
+pages:
+  - name: "JioHotstar AWS Architecture"
+    type: architecture
+    global:
+      - { id: route53, service: route_53, label: "Route 53" }
+      - { id: video_origin, service: s3, label: "Video Origin" }
+      - { id: cloudfront, service: cloudfront, label: "CloudFront CDN" }
+      - { id: artwork_origin, service: s3, label: "Artwork and Manifests" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+    edge:
+      - { id: viewers, service: users, label: "Viewers and Fans" }
+      - { id: shield, service: shield, label: "Shield" }
+      - { id: waf, service: waf, label: "WAF" }
+      - { id: alb, service: application_load_balancer, label: "Application Load Balancer" }
+      - { id: igw, service: internet_gateway, label: "Internet Gateway" }
+    region:
+      label: "ap-south-1"
+      services:
+        - { id: cognito, service: cognito, label: "Cognito Identity" }
+        - { id: api_gateway, service: api_gateway, label: "API Gateway" }
+        - { id: eks_control, service: eks, label: "EKS Control Plane" }
+        - { id: ecr, service: ecr, label: "ECR" }
+        - { id: media_convert, service: elemental_mediaconvert, label: "MediaConvert" }
+        - { id: playback_stream, service: kinesis_data_streams, label: "Playback Events" }
+        - { id: live_events, service: kinesis, label: "Live Match Events" }
+        - { id: event_bus, service: sns, label: "Fan-out Event Bus" }
+        - { id: jobs, service: sqs, label: "Media Jobs" }
+        - { id: notifications, service: lambda, label: "Notifications" }
+        - { id: recommendations, service: sagemaker, label: "Recommendation Models" }
+        - { id: analytics, service: elasticsearch_service, label: "OpenSearch Analytics" }
+        - { id: sessions, service: dynamodb, label: "DynamoDB Sessions" }
+        - { id: secrets, service: secrets_manager, label: "Secrets Manager" }
+        - { id: kms, service: key_management_service, label: "KMS" }
+        - { id: guardduty, service: guardduty, label: "GuardDuty" }
+        - { id: cloudtrail, service: cloudtrail, label: "CloudTrail" }
+        - { id: cloudwatch, service: cloudwatch_2, label: "CloudWatch" }
+      vpc:
+        label: "JioHotstar Streaming VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: public1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+                - { id: bastion, service: ec2, label: "Bastion Host" }
+            app_subnet: { id: app1, label: "private-app-1", resources: [] }
+            db_subnet:
+              id: data1
+              label: "private-data-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+                - { id: rds1, service: rds, label: "RDS Primary" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet: { id: public2, label: "public-subnet-2", resources: [] }
+            app_subnet: { id: app2, label: "private-app-2", resources: [] }
+            db_subnet:
+              id: data2
+              label: "private-data-2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache Replica" }
+                - { id: rds2, service: rds, label: "RDS Standby" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet: { id: public3, label: "public-subnet-3", resources: [] }
+            app_subnet: { id: app3, label: "private-app-3", resources: [] }
+            db_subnet:
+              id: data3
+              label: "private-data-3"
+              resources: [ { id: cache3, service: elasticache, label: "ElastiCache Replica" } ]
+        compute_groups:
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Streaming Microservices" }
+    edges:
+      # Viewer/API ingress path. Keep these services in one straight row.
+      - { source: viewers, target: shield, label: "viewer requests" }
+      - { source: shield, target: waf, label: "DDoS protected" }
+      - { source: waf, target: igw, label: "protected API" }
+      - { source: igw, target: alb }
+      - { source: alb, target: eks, label: "route to shared service" }
+
+      # CDN origins are adjacent to CloudFront in the global services row.
+      - { source: cloudfront, target: video_origin, label: "video segments" }
+      - { source: cloudfront, target: artwork_origin, label: "artwork and manifests" }
+
+      # Shared compute dependencies, deployment, and resilience.
+      - { source: eks, target: cache1, label: "hot content and sessions" }
+      - { source: eks, target: rds1, label: "catalog and billing" }
+      - { source: ecr, target: eks, label: "deploy", dashed: true }
+      - { source: cache1, target: cache2, label: "replication", dashed: true }
+      - { source: rds1, target: rds2, label: "Multi-AZ failover", dashed: true }
+      - { source: bastion, target: eks-az1, label: "operations", dashed: true }
+
+  - name: "JioHotstar End-to-End Flow"
+    type: flow
+    groups:
+      - id: streaming_vpc
+        kind: vpc
+        label: "Streaming VPC"
+        members: [playback, live_service, catalog, cache]
+    nodes:
+      - { id: client, service: users, label: "Viewers (Mobile and TV)", scope: external }
+      - { id: cdn, service: cloudfront, label: "CloudFront Edge" }
+      - { id: gateway, service: api_gateway, label: "API Gateway" }
+      - { id: identity, service: cognito, label: "Cognito" }
+      - { id: playback, service: eks, label: "Playback Services on EKS" }
+      - { id: catalog, service: rds, label: "RDS Catalog and Subscriptions" }
+      - { id: cache, service: elasticache, label: "ElastiCache Sessions" }
+      - { id: manifests, service: s3, label: "Manifests and Artwork" }
+      - { id: origin, service: s3, label: "Video Origin" }
+      - { id: live_feed, service: kinesis, label: "Live Match Feed" }
+      - { id: live_service, service: eks, label: "Live Sports Service" }
+      - { id: jobs, service: sqs, label: "Media Processing Jobs" }
+      - { id: transcode, service: elemental_mediaconvert, label: "MediaConvert" }
+      - { id: telemetry, service: kinesis_data_streams, label: "Playback Telemetry" }
+      - { id: fanout, service: sns, label: "Fan-out Events" }
+      - { id: recommendations, service: sagemaker, label: "Recommendations" }
+      - { id: analytics, service: elasticsearch_service, label: "Analytics" }
+    edges:
+      - { source: client, target: identity, label: "Authenticate" }
+      - { source: client, target: gateway, label: "API request" }
+      - { source: client, target: cdn, label: "Media request / stream", style: "startArrow=block;startFill=1;" }
+      - { source: gateway, target: playback, label: "Playback request" }
+      - { source: playback, target: catalog, label: "Catalog lookup" }
+      - { source: playback, target: cache, label: "Session lookup" }
+      - { source: playback, target: manifests, label: "manifest" }
+      - { source: cdn, target: origin, label: "origin fetch" }
+      - { source: live_feed, target: live_service, label: "Live scores" }
+      - { source: live_service, target: client, label: "Live overlays" }
+      - { source: jobs, target: transcode, label: "Encode job" }
+      - { source: transcode, target: origin, label: "HLS / DASH" }
+      - { source: playback, target: telemetry, label: "Playback events" }
+      - { source: telemetry, target: fanout, label: "Event stream" }
+      - { source: fanout, target: recommendations, label: "Personalization" }
+      - { source: fanout, target: analytics, label: "Analytics" }

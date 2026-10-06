@@ -1,0 +1,113 @@
+provider: aws
+metadata:
+  project: "TechyCorp E-Commerce Migration"
+  version: "1.0"
+  date: "2026-09-22"
+  creator: "Kiro"
+  reviewer: "Cloud Team"
+pages:
+  # ------------------------------------------------------------------ Tab 1
+  - name: "Architecture Diagram"
+    type: architecture
+    global:
+      - { id: r53, service: route_53 }
+      - { id: cf_global, service: cloudfront, label: "CloudFront" }
+      - { id: s3, service: s3, label: "Static Assets (S3)" }
+      - { id: iam, service: identity_and_access_management }
+    edge:
+      - { id: users, service: user, label: "Users" }        # outside cloud
+      - { id: waf, service: waf }                            # inside cloud
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "IGW" } # left VPC border
+    region:
+      label: "ap-south-1"
+      services:
+        - { id: kms, service: key_management_service }
+        - { id: secrets, service: secrets_manager }
+        - { id: cw, service: cloudwatch_2 }
+        - { id: guardduty, service: guardduty }
+        - { id: cloudtrail, service: cloudtrail }
+        - { id: pipeline, service: codepipeline }
+        - { id: build, service: codebuild }
+        - { id: ecr, service: ecr }
+      vpc:
+        label: "TechyCorp VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway }
+            app_subnet: { id: app1, label: "app-subnet-1", resources: [] }
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+                - { id: rds1, service: rds, label: "RDS Primary" }
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet: { id: pub2, label: "public-subnet-2", resources: [] }
+            app_subnet: { id: app2, label: "app-subnet-2", resources: [] }
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache" }
+                - { id: rds2, service: rds, label: "RDS Replica" }
+          - id: az3
+            label: "Availability Zone 3"
+            public_subnet: { id: pub3, label: "public-subnet-3", resources: [] }
+            app_subnet: { id: app3, label: "app-subnet-3", resources: [] }
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: cache3, service: elasticache, label: "ElastiCache" }
+                - { id: rds3, service: rds, label: "RDS Replica" }
+        compute_groups:
+          - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group" }
+          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Cluster" }
+    edges:
+      # Ingress path
+      - { source: users, target: waf, label: "HTTPS" }
+      - { source: waf, target: alb }
+      # ALB to ECS cluster boundary (single edge, not per-AZ task)
+      - { source: alb, target: ecs, label: "route" }
+      # ECS tasks to data tier (AZ1 primary)
+      - { source: ecs-az1, target: rds1, label: "SQL" }
+      - { source: ecs-az1, target: cache1, label: "cache" }
+      # RDS replication (primary to replicas)
+      - { source: rds1, target: rds2, label: "replication", dashed: true }
+      - { source: rds1, target: rds3, label: "replication", dashed: true }
+      # CI/CD deploy to ECS cluster boundary
+      - { source: ecr, target: ecs, label: "deploy", dashed: true }
+
+  # ------------------------------------------------------------------ Tab 2
+  - name: "Flow Diagram"
+    type: flow
+    nodes:
+      - { id: f_user, service: user, label: "Users" }
+      - { id: f_cf, service: cloudfront, label: "CloudFront" }
+      - { id: f_waf, service: waf, label: "WAF" }
+      - { id: f_alb, service: application_load_balancer, label: "ALB" }
+      - { id: f_ecs, service: ecs, label: "ECS Fargate" }
+      - { id: f_rds, service: rds, label: "RDS PostgreSQL" }
+      - { id: f_cache, service: elasticache, label: "ElastiCache" }
+      - { id: f_pipe, service: codepipeline, label: "CodePipeline" }
+      - { id: f_build, service: codebuild, label: "CodeBuild" }
+      - { id: f_ecr, service: ecr, label: "ECR" }
+      - { id: f_cw, service: cloudwatch_2, label: "CloudWatch" }
+    edges:
+      - { source: f_user, target: f_cf, label: "request" }
+      - { source: f_cf, target: f_waf }
+      - { source: f_waf, target: f_alb, label: "forward" }
+      - { source: f_alb, target: f_ecs, label: "route" }
+      - { source: f_ecs, target: f_rds, label: "query" }
+      - { source: f_ecs, target: f_cache, label: "cache" }
+      - { source: f_pipe, target: f_build, label: "build" }
+      - { source: f_build, target: f_ecr, label: "push image" }
+      - { source: f_ecr, target: f_ecs, label: "deploy", dashed: true }
+      - { source: f_ecs, target: f_cw, label: "metrics", dashed: true }

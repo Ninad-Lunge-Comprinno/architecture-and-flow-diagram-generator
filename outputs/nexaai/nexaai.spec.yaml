@@ -1,0 +1,135 @@
+provider: aws
+
+metadata:
+  client_name: "NexaAI"
+  project: "NexaAI AI Inference Platform"
+  version: "1.0"
+  date: "2026-10-05"
+  creator: "To be filled"
+  reviewer: "To be filled"
+
+pages:
+
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: s3_artifacts, service: s3,                            label: "S3 Model Artefacts" }
+      - { id: iam,          service: identity_and_access_management, label: "IAM" }
+
+    # Correct ingress: Users → WAF → IGW → ALB → compute
+    edge:
+      - { id: users, service: users,                       label: "Users" }
+      - { id: waf,   service: waf,                         label: "WAF" }
+      - { id: alb,   service: application_load_balancer,   label: "ALB" }
+      - { id: igw,   service: internet_gateway,            label: "IGW" }
+
+    region:
+      label: "ap-south-1"
+      services:
+        # API Gateway is regional — not VPC-bound
+        - { id: apigw,        service: api_gateway,         label: "API Gateway" }
+        - { id: lambda_infer, service: lambda,               label: "Inference Lambda" }
+        - { id: bedrock,      service: bedrock,              label: "Bedrock (LLM)" }
+        - { id: sagemaker,    service: sagemaker,            label: "SageMaker Training" }
+        # Security & observability
+        - { id: secrets,      service: secrets_manager,      label: "Secrets Manager" }
+        - { id: kms,          service: key_management_service,label: "KMS" }
+        - { id: cloudwatch,   service: cloudwatch_2,          label: "CloudWatch" }
+        - { id: cloudtrail,   service: cloudtrail,            label: "CloudTrail" }
+
+      vpc:
+        label: "NexaAI VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone 1"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache" }
+
+          - id: az2
+            label: "Availability Zone 2"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache" }
+
+        compute_groups:
+          - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS GPU Node Groups" }
+
+    edges:
+      # Ingress path
+      - { source: users,        target: waf }
+      - { source: waf,          target: igw }
+      - { source: igw,          target: alb }
+      - { source: alb,          target: eks,          label: "route" }
+
+      # API Gateway → Lambda serverless path
+      - { source: apigw,        target: lambda_infer, label: "invoke" }
+
+      # Lambda → inference backends
+      - { source: lambda_infer, target: bedrock,      label: "LLM calls" }
+      - { source: lambda_infer, target: cache1,       label: "cache lookup" }
+
+      # EKS → GPU inference dependencies
+      - { source: eks,          target: s3_artifacts, label: "load models", dashed: true }
+
+      # SageMaker training → model storage
+      - { source: sagemaker,    target: s3_artifacts, label: "train artefacts", dashed: true }
+
+  - name: "Inference Flow"
+    type: flow
+
+    groups:
+      - id: nexa_vpc
+        kind: vpc
+        label: "NexaAI VPC"
+        members: [eks, cache]
+
+    nodes:
+      # Main path: User → APIGW → Lambda, then Lambda fans to Bedrock and EKS.
+      # Explicit positions (absolute, including 280px header offset) so EKS and
+      # Bedrock land side-by-side on the main row rather than in a chain.
+      # Row 1 (y=380): User  APIGW  Lambda  EKS   Bedrock
+      # Row 2 (y=660): SageMaker   S3      Cache
+      - { id: user,          service: users,         label: "User",              scope: external, y: 380 }
+      - { id: apigw,         service: api_gateway,   label: "API Gateway",       x:  380, y: 380 }
+      - { id: lambda_infer,  service: lambda,        label: "Inference Lambda",  x:  660, y: 380 }
+      - { id: eks,           service: eks,           label: "EKS GPU Nodes",     scope: vpc, x:  940, y: 380 }
+      - { id: bedrock,       service: bedrock,       label: "Bedrock (LLM)",     x: 1220, y: 380 }
+      - { id: sagemaker,     service: sagemaker,     label: "SageMaker Training", x: 380, y: 660 }
+      - { id: s3_artifacts,  service: s3,            label: "S3 Model Artefacts", x: 660, y: 660 }
+      - { id: cache,         service: elasticache,   label: "ElastiCache",       scope: vpc, x: 940, y: 660 }
+
+    edges:
+      # Primary request path (left to right)
+      - { source: user,          target: apigw,        label: "request" }
+      - { source: apigw,         target: lambda_infer, label: "invoke" }
+      # Lambda fans to Bedrock (LLM) and EKS (GPU) — parallel branches
+      - { source: lambda_infer,  target: eks,          label: "GPU inference" }
+      - { source: lambda_infer,  target: bedrock,      label: "LLM call" }
+      # EKS pulls model from S3; SageMaker publishes models
+      - { source: eks,           target: s3_artifacts, label: "load model" }
+      - { source: sagemaker,     target: s3_artifacts, label: "publish model", dashed: true }
+      # Cache side-lookup from Lambda
+      - { source: lambda_infer,  target: cache,        label: "cache lookup" }

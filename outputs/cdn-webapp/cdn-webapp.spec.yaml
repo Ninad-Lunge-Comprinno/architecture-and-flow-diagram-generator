@@ -1,0 +1,159 @@
+provider: aws
+
+metadata:
+  project: "CDN Web Application"
+  version: "1.0"
+  date: "2026-10-06"
+  creator: "Kiro"
+  reviewer: "Cloud Team"
+
+pages:
+
+  - name: "Architecture Diagram"
+    type: architecture
+
+    global:
+      - { id: r53, service: route_53,                       label: "Route 53" }
+      - { id: cf,  service: cloudfront,                     label: "CloudFront" }
+      - { id: s3,  service: s3,                             label: "S3 Assets" }
+      - { id: iam, service: identity_and_access_management, label: "IAM" }
+
+    edge:
+      - { id: users,  service: user,                     label: "Users" }
+      - { id: shield, service: shield,                   label: "AWS Shield" }
+      - { id: waf,    service: waf,                      label: "AWS WAF" }
+      - { id: alb,    service: application_load_balancer, label: "Application Load Balancer" }
+      - { id: igw,    service: internet_gateway,          label: "Internet Gateway" }
+
+    region:
+      label: "us-east-1"
+
+      services:
+        - { id: acm,     service: certificate_manager_3, label: "ACM" }
+        - { id: kms,     service: key_management_service, label: "KMS" }
+        - { id: secrets, service: secrets_manager,        label: "Secrets Manager" }
+        - { id: cw,      service: cloudwatch_2,           label: "CloudWatch" }
+        - { id: ct,      service: cloudtrail,            label: "CloudTrail" }
+        - { id: gd,      service: guardduty,              label: "GuardDuty" }
+
+      vpc:
+        label: "Web VPC"
+
+        azs:
+
+          - id: az1
+            label: "Availability Zone 1"
+
+            public_subnet:
+              id: pub1
+              label: "Public Subnet 1"
+              resources:
+                - { id: nat1,     service: nat_gateway, label: "NAT Gateway" }
+                - { id: bastion1, service: ec2,         label: "Bastion Host" }
+
+            app_subnet:
+              id: app1
+              label: "Private App Subnet 1"
+              resources: []
+
+            db_subnet:
+              id: db1
+              label: "Private DB Subnet 1"
+              resources:
+                - { id: cache1, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds1,   service: rds,          label: "RDS MySQL" }
+
+          - id: az2
+            label: "Availability Zone 2"
+
+            public_subnet:
+              id: pub2
+              label: "Public Subnet 2"
+              resources: []
+
+            app_subnet:
+              id: app2
+              label: "Private App Subnet 2"
+              resources: []
+
+            db_subnet:
+              id: db2
+              label: "Private DB Subnet 2"
+              resources:
+                - { id: cache2, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds2,   service: rds,          label: "RDS MySQL" }
+
+          - id: az3
+            label: "Availability Zone 3"
+
+            public_subnet:
+              id: pub3
+              label: "Public Subnet 3"
+              resources: []
+
+            app_subnet:
+              id: app3
+              label: "Private App Subnet 3"
+              resources: []
+
+            db_subnet:
+              id: db3
+              label: "Private DB Subnet 3"
+              resources:
+                - { id: cache3, service: elasticache, label: "ElastiCache Redis" }
+                - { id: rds3,   service: rds,          label: "RDS MySQL" }
+
+        compute_groups:
+          - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group (EC2)" }
+
+    edges:
+      - { source: users,  target: shield, label: "HTTPS" }
+      - { source: shield, target: waf,    label: "HTTPS" }
+      - { source: waf,    target: igw,    label: "HTTPS" }
+      - { source: igw,    target: alb,    label: "HTTPS" }
+      - { source: cf,     target: alb,    label: "origin",
+          source_point: "0.5,1.0", target_point: "0.5,0.0",
+          waypoints: [[1727, 500], [992, 500]] }
+      - { source: alb,    target: asg,    label: "route" }
+      - { source: bastion1, target: asg-az1, label: "SSH" }
+      - { source: asg,    target: rds1,   label: "SQL" }
+      - { source: cache2, target: rds2,   label: "cache" }
+      - { source: asg,    target: cache2, label: "cache" }
+      - { source: secrets, target: asg,    label: "config" }
+      - { source: kms,    target: rds1,   label: "encrypt",
+          source_point: "0.5,0.0", target_point: "0.5,0.0",
+          waypoints: [[2057, 565], [2607, 565]] }
+
+
+  - name: "Flow Diagram"
+    type: flow
+
+    groups:
+      - id: vpc
+        kind: vpc
+        label: "VPC"
+        members: [f_alb, f_asg, f_cache, f_rds]
+
+    nodes:
+      - { id: f_users,   service: user,                      label: "Users" }
+      - { id: f_shield,  service: shield,                    label: "AWS Shield" }
+      - { id: f_waf,     service: waf,                       label: "AWS WAF" }
+      - { id: f_alb,     service: application_load_balancer, label: "ALB" }
+      - { id: f_asg,     service: ec2,                       label: "ASG (EC2)" }
+      - { id: f_cache,   service: elasticache,               label: "ElastiCache" }
+      - { id: f_rds,     service: rds,                       label: "RDS MySQL" }
+      - { id: f_cf,      service: cloudfront,                label: "CloudFront" }
+      - { id: f_secrets, service: secrets_manager,           label: "Secrets Manager" }
+      - { id: f_kms,     service: key_management_service,    label: "KMS" }
+
+    edges:
+      - { source: f_users,  target: f_shield, label: "HTTPS" }
+      - { source: f_shield, target: f_waf,    label: "HTTPS" }
+      - { source: f_waf,    target: f_alb,    label: "HTTPS" }
+      - { source: f_alb,    target: f_asg,    label: "route" }
+      - { source: f_cf,     target: f_alb,    label: "origin" }
+      - { source: f_asg,    target: f_cache,  label: "cache" }
+      - { source: f_asg,    target: f_rds,    label: "SQL" }
+      - { source: f_cache,  target: f_rds,    label: "cache" }
+      - { source: f_asg,    target: f_secrets, label: "config" }
+      - { source: f_secrets, target: f_kms,   label: "decrypt" }
