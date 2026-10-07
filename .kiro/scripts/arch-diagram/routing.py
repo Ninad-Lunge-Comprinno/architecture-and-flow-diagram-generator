@@ -64,23 +64,17 @@ def plan_region_service_order(page: dict) -> None:
 
     svc_ids = {s["id"] for s in services}
 
-    # Ids that live inside the VPCs (subnets + compute groups + AZ nodes).
-    # Supports both singular `vpc:` and multi-VPC `vpcs:` specs.
-    try:
-        from layout import _vpc_specs as _multi_vpcs
-        _vpc_list = [v for _, v in _multi_vpcs(region_spec)]
-    except Exception:
-        _vpc_list = [region_spec.get("vpc", {}) or {}]
+    # Ids that live inside the VPC (subnets + compute groups + their AZ nodes).
+    vpc = region_spec.get("vpc", {}) or {}
     vpc_ids: set = set()
-    for _vv in _vpc_list:
-        for az in _vv.get("azs", []) or []:
-            for tier in ("public_subnet", "app_subnet", "db_subnet"):
-                for r in (az.get(tier) or {}).get("resources", []) or []:
-                    vpc_ids.add(r.get("id"))
-        for g in _vv.get("compute_groups", []) or []:
-            vpc_ids.add(g.get("id"))
-            for az in _vv.get("azs", []) or []:
-                vpc_ids.add(f"{g.get('id')}-{az.get('id')}")
+    for az in vpc.get("azs", []) or []:
+        for tier in ("public_subnet", "app_subnet", "db_subnet"):
+            for r in (az.get(tier) or {}).get("resources", []) or []:
+                vpc_ids.add(r.get("id"))
+    for g in vpc.get("compute_groups", []) or []:
+        vpc_ids.add(g.get("id"))
+        for az in vpc.get("azs", []) or []:
+            vpc_ids.add(f"{g.get('id')}-{az.get('id')}")
 
     # Entry-gutter ids (ALB / API Gateway live inside the VPC gutter; Shield/WAF
     # in the region gutter). Classify from the edge list.
@@ -126,9 +120,62 @@ def plan_region_service_order(page: dict) -> None:
             return 1          # connected to another region service → middle
         return 0              # unconnected → front
 
-    order = sorted(range(len(services)),
-                   key=lambda i: (_score(services[i]["id"]), i))
-    region_spec["services"] = [services[i] for i in order]
+    # Primary order: by score band, then spec order (stable).
+    index_of = {s["id"]: i for i, s in enumerate(services)}
+    primary = sorted(range(len(services)),
+                     key=lambda i: (_score(services[i]["id"]), i))
+
+    # Refinement: keep connected service↔service chains CONTIGUOUS and in flow
+    # order. Without this, a pair like API Gateway → Lambda can land at opposite
+    # ends of the row (because scoring buckets them separately), forcing one long
+    # back-edge that crosses every edge in between. We walk the directed
+    # service-only subgraph and emit each chain as a block, anchored at the
+    # position of its earliest member in the primary order.
+    svc_edges = [(e.get("source"), e.get("target")) for e in edges
+                 if e.get("source") in svc_ids and e.get("target") in svc_ids]
+    succ: dict = {}
+    pred_count: dict = {sid: 0 for sid in svc_ids}
+    for s, t in svc_edges:
+        succ.setdefault(s, []).append(t)
+        pred_count[t] = pred_count.get(t, 0) + 1
+
+    def _chain_from(start: str, visited: set) -> list:
+        """Follow successors from a chain head into a single ordered block."""
+        block = []
+        node = start
+        while node is not None and node not in visited:
+            visited.add(node)
+            block.append(node)
+            # Follow the successor that appears earliest in the primary order so
+            # the block stays left→right consistent; stop on branches/cycles.
+            nexts = [n for n in succ.get(node, []) if n not in visited]
+            node = min(nexts, key=lambda n: index_of[n]) if nexts else None
+        return block
+
+    ordered: list = []
+    emitted: set = set()
+    for i in primary:
+        sid = services[i]["id"]
+        if sid in emitted:
+            continue
+        # Only start a block at a chain HEAD (no service predecessor); other
+        # nodes are pulled in when their head is emitted. Nodes with a
+        # predecessor but whose head was already placed fall through naturally.
+        if pred_count.get(sid, 0) == 0 and sid in succ:
+            block = _chain_from(sid, emitted)
+            ordered.extend(block)
+        elif sid not in emitted:
+            emitted.add(sid)
+            ordered.append(sid)
+
+    # Any service not yet emitted (e.g. mid-chain nodes reached only via a
+    # branch) are appended in primary order as a safety net.
+    for i in primary:
+        sid = services[i]["id"]
+        if sid not in set(ordered):
+            ordered.append(sid)
+
+    region_spec["services"] = [services[index_of[sid]] for sid in ordered]
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +221,249 @@ def _polyline_hits_rect(points, rect, tol: float = 0.0) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Stage 2b: shared-spine fan-out / fan-in (reference house style)
+# ---------------------------------------------------------------------------
+# Hand-authored flow diagrams never route each fan edge independently (that
+# yields parallel offset spines and notch dodges). Instead N edges leaving one
+# border for a stacked column share ONE spine with short stubs: at most 2
+# bends per edge, never more than 3 anywhere on the page.
+BUS_STACK_TOL = GRID          # targets share a column/row within this
+BUS_MIN_SPREAD = GRID * 2     # spine justified only past this y/x spread
+
+
+def _bus_candidates(lo: float, hi: float, clearance: float) -> list:
+    """Gutter positions between two boxes, centre-out like _flow_channels."""
+    lo += clearance
+    hi -= clearance
+    if hi <= lo:
+        return [round((lo + hi) / 2, 1)]
+    step = GRID
+    values = [lo + i * step for i in range(int((hi - lo) / step) + 1)]
+    if hi - values[-1] > step * 0.4:
+        values.append(hi)
+    mid = (lo + hi) / 2
+    seen, out = set(), []
+    for v in sorted({round(x, 1) for x in values},
+                    key=lambda x: (abs(x - mid), x)):
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _bus_pass(ekeys, boxes, icon_boxes, clearance, exit_count):
+    """Route shared-spine buses for fan-out / fan-in groups.
+
+    Returns (routes, endpoints, member_set). Groups: ≥2 edges sharing one
+    source border (fan-out) or one target border (fan-in) whose far ends
+    stack in one column (horizontal runs) or one row (vertical runs).
+    Every bus path is orthogonal with ≤2 bends; groups with no clear spine
+    are left for the BFS pass.
+    """
+    routes, endpoints = {}, {}
+    claimed: set = set()
+
+    def segs_clear(pts, skip_ids):
+        for i in range(len(pts) - 1):
+            a, b = pts[i], pts[i + 1]
+            for oid, (ox, oy, ow, oh) in icon_boxes.items():
+                if oid in skip_ids:
+                    continue
+                # same obstacle shape as the BFS pass: icon + label band
+                if _seg_intersects_rect(a, b, (ox, oy, ow, oh + LABEL_BAND),
+                                       clearance):
+                    return False
+        return True
+
+    # fan-out groups: (source, exit-fraction) with stacked targets
+    groups: dict = {}
+    sides: dict = {}
+    for ek in ekeys:
+        s, t = ek
+        if s not in boxes or t not in boxes:
+            continue
+        sb, tb = boxes[s], boxes[t]
+        scx, scy = sb[0] + sb[2] / 2, sb[1] + sb[3] / 2
+        tcx, tcy = tb[0] + tb[2] / 2, tb[1] + tb[3] / 2
+        _, ex = _border_point(sb, (tcx, tcy))
+        _, en = _border_point(tb, (scx, scy))
+        sides[ek] = (ex, en)
+        groups.setdefault(("out", s, ex), []).append(ek)
+        groups.setdefault(("in", t, en), []).append(ek)
+
+    for (kind, node, frac), members in groups.items():
+        if len(members) < 2 or any(m in claimed for m in members):
+            continue
+        if kind == "out":
+            ok = _bus_fanout(node, frac, members, boxes, sides, segs_clear,
+                             routes, endpoints, claimed, exit_count)
+        else:
+            ok = _bus_fanin(node, frac, members, boxes, sides, segs_clear,
+                            routes, endpoints, claimed, exit_count)
+    return routes, endpoints, claimed
+
+
+def _bus_fanout(src, ex, members, boxes, sides, segs_clear,
+                routes, endpoints, claimed, exit_count):
+    """One spine for N edges leaving ``src``'s border for a stacked column."""
+    sb = boxes[src]
+    fx, fy = ex
+    horizontal = fx in (0.0, 1.0)
+    if horizontal:
+        # targets must stack in one column to the left/right of src
+        tcx = [boxes[m[1]][0] + boxes[m[1]][2] / 2 for m in members]
+        if max(tcx) - min(tcx) > BUS_STACK_TOL:
+            return False
+        direction = 1 if fx == 1.0 else -1
+        if (direction == 1 and min(tcx) < sb[0] + sb[2]) or \
+           (direction == -1 and max(tcx) > sb[0]):
+            return False
+        start = (sb[0] + sb[2] if fx == 1.0 else sb[0],
+                 sb[1] + sb[3] / 2)
+        outs, goals = [], []
+        for m in members:
+            tb = boxes[m[1]]
+            en = sides[m][1]
+            _, entry = _fan_out(tb, (0, 0), en, m[1], exit_count)
+            gx = tb[0] if en[0] == 0.0 else tb[0] + tb[2]
+            gy = tb[1] + entry[1] * tb[3]
+            outs.append(m)
+            goals.append(((gx, gy), entry))
+        edge = (sb[0] + sb[2] if fx == 1.0 else sb[0])
+        band_lo = edge
+        band_hi = min(g[0][0] for g in goals) if fx == 1.0 else max(g[0][0] for g in goals)
+        if fx == 1.0:
+            lo, hi = band_lo, band_hi
+        else:
+            lo, hi = band_hi, band_lo
+        ys = [start[1]] + [g[0][1] for g in goals]
+        for spine in _bus_candidates(lo, hi, CLEARANCE):
+            pts_list = []
+            ok = True
+            for m, (goal, _) in zip(outs, goals):
+                pts = [start, (spine, start[1]), (spine, goal[1]), goal]
+                # drop zero-length runs (straight members)
+                pts = [p for i, p in enumerate(pts)
+                       if i == 0 or abs(p[0] - pts[i - 1][0]) > 1e-6
+                       or abs(p[1] - pts[i - 1][1]) > 1e-6]
+                skip = {m[0], m[1]}
+                if not segs_clear(pts, skip):
+                    ok = False
+                    break
+                pts_list.append(pts)
+            if ok:
+                for m, pts, entry in zip(outs, pts_list,
+                                        [g[1] for g in goals]):
+                    routes[m] = pts
+                    endpoints[m] = ((1.0, 0.5) if fx == 1.0 else (0.0, 0.5),
+                                    entry)
+                    claimed.add(m)
+                return True
+    else:
+        # vertical fan-out: targets share one row below/above src
+        tcy = [boxes[m[1]][1] + boxes[m[1]][3] / 2 for m in members]
+        if max(tcy) - min(tcy) > BUS_STACK_TOL:
+            return False
+        direction = 1 if fy == 1.0 else -1
+        if (direction == 1 and min(tcy) < sb[1] + sb[3]) or \
+           (direction == -1 and max(tcy) > sb[1]):
+            return False
+        start = (sb[0] + sb[2] / 2, sb[1] + sb[3] if fy == 1.0 else sb[1])
+        outs, goals = [], []
+        for m in members:
+            tb = boxes[m[1]]
+            en = sides[m][1]
+            _, entry = _fan_out(tb, (0, 0), en, m[1], exit_count)
+            gx = tb[0] + entry[0] * tb[2]
+            gy = tb[1] if en[1] == 0.0 else tb[1] + tb[3]
+            outs.append(m)
+            goals.append(((gx, gy), entry))
+        edge = (sb[1] + sb[3] if fy == 1.0 else sb[1])
+        if fy == 1.0:
+            lo, hi = edge, min(g[0][1] for g in goals)
+        else:
+            lo, hi = max(g[0][1] for g in goals), edge
+        for spine in _bus_candidates(lo, hi, CLEARANCE):
+            pts_list = []
+            ok = True
+            for m, (goal, _) in zip(outs, goals):
+                pts = [start, (start[0], spine), (goal[0], spine), goal]
+                pts = [p for i, p in enumerate(pts)
+                       if i == 0 or abs(p[0] - pts[i - 1][0]) > 1e-6
+                       or abs(p[1] - pts[i - 1][1]) > 1e-6]
+                if not segs_clear(pts, {m[0], m[1]}):
+                    ok = False
+                    break
+                pts_list.append(pts)
+            if ok:
+                for m, pts, entry in zip(outs, pts_list,
+                                        [g[1] for g in goals]):
+                    routes[m] = pts
+                    endpoints[m] = ((0.5, 1.0) if fy == 1.0 else (0.5, 0.0),
+                                    entry)
+                    claimed.add(m)
+                return True
+    return False
+
+
+def _bus_fanin(tgt, en, members, boxes, sides, segs_clear,
+               routes, endpoints, claimed, exit_count):
+    """One spine for N edges entering ``tgt``'s border from a stacked column."""
+    tb = boxes[tgt]
+    fx, fy = en
+    horizontal = fx in (0.0, 1.0)
+    if not horizontal:
+        return False
+    # sources must stack in one column on the entry side
+    scx = [boxes[m[0]][0] + boxes[m[0]][2] / 2 for m in members]
+    if max(scx) - min(scx) > BUS_STACK_TOL:
+        return False
+    direction = -1 if fx == 0.0 else 1
+    if (direction == -1 and max(scx) > tb[0]) or \
+       (direction == 1 and min(scx) < tb[0] + tb[2]):
+        return False
+    goal = (tb[0] if fx == 0.0 else tb[0] + tb[2], tb[1] + tb[3] / 2)
+    starts = []
+    for m in members:
+        sb = boxes[m[0]]
+        ex = sides[m][0]
+        _, exitf = _fan_out(sb, (0, 0), ex, m[0], exit_count)
+        sx = sb[0] + sb[2] if ex[0] == 1.0 else sb[0]
+        sy = sb[1] + exitf[1] * sb[3]
+        starts.append(((sx, sy), exitf))
+    if fx == 0.0:
+        lo, hi = max(s[0][0] for s in starts), goal[0]
+    else:
+        lo, hi = goal[0], min(s[0][0] for s in starts)
+    for spine in _bus_candidates(lo, hi, CLEARANCE):
+        pts_list = []
+        ok = True
+        for m, (st, _) in zip(members, starts):
+            pts = [st, (spine, st[1]), (spine, goal[1]), goal]
+            pts = [p for i, p in enumerate(pts)
+                   if i == 0 or abs(p[0] - pts[i - 1][0]) > 1e-6
+                   or abs(p[1] - pts[i - 1][1]) > 1e-6]
+            if not segs_clear(pts, {m[0], m[1]}):
+                ok = False
+                break
+            pts_list.append(pts)
+        if ok:
+            for m, pts, exitf in zip(members, pts_list,
+                                    [s[1] for s in starts]):
+                routes[m] = pts
+                endpoints[m] = (exitf, (0.0, 0.5) if fx == 0.0 else (1.0, 0.5))
+                claimed.add(m)
+            return True
+    return False
+
+
 def _segments_overlap(a1, a2, b1, b2) -> bool:
     """True if two orthogonal segments share a colinear overlapping run."""
+    # Shared bus trunks (two fan edges leaving one port together) coincide
+    # by design — that is the reference look, not a conflict.
+    if abs(a1[0] - b1[0]) < 1e-6 and abs(a1[1] - b1[1]) < 1e-6:
+        return False
     # vertical-vertical
     if abs(a1[0] - a2[0]) < 1e-6 and abs(b1[0] - b2[0]) < 1e-6:
         if abs(a1[0] - b1[0]) > 1e-6:
@@ -241,6 +529,32 @@ class Router:
 
     def _wy(self, r: int) -> float:
         return self.miny + r * self.grid
+
+    def snap(self, point) -> tuple:
+        """Snap a point to the nearest grid intersection.
+
+        BFS waypoints are grid points, but ports/stubs are exact border
+        geometry. An off-grid stub makes the first/last leg a 10px diagonal
+        stub (the 'notch' look). Snapping stubs keeps every leg orthogonal.
+        """
+        x, y = point
+        return (self.minx + round((x - self.minx) / self.grid) * self.grid,
+                self.miny + round((y - self.miny) / self.grid) * self.grid)
+
+    def snap_travel(self, point, xy_frac) -> tuple:
+        """Snap a port stub to the grid along its travel axis only.
+
+        The border-parallel coordinate stays exactly on the port anchor, so
+        the first/last leg leaves the icon straight; the travel coordinate
+        snaps so BFS continues orthogonally. Snapping both axes pulled the
+        stub 10px off the port row and re-created the diagonal notch.
+        """
+        x, y = point
+        fx, fy = xy_frac
+        if fx in (0.0, 1.0):      # travelling horizontally → snap x, keep y
+            return (self.minx + round((x - self.minx) / self.grid) * self.grid, y)
+        # travelling vertically → snap y, keep x
+        return (x, self.miny + round((y - self.miny) / self.grid) * self.grid)
 
     def _free(self, r: int, c: int) -> bool:
         return 0 <= r < self.rows and 0 <= c < self.cols and not self.blocked[r][c]
@@ -628,7 +942,18 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
                abs((sb[1] + sb[3] / 2) - (tb[1] + tb[3] / 2))
 
     ekeys = [tuple(e) for e in edges if e[0] in boxes and e[1] in boxes]
-    ekeys.sort(key=_dist, reverse=True)
+
+    def _centres_aligned(ek):
+        """Same-row / same-column pairs route straight with middle ports."""
+        s, t = ek
+        sb, tb = boxes[s], boxes[t]
+        scx, scy = sb[0] + sb[2] / 2, sb[1] + sb[3] / 2
+        tcx, tcy = tb[0] + tb[2] / 2, tb[1] + tb[3] / 2
+        return abs(scx - tcx) < 1 or abs(scy - tcy) < 1
+
+    # Straight pairs first (they claim the middle ports and stay jog-free);
+    # the rest longest-first, then fan out from the quarter anchors.
+    ekeys.sort(key=lambda ek: (0 if _centres_aligned(ek) else 1, -_dist(ek)))
 
     clearance = CLEARANCE
     best_routes, best_endpoints, best_conflicts = {}, {}, None
@@ -639,10 +964,21 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
         # Track how many edges already exit/enter a given (node, side) so we can
         # fan them out along that border and avoid shared/overlapping segments.
         exit_count: dict = {}
+        # Reference-style pre-pass: shared-spine buses for fan-out/fan-in
+        # groups (≤2 bends each). Bus trunks claim their cells first so the
+        # BFS pass routes around them instead of through them.
+        bus_routes, bus_endpoints, bus_claimed = _bus_pass(
+            ekeys, boxes, icon_boxes, clearance, exit_count)
+        routes.update(bus_routes)
+        endpoints.update(bus_endpoints)
         # Cells already used by routed edges — passed as soft obstacles so later
         # nets spread into separate channels (general multi-net technique).
         used_cells: set = set()
+        for ek, pts in bus_routes.items():
+            used_cells |= router.cells_for(pts)
         for ek in ekeys:
+            if ek in bus_claimed:
+                continue
             s, t = ek
             sb, tb = boxes[s], boxes[t]
             scx, scy = sb[0] + sb[2] / 2, sb[1] + sb[3] / 2
@@ -655,10 +991,19 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
             # Begin outside the padded endpoint boxes. Starting on the icon
             # border can leave the first grid cells blocked and trigger a
             # fallback line straight through a neighboring icon.
+            # Ports sit on stencil anchors (0.25/0.5/0.75 of a 120px icon),
+            # which fall 10px off the 20px grid — so each end gets an
+            # orthogonal jetty: a short run straight out of the port to the
+            # nearest grid line, then BFS runs grid-to-grid. Without the
+            # jetty the first/last leg was a 10px diagonal notch.
             stub = clearance + 2 * GRID
             start_stub = _outside_port(start, exit_xy, stub)
             goal_stub = _outside_port(goal, entry_xy, stub)
-            path = router.route(start_stub, goal_stub, soft=used_cells)
+            gs = router.snap(start_stub)
+            gg = router.snap(goal_stub)
+            js = (gs[0], start[1]) if exit_xy[0] in (0.0, 1.0) else (start[0], gs[1])
+            jg = (gg[0], goal[1]) if entry_xy[0] in (0.0, 1.0) else (goal[0], gg[1])
+            path = router.route(gs, gg, soft=used_cells)
             if path is None:
                 # Relax: retry on a router with reduced clearance so a congested
                 # net can still find an orthogonal detour before giving up.
@@ -667,7 +1012,11 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
                     relaxed_stub = relaxed + 2 * GRID
                     start_stub = _outside_port(start, exit_xy, relaxed_stub)
                     goal_stub = _outside_port(goal, entry_xy, relaxed_stub)
-                    path = relaxed_router.route(start_stub, goal_stub, soft=used_cells)
+                    gs = relaxed_router.snap(start_stub)
+                    gg = relaxed_router.snap(goal_stub)
+                    js = (gs[0], start[1]) if exit_xy[0] in (0.0, 1.0) else (start[0], gs[1])
+                    jg = (gg[0], goal[1]) if entry_xy[0] in (0.0, 1.0) else (goal[0], gg[1])
+                    path = relaxed_router.route(gs, gg, soft=used_cells)
                     if path is not None:
                         break
             if path is None:
@@ -675,7 +1024,13 @@ def route_all_edges(edges, boxes, icon_ids, bounds,
                 endpoints[ek] = (exit_xy, entry_xy)
                 unrouted.append(ek)
                 continue
-            path = [start, start_stub, *path[1:-1], goal_stub, goal]
+            path = [start, js, gs, *path[1:-1], gg, jg, goal]
+            # Drop jetty/grid points that coincide (zero-length runs).
+            deduped = [path[0]]
+            for pt in path[1:]:
+                if abs(pt[0] - deduped[-1][0]) > 1e-6 or abs(pt[1] - deduped[-1][1]) > 1e-6:
+                    deduped.append(pt)
+            path = deduped
             routes[ek] = path
             endpoints[ek] = (exit_xy, entry_xy)
             used_cells |= router.cells_for(path[1:-1])
@@ -705,7 +1060,12 @@ def _outside_port(point, xy_frac, distance):
 
 def _fan_out(box, point, xy_frac, node_id, counter):
     """Offset an endpoint along its border so multiple edges sharing the same
-    (node, side) don't overlap. Returns (new_point, new_fraction)."""
+    (node, side) don't overlap. Returns (new_point, new_fraction).
+
+    Offsets land on the stencil's declared interior anchors (0.25 / 0.75)
+    instead of raw grid steps, so every fanned arrow still attaches to a legal
+    connection point and downstream anchor-snapping is a no-op (no stub jogs).
+    """
     x, y, w, h = box
     fx, fy = xy_frac
     side = (node_id, fx, fy)
@@ -713,17 +1073,16 @@ def _fan_out(box, point, xy_frac, node_id, counter):
     counter[side] = n + 1
     if n == 0:
         return point, xy_frac
-    # Alternate offsets: +1, -1, +2, -2 ... in grid steps, clamped to the border.
-    step = ((n + 1) // 2) * GRID
-    sign = 1 if n % 2 else -1
-    off = sign * step
+    # First fan keeps middle; alternates take the quarter anchors; beyond
+    # three edges anchors repeat (overlap reported as a conflict instead of a
+    # silently dropped arrow).
+    order = [0.75, 0.25, 0.5]
+    target = order[(n - 1) % len(order)]
     px, py = point
-    if fy in (0.0, 1.0) and fx == 0.5:      # top/bottom border → shift x
-        nx = min(x + w - 4, max(x + 4, px + off))
-        new_frac = (round((nx - x) / w, 2), fy)
-        return (nx, py), new_frac
     if fx in (0.0, 1.0) and fy == 0.5:      # left/right border → shift y
-        ny = min(y + h - 4, max(y + 4, py + off))
-        new_frac = (fx, round((ny - y) / h, 2))
-        return (px, ny), new_frac
+        ny = y + target * h
+        return (px, ny), (fx, target)
+    if fy in (0.0, 1.0) and fx == 0.5:      # top/bottom border → shift x
+        nx = x + target * w
+        return (nx, py), (target, fy)
     return point, xy_frac

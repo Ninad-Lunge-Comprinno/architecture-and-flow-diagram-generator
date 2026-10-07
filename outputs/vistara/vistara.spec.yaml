@@ -31,7 +31,7 @@ pages:
         - { id: secrets,   service: secrets_manager,        label: "Secrets Manager" }
         - { id: cloudwatch,service: cloudwatch_2,            label: "CloudWatch" }
         - { id: grafana,   service: managed_grafana,         label: "Managed Grafana" }
-        - { id: amp,       service: cloudwatch_2,               label: "Managed Prometheus (AMP)" }
+        - { id: amp,       service: amp,               label: "Managed Prometheus (AMP)" }
 
       vpc:
         label: "Vistara Prod VPC"
@@ -47,14 +47,11 @@ pages:
             app_subnet:
               id: app1
               label: "app-subnet-1"
-              resources:
-                - { id: alb_int, service: application_load_balancer, label: "ALB (Internal)" }
+              resources: []
             db_subnet:
               id: data1
               label: "db-subnet-1"
               resources:
-                - { id: cassandra, service: ec2, label: "Cassandra (c6a.2xlarge)" }
-                - { id: clickhouse, service: ec2, label: "ClickHouse (m6a.4xlarge)" }
                 - { id: rds1, service: rds, label: "RDS PostgreSQL (Primary)" }
 
           - id: az2
@@ -71,6 +68,7 @@ pages:
               id: data2
               label: "db-subnet-2"
               resources:
+                - { id: cassandra, service: ec2, label: "Cassandra (c6a.2xlarge)" }
                 - { id: rds2, service: rds, label: "RDS PostgreSQL (Geo Replica)" }
 
           - id: az3
@@ -82,11 +80,14 @@ pages:
             app_subnet:
               id: app3
               label: "app-subnet-3"
-              resources: []
+              resources:
+                - { id: alb_int, service: application_load_balancer, label: "ALB (Internal)" }
             db_subnet:
               id: data3
               label: "db-subnet-3"
-              resources: []
+              resources:
+                - { id: clickhouse, service: ec2, label: "ClickHouse (m6a.4xlarge)" }
+                - { id: rds3, service: rds, label: "RDS PostgreSQL (Replica)" }
 
         compute_groups:
           - { id: eks, kind: eks_cluster, node_service: ec2, label: "EKS Cluster (vsg-prod01)" }
@@ -103,9 +104,6 @@ pages:
       - { source: eks,   target: rds1,      label: "SQL" }
       - { source: eks,   target: cassandra, label: "NoSQL" }
       - { source: eks,   target: clickhouse,label: "analytics" }
-
-      # RDS replication
-      - { source: rds1,  target: rds2, label: "geo-replica", dashed: true }
 
       # Deployment
       - { source: ecr,   target: eks, label: "deploy", dashed: true }

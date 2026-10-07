@@ -104,9 +104,6 @@ pages:
       - { source: ecs, target: aurora1, label: "SQL" }
       - { source: eks, target: cache1, label: "cache" }
       - { source: eks, target: aurora1, label: "SQL" }
-      # Aurora replication
-      - { source: aurora1, target: aurora2, label: "replication", dashed: true }
-      - { source: aurora1, target: aurora3, label: "replication", dashed: true }
       # Ingress fans out to BOTH cluster boundaries (not individual tasks)
       - { source: alb, target: ecs, label: "route" }
       - { source: alb, target: eks, label: "route" }

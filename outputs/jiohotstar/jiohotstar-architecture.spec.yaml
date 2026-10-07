@@ -96,7 +96,6 @@ pages:
       - { source: eks, target: cache1, label: "hot content and sessions" }
       - { source: eks, target: rds1, label: "catalog and billing" }
       - { source: ecr, target: eks, label: "deploy", dashed: true }
-      - { source: cache1, target: cache2, label: "replication", dashed: true }
       - { source: rds1, target: rds2, label: "Multi-AZ failover", dashed: true }
       - { source: bastion, target: eks-az1, label: "operations", dashed: true }
 

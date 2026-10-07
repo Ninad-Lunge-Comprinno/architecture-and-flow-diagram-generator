@@ -45,7 +45,7 @@ from typing import Optional
 # Spacing tokens — all layout distances derive from these.
 # ---------------------------------------------------------------------------
 ICON = 120
-ICON_GAP = 60
+ICON_GAP = 115            # Measured gap between neighbour icons (reference diagrams)
 LABEL_BAND = 50          # clearance below an icon for its wrapped label text
                           # (used ONLY for edge-routing waypoints, NOT sizing)
 LABEL_WIDTH = 160
@@ -55,17 +55,18 @@ SUBNET_MIN_W = 300
 SUBNET_PAD_X = 40
 SUBNET_PAD_TOP = 50
 SUBNET_PAD_BOTTOM = 40
-SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM + 40  # 250px baseline
+SUBNET_H = ICON + SUBNET_PAD_TOP + SUBNET_PAD_BOTTOM + 90  # 300px: airy, like the reference diagrams
 
-TIER_GAP = 80             # gap between subnet columns inside an AZ
+TIER_GAP = 120            # gap between subnet columns inside an AZ
 AZ_INNER_PAD_X = 35      # x padding inside AZ box
 AZ_INNER_PAD_TOP = 50    # y padding above subnets (for AZ label)
 AZ_INNER_PAD_BOTTOM = 40 # y padding below subnets
 AZ_GAP = 120             # gap between AZ rows
 
 LANE_W = ICON + 140      # leaves room for the cluster icon and its header label
-LANE_GAP = 50             # gap between lane columns
-LANE_OVERHANG = 50        # lane top extends above first AZ
+LANE_GAP = 115            # Measured gap between lane columns (reference diagrams)
+LANE_LABEL_CLEAR = 40     # lane top starts this far below the first app subnet
+                          # top, clearing its label band but staying above icons
 
 VPC_PAD_X = 65
 VPC_PAD_TOP = 80
@@ -96,10 +97,6 @@ CLOUD_PAD_BOTTOM = 85    # bottom padding inside cloud
 # routing corridor sits. Edges that need to travel from inside the region to
 # a global service use this corridor to exit cleanly without crossing icons.
 REGION_CORRIDOR_OFFSET = 30
-
-# Multi-VPC stacking (Borderless-style: peered VPCs stack vertically).
-VPC_STACK_GAP = 260  # vertical gap between stacked VPC boxes (holds the TGW)
-TGW_BELOW_GAP = 60   # gap below a lone VPC when it carries a transit gateway
 
 # Ingress band — sits BETWEEN the global row and the region box, spanning
 # the full cloud width. Items are spaced horizontally left-to-right.
@@ -168,10 +165,6 @@ class Layout:
     ingress_band_y: float = 0.0
     # VPC abs top (page coords): helps routing code distinguish above-VPC from in-VPC
     vpc_abs_top: float = 0.0
-    # Multi-VPC maps (single-VPC diagrams: one entry each, matching scalars)
-    vpc_corridors: dict = field(default_factory=dict)  # vpc node id -> corridor x
-    vpc_tops: dict = field(default_factory=dict)       # vpc node id -> abs top y
-    vpc_of: dict = field(default_factory=dict)         # node id -> vpc node id
 
     def add(self, node: Node, abs_x: float, abs_y: float):
         self.nodes.append(node)
@@ -210,63 +203,55 @@ def _center_row(items_w: float, container_w: float, min_x: float) -> float:
     return max(min_x, (container_w - items_w) / 2)
 
 
-def _vpc_specs(region: dict) -> list[tuple[str, dict]]:
-    """Normalise the region's VPC config to a list of (node_id, spec).
-
-    Single-`vpc` specs keep the historic node id ``"vpc"`` so existing
-    diagrams, tests and routing lookups are unaffected. A `vpcs` list
-    requires an `id` per VPC, used as the container node id.
-    """
-    if region.get("vpcs"):
-        out = []
-        for v in region["vpcs"]:
-            if "id" not in v:
-                raise ValueError("Each entry in region 'vpcs' needs an 'id'.")
-            out.append((v["id"], v))
-        return out
-    return [("vpc", region.get("vpc", {}) or {})]
-
-
 def build(page: dict, default_provider: str = "aws") -> Layout:
     lo = Layout()
     region = page.get("region", {}) or {}
-    vpc_items = _vpc_specs(region)  # [(node_id, spec)]; single-vpc keeps id "vpc"
-    primary_key = vpc_items[0][0]
-    vpc_keys = [k for k, _ in vpc_items]
-    all_azs = [az for _, v in vpc_items for az in (v.get("azs", []) or [])]
+    vpc = region.get("vpc", {}) or {}
+    azs = vpc.get("azs", []) or []
+    groups = vpc.get("compute_groups", []) or []
+    az_ids = [az["id"] for az in azs]
 
     # All region services render in the region services grid.
     grid_services = region.get("services", []) or []
 
-    # ---- Tier widths (uniform across AZs AND VPCs) and per-AZ heights ------
+    # ---- Tier widths (uniform across AZs) and per-AZ heights ---------------
     def _az_res(az, tier):
         return (az.get(tier) or {}).get("resources", []) or []
 
     pub_w = max((_subnet_width(len(_az_res(az, "public_subnet")))
-                 for az in all_azs), default=SUBNET_MIN_W)
+                 for az in azs), default=SUBNET_MIN_W)
     db_w = max((_subnet_width(len(_az_res(az, "db_subnet")), is_db_subnet=True)
-                for az in all_azs), default=SUBNET_MIN_W)
+                for az in azs), default=SUBNET_MIN_W)
 
-    pub_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "public_subnet"))) for az in all_azs}
-    app_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "app_subnet"))) for az in all_azs}
-    db_h_by_az  = {az["id"]: _subnet_height(len(_az_res(az, "db_subnet")), is_db_subnet=True) for az in all_azs}
+    pub_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "public_subnet"))) for az in azs}
+    app_h_by_az = {az["id"]: _subnet_height(len(_az_res(az, "app_subnet"))) for az in azs}
+    db_h_by_az  = {az["id"]: _subnet_height(len(_az_res(az, "db_subnet")), is_db_subnet=True) for az in azs}
 
     def _az_row_height(az):
         aid = az["id"]
         return AZ_INNER_PAD_TOP + max(pub_h_by_az[aid], app_h_by_az[aid],
                                       db_h_by_az[aid]) + AZ_INNER_PAD_BOTTOM
 
-    az_row_h_by_az = {az["id"]: _az_row_height(az) for az in all_azs}
+    az_row_h_by_az = {az["id"]: _az_row_height(az) for az in azs}
     app_h_max = max(app_h_by_az.values(), default=SUBNET_H)
-    # Lane width: max across VPCs (NOT the sum — each VPC holds only its own
-    # lanes; summing would stretch every app subnet with phantom lanes).
-    def _lanes_w(groups):
-        return (len(groups) * LANE_W + max(0, len(groups) - 1) * LANE_GAP) if groups else 0
-    lanes_w = max([_lanes_w(v.get("compute_groups", []) or [])
-                   for _, v in vpc_items] or [0])
+    lanes_w = (len(groups) * LANE_W + max(0, len(groups) - 1) * LANE_GAP) if groups else 0
     app_res_w = max((_subnet_width(len((az.get("app_subnet") or {}).get("resources", [])))
-                     for az in all_azs), default=SUBNET_MIN_W)
-    app_w = max(lanes_w + 2 * SUBNET_PAD_X, app_res_w, SUBNET_MIN_W)
+                     for az in azs), default=SUBNET_MIN_W)
+    max_app_res = max((len((az.get("app_subnet") or {}).get("resources", []))
+                       for az in azs), default=0)
+    # When compute lanes AND app-subnet resources coexist, they must sit
+    # SIDE BY SIDE (lanes overlay the left of the app band; resources go to the
+    # right of the lanes). Reserve the lane footprint, then add room for the
+    # app resources. When one of them is absent, fall back to the single width.
+    if lanes_w and max_app_res:
+        app_res_content = (max_app_res * max(ICON, LABEL_WIDTH)
+                           + max(0, max_app_res - 1) * ICON_GAP)
+        app_reserve_left = lanes_w + LANE_GAP
+        app_w = max(SUBNET_MIN_W,
+                    app_reserve_left + app_res_content + 2 * SUBNET_PAD_X)
+    else:
+        app_reserve_left = 0
+        app_w = max(lanes_w + 2 * SUBNET_PAD_X, app_res_w, SUBNET_MIN_W)
 
     # ---- AZ column offsets (relative to AZ content origin) ---------------
     col_pub_x = AZ_INNER_PAD_X
@@ -274,7 +259,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     col_db_x = col_app_x + app_w + TIER_GAP
     az_content_w = col_db_x + db_w + AZ_INNER_PAD_X
 
-    # ---- Per-VPC geometry (stacked vertically, Borderless-style) ----------
+    # ---- VPC geometry ----------------------------------------------------
     # The VPC gets a LEFT ENTRY GUTTER holding ALB + API Gateway (traffic entry
     # points that live inside the VPC). AZ content is shifted right by the
     # gutter width so the entry icons have their own readable column.
@@ -284,21 +269,14 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                          for r in (page.get("edge", []) or []))
     vpc_gutter_w = VPC_ENTRY_GUTTER_W if has_vpc_gutter else 0
     vpc_content_x = vpc_gutter_w + VPC_LEFT_MARGIN
-    # Per-VPC: az_y offsets (rel to that VPC top), content height, box height.
-    vpc_az_y: dict[str, dict[str, float]] = {}
-    vpc_height_of: dict[str, float] = {}
-    for vkey, vspec in vpc_items:
-        vazs = vspec.get("azs", []) or []
-        az_y: dict[str, float] = {}
-        y = VPC_PAD_TOP
-        for az in vazs:
-            az_y[az["id"]] = y
-            y += az_row_h_by_az[az["id"]] + AZ_GAP
-        vpc_az_y[vkey] = az_y
-        ch = (y - AZ_GAP) if vazs else ICON
-        vpc_height_of[vkey] = ch + VPC_PAD_BOTTOM
+    az_y: dict[str, float] = {}
+    y = VPC_PAD_TOP
+    for az in azs:
+        az_y[az["id"]] = y
+        y += az_row_h_by_az[az["id"]] + AZ_GAP
+    vpc_content_h = (y - AZ_GAP) if azs else ICON
     vpc_width = vpc_content_x + az_content_w + VPC_PAD_X
-    # Uniform width keeps columns aligned across stacked VPCs.
+    vpc_height = vpc_content_h + VPC_PAD_BOTTOM
 
     # Balance regional services across readable rows. The row count follows
     # the actual service count and the available region width; the final rows
@@ -332,27 +310,15 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
     if outside_region_items:
         cloud_region_x += outside_region_w + REGION_PAD_X // 2
 
-    # The region must be wide enough for the services row, the VPCs, and
-    # the route-table column (right of each VPC, Borderless-style).
+    # The region must be wide enough for the services row AND the gutter+VPC.
     icons_per_row = service_row_capacity if n_services else 0
     services_row_w = (icons_per_row * ICON + max(0, icons_per_row - 1) * REGION_RES_GAP
                       if icons_per_row else 0)
     region_width = max(vpc_width + 2 * REGION_PAD_X,
                        services_row_w + 2 * REGION_PAD_X)
     region_x = 0               # region is left-flush inside the cloud (we add padding in cloud)
-    region_y = dynamic_region_pad_top  # first VPC starts at this y within region
-    # Stacked VPC blocks with gaps (first gap holds the transit gateway).
-    vpc_region_y: dict[str, float] = {}
-    _vy = region_y
-    for _vi, (_vk, _vs) in enumerate(vpc_items):
-        vpc_region_y[_vk] = _vy
-        _vy += vpc_height_of[_vk]
-        if _vi < len(vpc_items) - 1:
-            _vy += VPC_STACK_GAP
-    _tgw_spec = region.get("transit_gateway") or {}
-    if _tgw_spec and len(vpc_items) == 1:
-        _vy += TGW_BELOW_GAP + ICON + LABEL_BAND
-    region_height = _vy + REGION_PAD_BOTTOM
+    region_y = dynamic_region_pad_top  # VPC starts at this y within region
+    region_height = dynamic_region_pad_top + vpc_height + REGION_PAD_BOTTOM
 
     # ---- Global services row width for cloud sizing ----------------------
     global_row_list = page.get("global", []) or []
@@ -376,6 +342,7 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                            "api_gateway"}
 
     actor_items = [r for r in edge_list if r.get("service") in actor_services_set]
+    igw_item    = next((r for r in edge_list if r.get("service") == igw_svc), None)
     region_gutter_items = outside_region_items
     vpc_gutter_items = [r for r in edge_list
                         if r.get("service") in vpc_gutter_services]
@@ -384,6 +351,14 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                    | region_gutter_services | vpc_gutter_services)
     ingress_items = [r for r in edge_list
                      if r.get("service") not in _classified]
+
+    # Named lookups for pairing / edge alignment.
+    shield_item = next((r for r in region_gutter_items if r.get("service") == "shield"), None)
+    waf_item    = next((r for r in region_gutter_items if r.get("service") == "waf"), None)
+    alb_item    = next((r for r in vpc_gutter_items
+                        if r.get("service") in ("application_load_balancer",
+                                                "network_load_balancer")), None)
+    apigw_item  = next((r for r in vpc_gutter_items if r.get("service") == "api_gateway"), None)
 
     # Remaining band items (rare) keep the old horizontal-band behaviour.
     _ingress_order = ["cloudfront"]
@@ -505,259 +480,190 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
                 rx += ICON + REGION_RES_GAP
             row_y += ICON + LABEL_BAND + REGION_RES_GAP
 
-    # ---- VPCs (stacked vertically, Borderless-style) ----------------------
+    # ---- VPC -------------------------------------------------------------
     vpc_region_x = REGION_PAD_X
+    vpc_region_y = region_y   # = dynamic_region_pad_top (VPC y within region)
+    lo.add(Node("vpc", "vpc", "region", vpc_region_x, vpc_region_y, vpc_width, vpc_height,
+                label=vpc.get("label", "VPC")),
+           region_abs_x + vpc_region_x, region_abs_y + vpc_region_y)
     vpc_abs_x = region_abs_x + vpc_region_x
-    vpc_spec_of = dict(vpc_items)
-    for vkey, vspec in vpc_items:
-        vy = vpc_region_y[vkey]
-        lo.add(Node(vkey, "vpc", "region", vpc_region_x, vy, vpc_width, vpc_height_of[vkey],
-                    label=vspec.get("label", "VPC")),
-               vpc_abs_x, region_abs_y + vy)
-    lo.vpc_abs_top = region_abs_y + vpc_region_y[primary_key]
-    vpc_abs = {vk: region_abs_y + vpc_region_y[vk] for vk, _ in vpc_items}
+    vpc_abs_y = region_abs_y + vpc_region_y
+    lo.vpc_abs_top = vpc_abs_y
 
-    def _bound_vpc(item):
-        b = item.get("vpc", primary_key)
-        if b not in vpc_spec_of:
-            raise ValueError(
-                f"Edge item {item.get('id')!r} binds unknown vpc {b!r}; "
-                f"expected one of {', '.join(vpc_spec_of)}.")
-        return b
+    # ---- Ingress row alignment -------------------------------------------
+    # Align the ingress chain (Shield/WAF before the Region, ALB in the VPC
+    # gutter) to the MIDDLE AZ's vertical centre, and API Gateway to the AZ
+    # above it. This makes Users→Shield→WAF→ALB a single straight horizontal
+    # line and lets ALB enter the compute cluster cleanly through the AZ gap
+    # (matching the house-style reference). Falls back to the VPC top band when
+    # there are no AZ rows.
+    if azs:
+        mid_idx = len(azs) // 2
+        mid_aid = azs[mid_idx]["id"]
+        ingress_row_cy = vpc_region_y + az_y[mid_aid] + az_row_h_by_az[mid_aid] / 2
+        # API Gateway aligns to the AZ above the middle (or the middle itself
+        # when there is only one AZ).
+        above_idx = max(0, mid_idx - 1)
+        above_aid = azs[above_idx]["id"]
+        apigw_row_cy = vpc_region_y + az_y[above_aid] + az_row_h_by_az[above_aid] / 2
+    else:
+        ingress_row_cy = vpc_region_y + VPC_PAD_TOP + ICON / 2
+        apigw_row_cy = ingress_row_cy
+    ingress_row_y = ingress_row_cy - ICON / 2          # top-left y of ingress icons
+    apigw_row_y = apigw_row_cy - ICON / 2
 
-    # ---- Ingress row alignment (per VPC) -----------------------------------
-    # Align each VPC's ingress chain (Shield/WAF before the Region, ALB in
-    # the VPC gutter) to that VPC's MIDDLE AZ vertical centre. This makes
-    # Users→WAF→ALB a straight horizontal line per VPC (mirror pairs get
-    # one chain each). Falls back to the VPC top band when there are no AZs.
-    ingress_row_cy_of: dict[str, float] = {}
-    ingress_row_y_of: dict[str, float] = {}
-    apigw_row_cy_of: dict[str, float] = {}
-    apigw_row_y_of: dict[str, float] = {}
-    for vkey, vspec in vpc_items:
-        vazs = vspec.get("azs", []) or []
-        vy = vpc_region_y[vkey]
-        vaz_y = vpc_az_y[vkey]
-        if vazs:
-            mid_idx = len(vazs) // 2
-            mid_aid = vazs[mid_idx]["id"]
-            cy = vy + vaz_y[mid_aid] + az_row_h_by_az[mid_aid] / 2
-            # API Gateway aligns to the AZ above the middle (or the middle
-            # itself when there is only one AZ).
-            above_idx = max(0, mid_idx - 1)
-            above_aid = vazs[above_idx]["id"]
-            acy = vy + vaz_y[above_aid] + az_row_h_by_az[above_aid] / 2
-        else:
-            cy = vy + VPC_PAD_TOP + ICON / 2
-            acy = cy
-        ingress_row_cy_of[vkey] = cy
-        ingress_row_y_of[vkey] = cy - ICON / 2
-        apigw_row_cy_of[vkey] = acy
-        apigw_row_y_of[vkey] = acy - ICON / 2
-
-    # ---- Shield/WAF outside the Region (per VPC chain) --------------------
+    # ---- Shield/WAF outside the Region -----------------------------------
     # Their reserved cloud lane ends before the Region border, leaving a clear
-    # gap before the IGW, which straddles the VPC border. Items bind to a VPC
-    # via `vpc:` (default: primary) and sit at that VPC's middle-row height.
+    # gap before the IGW, which straddles the VPC border.
     if region_gutter_items:
-        _rg_by_vpc: dict[str, list] = {}
-        for _ri in region_gutter_items:
-            _rg_by_vpc.setdefault(_bound_vpc(_ri), []).append(_ri)
-        for _vk, _items in _rg_by_vpc.items():
-            pair = [i for i in _items if i.get("service") == "shield"]
-            pair += [i for i in _items if i.get("service") == "waf"]
-            if not pair:
-                pair = list(_items)  # fall back to spec order
-            gutter_cy = ingress_row_y_of[_vk]
-            for slot_i, item in enumerate(pair):
-                gx = cloud_region_x - (outside_region_w + REGION_PAD_X // 2) + slot_i * (ICON + ICON_GAP)
-                cloud_y_rel = cloud_region_y + gutter_cy
-                n = Node(item["id"], "resource", "cloud", gx, cloud_y_rel, ICON, ICON,
-                         provider=item.get("provider", default_provider),
-                         service=item["service"], label=item.get("label"))
-                lo.add(n, cloud_x + gx, cloud_y + cloud_y_rel)
+        pair = [shield_item, waf_item]
+        pair = [p for p in pair if p is not None]
+        if not pair:
+            pair = region_gutter_items  # fall back to spec order
+        gutter_cy = ingress_row_y
+        for slot_i, item in enumerate(pair):
+            gx = cloud_region_x - (outside_region_w + REGION_PAD_X // 2) + slot_i * (ICON + ICON_GAP)
+            cloud_y_rel = cloud_region_y + gutter_cy
+            n = Node(item["id"], "resource", "cloud", gx, cloud_y_rel, ICON, ICON,
+                     provider=item.get("provider", default_provider),
+                     service=item["service"], label=item.get("label"))
+            lo.add(n, cloud_x + gx, cloud_y + cloud_y_rel)
 
-    # ---- VPC ENTRY GUTTER: ALB + API Gateway (per VPC) ----------------------
+    # ---- VPC ENTRY GUTTER: ALB (AZ gap) + API Gateway (AZ1 centre) --------
     # Both icons are horizontally CENTRED in the VPC left-gutter column so they
     # sit visually "on" the VPC left edge rather than hugging its inner wall.
+    # ALB aligns to the first AZ-gap corridor (the natural entry point for the
+    # compute cluster). APIGW aligns to AZ1 centre (one row above ALB).
     if vpc_gutter_items:
         gutter_x = (vpc_gutter_w - ICON) / 2        # centre of gutter column
-        _vg_by_vpc: dict[str, list] = {}
-        for _vi in vpc_gutter_items:
-            _vg_by_vpc.setdefault(_bound_vpc(_vi), []).append(_vi)
-        for _vk, _items in _vg_by_vpc.items():
-            _vy = vpc_region_y[_vk]
-            _alb = next((i for i in _items
-                         if i.get("service") in ("application_load_balancer",
-                                                 "network_load_balancer")), None)
-            _apigw = next((i for i in _items
-                           if i.get("service") == "api_gateway"), None)
-            if _alb is not None:
-                n = Node(_alb["id"], "resource", _vk, gutter_x,
-                         ingress_row_y_of[_vk] - _vy, ICON, ICON,
-                         provider=_alb.get("provider", default_provider),
-                         service=_alb["service"], label=_alb.get("label"))
-                lo.add(n, vpc_abs_x + gutter_x,
-                       region_abs_y + ingress_row_y_of[_vk])
-                lo.vpc_of[_alb["id"]] = _vk
-            if _apigw is not None:
-                n = Node(_apigw["id"], "resource", _vk, gutter_x,
-                         apigw_row_y_of[_vk] - _vy, ICON, ICON,
-                         provider=_apigw.get("provider", default_provider),
-                         service=_apigw["service"], label=_apigw.get("label"))
-                lo.add(n, vpc_abs_x + gutter_x,
-                       region_abs_y + apigw_row_y_of[_vk])
-                lo.vpc_of[_apigw["id"]] = _vk
-            # Any other vpc-gutter items (rare) stack below ALB, centred in the gutter.
-            placed = {i["id"] for i in (_alb, _apigw) if i}
-            extra_y = ingress_row_y_of[_vk] - _vy + ICON + ICON_GAP
-            for item in _items:
-                if item["id"] in placed:
-                    continue
-                n = Node(item["id"], "resource", _vk, gutter_x, extra_y, ICON, ICON,
-                         provider=item.get("provider", default_provider),
-                         service=item["service"], label=item.get("label"))
-                lo.add(n, vpc_abs_x + gutter_x, vpc_abs[_vk] + extra_y)
-                lo.vpc_of[item["id"]] = _vk
-                extra_y += ICON + ICON_GAP
+        if alb_item is not None:
+            n = Node(alb_item["id"], "resource", "vpc", gutter_x,
+                     ingress_row_y - vpc_region_y, ICON, ICON,
+                     provider=alb_item.get("provider", default_provider),
+                     service=alb_item["service"], label=alb_item.get("label"))
+            lo.add(n, vpc_abs_x + gutter_x,
+                   region_abs_y + ingress_row_y)
+        if apigw_item is not None:
+            n = Node(apigw_item["id"], "resource", "vpc", gutter_x,
+                     apigw_row_y - vpc_region_y, ICON, ICON,
+                     provider=apigw_item.get("provider", default_provider),
+                     service=apigw_item["service"], label=apigw_item.get("label"))
+            lo.add(n, vpc_abs_x + gutter_x,
+                   region_abs_y + apigw_row_y)
+        # Any other vpc-gutter items (rare) stack below ALB, centred in the gutter.
+        placed = {i["id"] for i in (alb_item, apigw_item) if i}
+        extra_y = ingress_row_y - vpc_region_y + ICON + ICON_GAP
+        for item in vpc_gutter_items:
+            if item["id"] in placed:
+                continue
+            n = Node(item["id"], "resource", "vpc", gutter_x, extra_y, ICON, ICON,
+                     provider=item.get("provider", default_provider),
+                     service=item["service"], label=item.get("label"))
+            lo.add(n, vpc_abs_x + gutter_x, vpc_abs_y + extra_y)
+            extra_y += ICON + ICON_GAP
 
-    # ---- AZ rows + subnets (per VPC) ---------------------------------------
-    for vkey, vspec in vpc_items:
-        vazs = vspec.get("azs", []) or []
-        vaz_y = vpc_az_y[vkey]
-        v_abs_y = vpc_abs[vkey]
-        for az in vazs:
-            aid = az["id"]
-            ay = vaz_y[aid]
-            az_w = az_content_w
-            az_row_h = az_row_h_by_az[aid]
-            lo.add(Node(aid, "az", vkey, vpc_content_x, ay, az_w, az_row_h,
-                        label=az.get("label", aid)),
-                   vpc_abs_x + vpc_content_x, v_abs_y + ay)
-            lo.vpc_of[aid] = vkey
-            az_abs_x = vpc_abs_x + vpc_content_x
-            az_abs_y = v_abs_y + ay
-            tier_heights = {"public_subnet": pub_h_by_az[aid],
-                            "app_subnet": app_h_by_az[aid],
-                            "db_subnet": db_h_by_az[aid]}
-            for tier, col_x, w in (("public_subnet", col_pub_x, pub_w),
-                                   ("app_subnet", col_app_x, app_w),
-                                   ("db_subnet", col_db_x, db_w)):
-                subnet = az.get(tier)
-                if subnet:
-                    th = tier_heights[tier]
-                    _emit_subnet(lo, subnet, tier, parent=aid,
-                                 rel_x=col_x, rel_y=AZ_INNER_PAD_TOP,
-                                 width=w, height=th,
-                                 abs_x=az_abs_x + col_x,
-                                 abs_y=az_abs_y + AZ_INNER_PAD_TOP,
-                                 default_provider=default_provider,
-                                 vpc_key=vkey)
+    # ---- AZ rows + subnets -----------------------------------------------
+    for az in azs:
+        aid = az["id"]
+        ay = az_y[aid]
+        az_w = az_content_w
+        az_row_h = az_row_h_by_az[aid]
+        lo.add(Node(aid, "az", "vpc", vpc_content_x, ay, az_w, az_row_h,
+                    label=az.get("label", aid)),
+               vpc_abs_x + vpc_content_x, vpc_abs_y + ay)
+        az_abs_x = vpc_abs_x + vpc_content_x
+        az_abs_y = vpc_abs_y + ay
+        tier_heights = {"public_subnet": pub_h_by_az[aid],
+                        "app_subnet": app_h_by_az[aid],
+                        "db_subnet": db_h_by_az[aid]}
+        for tier, col_x, w in (("public_subnet", col_pub_x, pub_w),
+                               ("app_subnet", col_app_x, app_w),
+                               ("db_subnet", col_db_x, db_w)):
+            subnet = az.get(tier)
+            if subnet:
+                th = tier_heights[tier]
+                _emit_subnet(lo, subnet, tier, parent=aid,
+                             rel_x=col_x, rel_y=AZ_INNER_PAD_TOP,
+                             width=w, height=th,
+                             abs_x=az_abs_x + col_x,
+                             abs_y=az_abs_y + AZ_INNER_PAD_TOP,
+                             default_provider=default_provider,
+                             reserve_left=(app_reserve_left
+                                           if tier == "app_subnet" else 0))
 
-    # ---- Per-VPC corridors, AZ gaps/rows, lanes ----------------------------
-    # Scalars keep the primary (first) VPC so single-VPC output is unchanged;
-    # dicts let routing pick per-target-VPC values.
+    # ---- VPC corridor x and region right corridor ------------------------
     lo.vpc_corridor_x = vpc_abs_x + VPC_LEFT_MARGIN / 2
     lo.region_right_x = region_abs_x + region_width + REGION_CORRIDOR_OFFSET
-    for vkey, vspec in vpc_items:
-        lo.vpc_corridors[vkey] = vpc_abs_x + VPC_LEFT_MARGIN / 2
-        lo.vpc_tops[vkey] = vpc_abs[vkey]
-        vazs = vspec.get("azs", []) or []
-        vaz_y = vpc_az_y[vkey]
-        v_abs_y = vpc_abs[vkey]
-        for i in range(len(vazs) - 1):
-            top_az = vazs[i]["id"]
-            bot_az = vazs[i + 1]["id"]
-            gap_top = v_abs_y + vaz_y[top_az] + az_row_h_by_az[top_az]
-            gap_bot = v_abs_y + vaz_y[bot_az]
-            lo.az_gaps.append((gap_top, gap_bot))
-        for az in vazs:
-            row_top = v_abs_y + vaz_y[az["id"]]
-            row_bot = row_top + az_row_h_by_az[az["id"]]
-            lo.az_rows.append((row_top, row_bot))
-        # Inter-VPC gap corridor (holds the transit gateway).
-        vi = vpc_keys.index(vkey)
-        if vi < len(vpc_items) - 1:
-            this_bot = v_abs_y + vpc_height_of[vkey]
-            next_top = vpc_abs[vpc_keys[vi + 1]]
-            lo.az_gaps.append((this_bot, next_top))
 
-    # ---- Compute-group vertical lanes (per VPC) ------------------------------
-    for vkey, vspec in vpc_items:
-        vgroups = vspec.get("compute_groups", []) or []
-        vazs = vspec.get("azs", []) or []
-        vaz_ids = [az["id"] for az in vazs]
-        vaz_y = vpc_az_y[vkey]
-        v_abs_y = vpc_abs[vkey]
-        if not (vgroups and vazs):
-            continue
-        first_y = vaz_y[vaz_ids[0]] + AZ_INNER_PAD_TOP
-        last_y  = vaz_y[vaz_ids[-1]] + AZ_INNER_PAD_TOP + app_h_by_az[vaz_ids[-1]]
-        lane_top = first_y - LANE_OVERHANG
-        az_last_bottom = vaz_y[vaz_ids[-1]] + az_row_h_by_az[vaz_ids[-1]] - AZ_INNER_PAD_BOTTOM
-        lane_bottom = min(last_y + LANE_OVERHANG, az_last_bottom - 5)
+    # ---- AZ gap corridors + row bounds -----------------------------------
+    az_mid_ys = []
+    for i in range(len(azs) - 1):
+        top_az = azs[i]["id"]
+        bot_az = azs[i + 1]["id"]
+        gap_top = vpc_abs_y + az_y[top_az] + az_row_h_by_az[top_az]
+        gap_bot = vpc_abs_y + az_y[bot_az]
+        lo.az_gaps.append((gap_top, gap_bot))
+    for az in azs:
+        row_top = vpc_abs_y + az_y[az["id"]]
+        row_bot = row_top + az_row_h_by_az[az["id"]]
+        lo.az_rows.append((row_top, row_bot))
+        az_mid_ys.append((row_top + row_bot) / 2)
+
+    # ---- Compute-group vertical lanes ------------------------------------
+    if groups and azs:
+        first_y = az_y[az_ids[0]] + AZ_INNER_PAD_TOP
+        last_y  = az_y[az_ids[-1]] + AZ_INNER_PAD_TOP + app_h_by_az[az_ids[-1]]
+        # Reference-style: lanes sit INSIDE the AZ stack (no overhang past AZ
+        # borders). Top starts below the first app-subnet label band, bottom
+        # stops inside the last AZ's bottom padding. Covers all app content,
+        # touches no borders or labels.
+        lane_top = first_y + LANE_LABEL_CLEAR
+        az_last_bottom = az_y[az_ids[-1]] + az_row_h_by_az[az_ids[-1]] - AZ_INNER_PAD_BOTTOM
+        lane_bottom = min(last_y, az_last_bottom)
         lane_height = lane_bottom - lane_top
         lane_x0 = vpc_content_x + col_app_x + SUBNET_PAD_X
         lane_x = lane_x0
-        for g in vgroups:
-            span = g.get("azs", vaz_ids)
-            lo.add(Node(g["id"], g.get("kind", "ecs_cluster"), vkey,
+        for g in groups:
+            span = g.get("azs", az_ids)
+            lo.add(Node(g["id"], g.get("kind", "ecs_cluster"), "vpc",
                         lane_x, lane_top, LANE_W, lane_height, label=g.get("label")),
-                   vpc_abs_x + lane_x, v_abs_y + lane_top)
-            lo.vpc_of[g["id"]] = vkey
+                   vpc_abs_x + lane_x, vpc_abs_y + lane_top)
             lane_abs_x = vpc_abs_x + lane_x
-            lane_abs_y = v_abs_y + lane_top
-            for az_id in vaz_ids:
+            lane_abs_y = vpc_abs_y + lane_top
+            for az_id in az_ids:
                 if az_id not in span:
                     continue
                 node_id = f"{g['id']}-{az_id}"
-                icon_rel_y = (vaz_y[az_id] + AZ_INNER_PAD_TOP + SUBNET_PAD_TOP) - lane_top
+                # Centre the lane icon vertically inside its app subnet, the
+                # same way _emit_subnet centres resource icons (SUBNET_PAD_TOP
+                # + half the leftover air). Previously this used SUBNET_PAD_TOP
+                # alone, leaving lane icons 45px above their AZ peers and the
+                # first icon crammed against the lane badge.
+                _lane_air = max(0, (app_h_by_az[az_id] - SUBNET_PAD_TOP - SUBNET_PAD_BOTTOM - ICON) / 2)
+                icon_rel_y = (az_y[az_id] + AZ_INNER_PAD_TOP + SUBNET_PAD_TOP + _lane_air) - lane_top
                 icon_rel_x = (LANE_W - ICON) / 2
                 lo.add(Node(node_id, "resource", g["id"],
                             icon_rel_x, icon_rel_y, ICON, ICON,
                             provider=default_provider,
                             service=g["node_service"], label=g.get("node_label")),
                        lane_abs_x + icon_rel_x, lane_abs_y + icon_rel_y)
-                lo.vpc_of[node_id] = vkey
             lane_x += LANE_W + LANE_GAP
 
-    # ---- IGWs: one per bound VPC, straddling its border --------------------
-    _igw_by_vpc: dict[str, list] = {}
-    for _ig in [r for r in edge_list if r.get("service") == igw_svc]:
-        _igw_by_vpc.setdefault(_bound_vpc(_ig), []).append(_ig)
-    for _vk, _igs in _igw_by_vpc.items():
-        _igw = _igs[0]  # first IGW per VPC (mirror pairs use one each)
+    # ---- IGW: straddle the VPC border in the horizontal ingress row ------
+    if igw_item:
         igw_rel_x = -ICON / 2
-        igw_rel_y = ingress_row_y_of[_vk] - vpc_region_y[_vk]
-        n = Node(_igw["id"], "resource", _vk, igw_rel_x, igw_rel_y, ICON, ICON,
-                 provider=_igw.get("provider", default_provider),
-                 service="internet_gateway", label=_igw.get("label"))
-        lo.add(n, vpc_abs_x + igw_rel_x, region_abs_y + ingress_row_y_of[_vk])
-        lo.vpc_of[_igw["id"]] = _vk
-
-    # ---- Transit gateway (region level, centred in the first gap) -----------
-    _tgw = region.get("transit_gateway") or {}
-    if _tgw:
-        _tgw_id = _tgw.get("id", "tgw")
-        if len(vpc_items) > 1:
-            _gap_top = vpc_abs[vpc_keys[0]] + vpc_height_of[vpc_keys[0]]
-            _gap_bot = vpc_abs[vpc_keys[1]]
-            _tgw_y = (_gap_top + _gap_bot) / 2 - ICON / 2 - region_abs_y
-        else:
-            _tgw_y = (vpc_region_y[primary_key]
-                      + vpc_height_of[primary_key] + TGW_BELOW_GAP)
-        _tgw_x = region_width / 2 - ICON / 2
-        n = Node(_tgw_id, "resource", "region", _tgw_x, _tgw_y, ICON, ICON,
-                 provider=_tgw.get("provider", default_provider),
-                 service=_tgw.get("service", "transit_gateway"),
-                 label=_tgw.get("label", "Transit Gateway"))
-        lo.add(n, region_abs_x + _tgw_x, region_abs_y + _tgw_y)
+        igw_rel_y = ingress_row_y - vpc_region_y
+        n = Node(igw_item["id"], "resource", "vpc", igw_rel_x, igw_rel_y, ICON, ICON,
+                 provider=igw_item.get("provider", default_provider),
+                 service="internet_gateway", label=igw_item.get("label"))
+        lo.add(n, vpc_abs_x + igw_rel_x, region_abs_y + ingress_row_y)
 
     # ---- External actors (left of cloud) ---------------------------------
-    # Actors stack vertically at ACTOR_LEFT_X. They centre on the primary
-    # VPC's ingress row. This keeps the users→waf edge short and horizontal.
+    # Actors stack vertically at ACTOR_LEFT_X. They centre on the ingress entry
+    # row they connect to: the outside-Region Shield/WAF lane when present, else the
+    # leftover band. This keeps the users→shield/waf edge short and horizontal.
     if region_gutter_items:
-        entry_cy = region_abs_y + ingress_row_cy_of[primary_key]
+        entry_cy = region_abs_y + ingress_row_cy
     else:
         entry_cy = cloud_y + cloud_ingress_y + ICON / 2
     if actor_items:
@@ -795,12 +701,10 @@ def build(page: dict, default_provider: str = "aws") -> Layout:
 def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
                  rel_x: float, rel_y: float, width: float, height: float,
                  abs_x: float, abs_y: float, default_provider: str,
-                 vpc_key: Optional[str] = None):
+                 reserve_left: float = 0):
     lo.add(Node(subnet["id"], kind, parent, rel_x, rel_y, width, height,
                 label=subnet.get("label", subnet["id"])),
            abs_x, abs_y)
-    if vpc_key is not None:
-        lo.vpc_of[subnet["id"]] = vpc_key
     resources = subnet.get("resources", []) or []
     n = len(resources)
     if n == 0:
@@ -813,18 +717,25 @@ def _emit_subnet(lo: Layout, subnet: dict, kind: str, parent: str,
     rows = (n + actual_cols - 1) // actual_cols
     grid_w = actual_cols * ICON + (actual_cols - 1) * ICON_GAP
     grid_h = rows * ICON + (rows - 1) * ICON_GAP
-    start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
+    if reserve_left:
+        # Resources sit to the RIGHT of a reserved band (the compute lanes
+        # overlay the left of the app subnet). Left-align them in the
+        # remaining space so they never sit under a lane node.
+        start_x = reserve_left + max(SUBNET_PAD_X, (width - reserve_left - grid_w) / 2)
+    else:
+        start_x = max(SUBNET_PAD_X, (width - grid_w) / 2)
+    # Centre the icon grid vertically (icons breathe inside tall
+    # subnets instead of hugging the label band).
+    start_y = SUBNET_PAD_TOP + max(0, (height - SUBNET_PAD_TOP - SUBNET_PAD_BOTTOM - grid_h) / 2)
     for idx, res in enumerate(resources):
         col_i = idx % actual_cols
         row_i = idx // actual_cols
         rx = start_x + col_i * (ICON + ICON_GAP)
-        ry = SUBNET_PAD_TOP + row_i * (ICON + ICON_GAP)
+        ry = start_y + row_i * (ICON + ICON_GAP)
         node = Node(res["id"], "resource", subnet["id"], rx, ry, ICON, ICON,
                     provider=res.get("provider", default_provider),
                     service=res["service"], label=res.get("label"))
         lo.add(node, abs_x + rx, abs_y + ry)
-        if vpc_key is not None:
-            lo.vpc_of[res["id"]] = vpc_key
 
 
 def all_ids(lo: Layout) -> set:

@@ -150,14 +150,15 @@ def test_lane_spans_all_az_rows():
     lo = _lo()
     b = lo.abs_boxes
     ex, ey, ew, eh = b["ecs"]
-    # lane covers app-subnet bands for az1 and az2 at minimum; az3 band may
-    # be partially covered (lane stops before az3 bottom border by design)
-    for az in ("app1", "app2"):
-        ax, ay, aw, ah = b[az]
-        assert ey <= ay and ey + eh >= ay + ah
-    # lane top is above app1
-    ax, ay, aw, ah = b["app1"]
-    assert ey <= ay
+    # Lane stays inside the AZ stack while covering app-subnet content:
+    # top below the first app-subnet label band, bottom inside last AZ.
+    az1x, az1y, az1w, az1h = b["az1"]
+    az3x, az3y, az3w, az3h = b["az3"]
+    assert az1y < ey < az1y + 120, "lane top inside first AZ, below app label"
+    assert ey + eh <= az3y + az3h, "lane bottom inside last AZ"
+    # middle app band fully covered
+    ax, ay, aw, ah = b["app2"]
+    assert ey <= ay and ey + eh >= ay + ah
 
 
 def test_group_nodes_align_vertically_same_column():
@@ -208,12 +209,13 @@ def test_lanes_overlay_app_subnet():
     appx, appy, appw, apph = b["app1"]
     ex, ey, ew, eh = b["ecs"]
     assert appx <= ex and ex + ew <= appx + appw + 1
-    # LANE_OVERHANG = AZ_INNER_PAD_TOP: lane top is at the AZ top (50px above subnet top)
-    # This gives the lane label a 50px band above the subnet, avoiding overlap.
+    # Lanes sit inside the AZ stack (reference-style): top below the first
+    # app-subnet label band but above the first icon, bottom inside last AZ.
     az1x, az1y, az1w, az1h = b["az1"]
     app3x, app3y, app3w, app3h = b["app3"]
-    # Lane top should be at or above app1 top (using the AZ padding band for label)
-    assert ey <= appy, f"lane top {ey} should be at or above app1 top {appy}"
+    ex_az1_icon = b["ecs-az1"]
+    assert ey > appy, f"lane top {ey} should clear the app1 label band ({appy})"
+    assert ey < ex_az1_icon[1], "lane top should stay above the first lane icon"
     # Lane bottom should be within the last AZ (az3), with tolerance for padding
     az3x, az3y, az3w, az3h = b["az3"]
     assert ey + eh <= az3y + az3h + 5, "lane bottom should not extend beyond az3"

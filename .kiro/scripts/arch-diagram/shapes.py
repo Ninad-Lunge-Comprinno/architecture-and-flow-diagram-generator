@@ -178,6 +178,8 @@ _AWS = {
     "health": ("health", "management", "AWS Health"),
     "managed_grafana": ("managed_service_for_grafana", "management", "Amazon Managed Grafana"),
     "grafana": ("managed_service_for_grafana", "management", "Amazon Managed Grafana"),
+    "managed_prometheus": ("managed_service_for_prometheus", "management", "Amazon Managed Service for Prometheus"),
+    "amp": ("managed_service_for_prometheus", "management", "Amazon Managed Service for Prometheus"),
     "x_ray": ("xray", "management", "AWS X-Ray"),
     "personal_health_dashboard": ("personal_health_dashboard", "management", "AWS Personal Health Dashboard"),
     # ---- Integration & Messaging -----------------------------------------

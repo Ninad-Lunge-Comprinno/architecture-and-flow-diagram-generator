@@ -11,6 +11,7 @@ test fails the build if they drift apart.
 | key | category | fill | stencil | default label |
 |-----|----------|------|---------|---------------|
 | amplify | devtools | #C925D1 | mxgraph.aws4.amplify | AWS Amplify |
+| amp | management | #E7157B | mxgraph.aws4.managed_service_for_prometheus | Amazon Managed Service for Prometheus |
 | api_gateway | networking | #8C4FFF | mxgraph.aws4.api_gateway | Amazon API Gateway |
 | api_gateway_v2 | networking | #8C4FFF | mxgraph.aws4.api_gateway | Amazon API Gateway |
 | app_runner | containers | #ED7100 | mxgraph.aws4.app_runner | AWS App Runner |
@@ -100,6 +101,7 @@ test fails the build if they drift apart.
 | lightsail | compute | #ED7100 | mxgraph.aws4.lightsail | Amazon Lightsail |
 | macie | security | #DD344C | mxgraph.aws4.macie | Amazon Macie |
 | managed_grafana | management | #E7157B | mxgraph.aws4.managed_service_for_grafana | Amazon Managed Grafana |
+| managed_prometheus | management | #E7157B | mxgraph.aws4.managed_service_for_prometheus | Amazon Managed Service for Prometheus |
 | managed_streaming_for_kafka | analytics | #E7157B | mxgraph.aws4.managed_streaming_for_kafka | Amazon MSK |
 | memorydb | database | #C925D1 | mxgraph.aws4.memorydb_for_redis | Amazon MemoryDB |
 | mobile_client | general | #232F3E | mxgraph.aws4.mobile_client | Mobile Client |

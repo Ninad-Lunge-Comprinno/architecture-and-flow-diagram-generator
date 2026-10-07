@@ -16,7 +16,7 @@ This directory contains minimal fixtures for regression testing the diagram gene
 - [ ] ECS cluster lane spans all 3 AZs vertically
 - [ ] ECR positioned directly above ECS lane (dx < 50px)
 - [ ] ECR→ECS edge drops straight down (no right corridor)
-- [ ] RDS replication edges use right corridor for multi-AZ skip
+- [ ] RDS shown as one node per AZ (primary + standbys), no replication edges
 - [ ] No icon or label overlaps
 - [ ] ALB positioned in edge strip, aligned with AZ1-AZ2 gap
 

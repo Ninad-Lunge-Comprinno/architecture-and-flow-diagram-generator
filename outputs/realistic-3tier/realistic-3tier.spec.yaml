@@ -62,4 +62,3 @@ pages:
       - { source: ecr, target: ecs, label: "deploy", dashed: true }
       - { source: ecs-az1, target: cache1, label: "cache" }
       - { source: ecs-az1, target: rds1, label: "sql" }
-      - { source: rds1, target: rds2, label: "replication", dashed: true }

@@ -31,7 +31,7 @@ flow diagram examples/           # reference flow-page examples
 
 .kiro/
 ├── agents/
-│   └── arch-diagram.json        # dedicated agent with awsdac MCP wired in
+│   └── arch-diagram.json        # dedicated agent configuration
 ├── skills/arch-diagram/
 │   ├── SKILL.md                 # procedure the agent follows (/arch-diagram)
 │   └── references/
@@ -47,7 +47,7 @@ flow diagram examples/           # reference flow-page examples
     ├── layout.py                # grid-based layout engine with AZ routing
     ├── routing.py               # edge routing and conflict checker
     ├── shapes.py                # shape/colour catalog (SOURCE OF TRUTH)
-    └── tests/                   # pytest suite (187 tests)
+    └── tests/                   # pytest suite
 ```
 
 > **Rule:** committed files are specs only. Generated XMLs are git-ignored and
@@ -59,19 +59,60 @@ flow diagram examples/           # reference flow-page examples
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"      # installs the package + the `arch-diagram` command + pytest
 pytest
 ```
 
-### awsdac MCP server (optional — enables PNG preview)
+For a reproducible, hash-verified install of the exact dependency closure
+(used by CI), install from the lockfile instead:
 
 ```bash
-brew install awsdac          # macOS
-which awsdac && which awsdac-mcp-server   # verify
+pip install --require-hashes -r requirements.lock   # pinned deps, verified by sha256
+pip install -e . --no-deps                          # the package itself
 ```
 
-Once installed, the `arch-diagram` agent starts it automatically and produces a
-`<project>.png` preview alongside the XML. Without it, only the XML is written.
+Or use the Makefile:
+
+```bash
+make venv     # create .venv and install the package + dev deps
+make test     # run the suite
+make run SPEC=outputs/acme-orders/acme-orders.spec.yaml
+make regen    # regenerate every outputs/**/*.spec.yaml
+```
+
+### CLI output contract
+
+The generator prints **only the resolved output path to stdout** (so it can be
+piped/scripted); all operational messaging (architecture checks, routing
+conflicts, success) is logged to **stderr** with severity levels. Pass `-v` for
+DEBUG diagnostics. On error it logs the cause and exits with code `2` instead of
+raising a traceback.
+
+### PNG preview (optional — for visual inspection)
+
+The generator can rasterise each page to a PNG so you (or an agent) can eyeball
+layout, grouping, and edge routing without opening draw.io. It uses a built-in
+structural renderer (Pillow only — no browser, fully headless and deterministic)
+that reads the generated XML and draws the container hierarchy, resource tiles
+(coloured by service category), and every edge through its real waypoints.
+
+```bash
+pip install -e ".[png]"      # installs Pillow
+
+# Generate XML and PNG previews in one step
+python .kiro/scripts/arch-diagram/generate_diagram.py \
+  --input outputs/acme-orders/acme-orders.spec.yaml --png
+
+# Or render an existing XML on its own
+python .kiro/scripts/arch-diagram/render_png.py \
+  --input outputs/acme-orders/acme-orders.drawio.xml
+```
+
+Multi-page specs produce `<stem>.p1.png`, `<stem>.p2.png`, …; single-page specs
+produce `<stem>.png`. The renderer prints each PNG path to stdout. The preview is
+a *structural* view (it does not draw the AWS stencil glyphs), which is exactly
+what is needed to catch overlapping arrows, bad grouping, or disconnected nodes.
+Generated PNGs are git-ignored like the XML.
 
 ---
 
@@ -193,7 +234,7 @@ done
 
 ```bash
 source .venv/bin/activate
-pytest                           # run all 185 tests
+pytest                           # run the full suite
 pytest -k "dataforge"            # run tests matching a keyword
 pytest --tb=short -q             # compact output
 ```
@@ -231,12 +272,6 @@ For a **custom agent** that needs access to this skill, add to its config:
   "resources": [
     "skill://.kiro/skills/*/SKILL.md",
     "file://.kiro/steering/**/*.md"
-  ],
-  "mcpServers": {
-    "awsdac-mcp-server": {
-      "command": "awsdac-mcp-server",
-      "args": []
-    }
-  }
+  ]
 }
 ```

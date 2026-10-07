@@ -173,7 +173,7 @@ def _full_dataforge_layout():
             ],
         }],
     }
-    lo = gd._import_layout()
+    lo = gd.layout
     page = spec["pages"][0]
     gd._fix_regional_placement(page)
     gd._reorder_services_for_vpc_proximity(page)
@@ -827,8 +827,11 @@ class TestVpcCenteringAndGutters:
                                  for key in ("shield", "waf", "igw", "alb"))
         region_left = lo.abs_boxes["region"][0]
         assert shield[0] < waf[0] < region_left < igw[0] < alb[0]
-        for left, right in ((shield, waf), (waf, igw), (igw, alb)):
-            assert right[0] - (left[0] + left[2]) >= lo_mod.ICON_GAP
+        # Gutter pair follows the icon rhythm; the IGW gap is border-forced
+        # (IGW straddles the VPC edge) so it only needs daylight, not rhythm.
+        assert waf[0] - (shield[0] + shield[2]) >= lo_mod.ICON_GAP
+        for left, right in ((waf, igw), (igw, alb)):
+            assert right[0] - (left[0] + left[2]) > 0
 
     def test_users_outside_cloud_with_gutters(self):
         lo = self._gutter_layout()

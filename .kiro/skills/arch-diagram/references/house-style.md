@@ -96,7 +96,7 @@ resilience, and cost design; do not assume one NAT per VPC or one per AZ.
 Declared **separately** from placement. Default connector
 `edgeStyle=orthogonalEdgeStyle;strokeWidth=3;` with computed connection points
 (`exitX/entryX`) + waypoints so arrows attach to borders and route around icons.
-Use `dashed: true` for async / deploy / replication flows. Cross-boundary arrows
+Use `dashed: true` for async or deploy flows. Cross-boundary arrows
 (ALB fan-out to each AZ, cross-AZ, CI/CD deploy-up) are ordinary edges.
 
 ## Title block & pages

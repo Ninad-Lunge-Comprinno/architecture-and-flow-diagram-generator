@@ -125,11 +125,6 @@ pages:
 
       # Deployment
       - { source: ecr,           target: eks,            label: "deploy", dashed: true }
-
-      # DB replication
-      - { source: cache1,        target: cache2,         label: "replication", dashed: true }
-      - { source: catalog1,      target: catalog2,       label: "replication", dashed: true }
-
   - name: "Amazon Prime Playback Flow"
     type: flow
 

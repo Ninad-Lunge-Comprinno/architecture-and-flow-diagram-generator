@@ -353,12 +353,7 @@ def test_scoped_flow_layout_keeps_vpc_lane_compact():
     )
 
     assert max(y for _, y in positions.values()) < 1000
-    # No forced offset: VPC members share rank columns with cloud services
-    # (compact canvas); scope stays visible through the VPC frame group.
-    cloud_xs = [positions[nid][0] for nid in
-                ("cdn", "gateway", "identity", "manifests", "telemetry",
-                 "fanout", "recommendations", "analytics")]
-    assert positions["playback"][0] <= max(cloud_xs)
+    assert positions["playback"][0] > positions["identity"][0]
     assert positions["player"][0] < positions["cdn"][0]
 
 

@@ -79,9 +79,6 @@ pages:
       # ECS tasks to data tier (AZ1 primary)
       - { source: ecs-az1, target: rds1, label: "SQL" }
       - { source: ecs-az1, target: cache1, label: "cache" }
-      # RDS replication (primary to replicas)
-      - { source: rds1, target: rds2, label: "replication", dashed: true }
-      - { source: rds1, target: rds3, label: "replication", dashed: true }
       # CI/CD deploy to ECS cluster boundary
       - { source: ecr, target: ecs, label: "deploy", dashed: true }
 

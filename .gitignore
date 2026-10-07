@@ -4,11 +4,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Generated diagram XML — reproduced from spec files via generate_diagram.py.
-# Spec (.spec.yaml) files ARE tracked; XMLs are not.
+# Generated diagram XML and PNG previews — reproduced from spec files.
+# Spec (.spec.yaml) files ARE tracked; generated outputs are not.
 *.drawio.xml
 !diagram examples/*.drawio.xml
 !flow diagram examples/*.drawio.xml
+outputs/**/*.png
 
 # Stale working directories (cleaned up)
 renderdir/

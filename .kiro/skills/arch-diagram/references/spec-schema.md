@@ -120,38 +120,6 @@ Notes matching the house style:
 - **CI/CD** icons (CodePipeline, CodeBuild, ECR) go in `region.services` — there is
   no separate bottom strip.
 
-## Multiple VPCs (mirror / peered pairs, Borderless-style)
-
-One `region` can hold several VPCs stacked vertically. Use the singular
-`vpc:` block for classic single-VPC diagrams (unchanged behaviour); use
-`vpcs:` for two or more peered VPCs. Ids must be unique across the whole
-page — prefix per VPC (`a-az1`, `b-az1`, …).
-
-```yaml
-region:
-  label: "us-east-1"
-  services: [...]                 # shared region services (one grid)
-  transit_gateway:                # optional, centred in the first gap
-    id: tgw
-    label: "Transit Gateway"
-  vpcs:
-    - id: vpc-a                   # required; becomes the container node id
-      label: "VPC-A (10.0.0.0/16)"
-      azs: [...]                  # ids unique across the page
-      compute_groups: [...]
-    - id: vpc-b
-      label: "VPC-B (10.1.0.0/16)"
-      azs: [...]
-      compute_groups: [...]
-```
-
-- Ingress `edge` items accept `vpc: <id>` (default: first VPC) so each VPC
-  gets its own chain (`waf-a`/`alb-a`/`igw-a` at VPC-A's middle row,
-  `waf-b`/… at VPC-B's). The IGW straddles its own VPC's border.
-- Cross-VPC traffic goes through the `transit_gateway` id in `edges`
-  (e.g. `eksa → tgw → eksb`).
-- Single-`vpc` specs keep node id `"vpc"` and identical geometry.
-
 ## Resource entry (used in global / entry / services / subnet resources)
 
 ```yaml
@@ -247,14 +215,13 @@ edges:
   - { source: alb, target: ecs, label: "route" }            # shared cluster boundary
   - { source: ecs, target: cache1, label: "cache" }
   - { source: ecs, target: rds1, label: "queries" }
-  - { source: rds1, target: rds2, label: "replication", dashed: true }
   - { source: ecr, target: ecs, label: "deploy", dashed: true }
 ```
 | field | required | description |
 |-------|----------|-------------|
 | `source` / `target` | yes | ids of existing elements; `<group>-<az>` targets are for AZ-specific paths |
 | `label` | no | edge label |
-| `dashed` | no | `true` for async/deploy/replication flows |
+| `dashed` | no | `true` for async or deploy flows |
 | `az_specific` | no | `true` when an edge intentionally targets one ECS/EKS AZ task |
 | `style` | no | raw draw.io style override (disables auto-routing) |
 
