@@ -1,0 +1,43 @@
+provider: gcp
+metadata:
+  client_name: "Comprinno"
+  project: "EV Fleet Analytics"
+  version: "1.0"
+  date: "2026-10-06"
+  creator: "To be filled"
+  reviewer: "To be filled"
+
+pages:
+  - name: "Architecture Diagram"
+    type: flow
+    nodes:
+      - { id: publisher,    service: user,              label: "Stream Publisher", scope: external }
+      - { id: scheduler,    service: cloud_scheduler,   label: "Cloud Scheduler" }
+      - { id: cloud_run,    service: cloud_run,         label: "Cloud Run Job" }
+      - { id: gcs,          service: cloud_storage,     label: "Cloud Storage" }
+      - { id: pubsub,       service: cloud_pubsub,      label: "Pub/Sub" }
+      - { id: dataflow,     service: cloud_dataflow,    label: "Dataflow" }
+      - { id: dataproc,     service: cloud_dataproc,    label: "Dataproc" }
+      - { id: workflows,    service: cloud_workflows,   label: "Cloud Workflows" }
+      - { id: bigquery,     service: bigquery,          label: "BigQuery" }
+      - { id: monitoring,   service: cloud_monitoring,  label: "Cloud Monitoring" }
+      - { id: artifact_reg, service: artifact_registry, label: "Artifact Registry" }
+    edges:
+      - { source: scheduler,    target: cloud_run,  label: "trigger" }
+      - { source: cloud_run,    target: gcs,        label: "write Parquet" }
+      - { source: gcs,          target: bigquery,   label: "load" }
+      - { source: scheduler,    target: workflows,  label: "orchestrate" }
+      - { source: workflows,    target: bigquery,   label: "ETL + BQML" }
+      - { source: publisher,    target: pubsub,     label: "telemetry" }
+      - { source: pubsub,       target: dataflow,   label: "Beam sub" }
+      - { source: pubsub,       target: bigquery,   label: "BQ sub" }
+      - { source: dataflow,     target: bigquery,   label: "enriched" }
+      - { source: gcs,          target: dataproc,   label: "raw" }
+      - { source: dataproc,     target: bigquery,   label: "battery health" }
+      - { source: bigquery,     target: monitoring, label: "alerts" }
+      - { source: artifact_reg, target: cloud_run,  label: "deploy", dashed: true }
+    groups:
+      - id: gcp_cloud
+        kind: gcp_cloud
+        label: "Google Cloud"
+        members: [scheduler, cloud_run, gcs, pubsub, dataflow, dataproc, workflows, bigquery, monitoring, artifact_reg]

@@ -254,7 +254,20 @@ def render_page(diagram_el: ET.Element, out_path: str, scale: float = 0.5) -> st
     for cell in cells.values():
         if not cell.is_vertex or _is_container(cell):
             continue
-        if cell.style.get("shape") == "image":   # brand logo — skip
+        if cell.style.get("shape") == "image":
+            # Image-based cells: the firm's brand logo (no label) is skipped;
+            # labeled service icons (e.g. embedded GCP SVGs) get a placeholder
+            # tile + caption so node placement and routing stay reviewable.
+            label = _strip_html(cell.value)
+            if not label:
+                continue
+            ax, ay = abs_xy[cell.id]
+            box = [tx(ax), ty(ay), tx(ax + cell.w), ty(ay + cell.h)]
+            radius = max(4, int(14 * scale))
+            draw.rounded_rectangle(box, radius=radius, fill=(66, 133, 244))  # GCP blue
+            tx0 = box[0]
+            ty0 = box[3] + int(4 * scale)
+            draw.text((tx0, ty0), label, fill=LABEL_COLOR, font=font_sm)
             continue
         ax, ay = abs_xy[cell.id]
         box = [tx(ax), ty(ay), tx(ax + cell.w), ty(ay + cell.h)]

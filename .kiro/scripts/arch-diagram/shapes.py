@@ -72,7 +72,21 @@ class Shape:
                 f"fontSize={font_size};fontStyle=0;aspect=fixed;"
                 f"shape=mxgraph.aws4.resourceIcon;resIcon={self.stencil};"
             )
-        # Azure / GCP stencils are self-contained shape references.
+        # GCP services with an embedded official icon SVG render as images so
+        # draw.io shows the current Google Cloud glyph (not a blank stencil).
+        if self.provider == "gcp":
+            from gcp_icons import GCP_ICON_B64
+            b64 = GCP_ICON_B64.get(self.key)
+            if b64:
+                return (
+                    "sketch=0;outlineConnect=0;gradientColor=none;"
+                    f"fontColor={FONT_COLOR};strokeColor=none;fillColor=none;"
+                    "dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
+                    f"html=1;whiteSpace=wrap;labelWidth={label_width};spacingTop=2;"
+                    f"fontSize={font_size};fontStyle=0;aspect=fixed;"
+                    f"shape=image;image=data:image/svg+xml,{b64};"
+                )
+        # Azure / GCP stencils (no embedded icon) are self-contained shape refs.
         return (
             "sketch=0;outlineConnect=0;"
             f"fontColor={FONT_COLOR};fillColor={self.fill};strokeColor={WHITE};"
@@ -283,6 +297,17 @@ _GCP = {
     "cloud_load_balancing": ("mxgraph.gcp2.cloud_load_balancing", "#4285F4", "networking", "Cloud Load Balancing"),
     "cloud_cdn": ("mxgraph.gcp2.cloud_cdn", "#4285F4", "networking", "Cloud CDN"),
     "cloud_iam": ("mxgraph.gcp2.cloud_iam", "#4285F4", "security", "Cloud IAM"),
+    "bigquery": ("mxgraph.gcp2.bigquery", "#4285F4", "analytics", "BigQuery"),
+    "cloud_pubsub": ("mxgraph.gcp2.cloud_pubsub", "#4285F4", "integration", "Cloud Pub/Sub"),
+    "cloud_dataflow": ("mxgraph.gcp2.cloud_dataflow", "#4285F4", "analytics", "Cloud Dataflow"),
+    "cloud_dataproc": ("mxgraph.gcp2.cloud_dataproc", "#4285F4", "analytics", "Cloud Dataproc"),
+    "cloud_scheduler": ("mxgraph.gcp2.cloud_scheduler", "#4285F4", "integration", "Cloud Scheduler"),
+    "cloud_workflows": ("mxgraph.gcp2.cloud_workflows", "#4285F4", "integration", "Cloud Workflows"),
+    "artifact_registry": ("mxgraph.gcp2.artifact_registry", "#4285F4", "devtools", "Artifact Registry"),
+    "cloud_monitoring": ("mxgraph.gcp2.cloud_monitoring", "#4285F4", "management", "Cloud Monitoring"),
+    "cloud_logging": ("mxgraph.gcp2.cloud_logging", "#4285F4", "management", "Cloud Logging"),
+    "cloud_build": ("mxgraph.gcp2.cloud_build", "#4285F4", "devtools", "Cloud Build"),
+    "user": ("mxgraph.gcp2.user", "#4285F4", "general", "User"),
 }
 
 
@@ -472,6 +497,10 @@ class Container:
 _CONTAINERS = {
     "cloud": Container(
         "cloud", "mxgraph.aws4.group_aws_cloud_alt", "#232F3E", "none", "#232F3E", False, "AWS Cloud"
+    ),
+    # Google Cloud boundary — plain rounded rectangle in GCP blue (no AWS stencil).
+    "gcp_cloud": Container(
+        "gcp_cloud", "", "#4285F4", "none", "#4285F4", False, "Google Cloud"
     ),
     "region": Container(
         "region", "mxgraph.aws4.group_region", "#147EBA", "none", "#147EBA", True, "Region"
