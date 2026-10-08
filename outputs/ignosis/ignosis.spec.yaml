@@ -1,0 +1,115 @@
+provider: aws
+metadata:
+  client_name: "Ignosis"
+  project: "Ignosis"
+  version: "1.0"
+  date: "2026-10-07"
+  creator: "Mandar Bhagdikar"
+  reviewer: "Zuhair Wani"
+
+pages:
+  - name: "Architecture Diagram"
+    type: architecture
+    global:
+      - { id: s3, service: s3, label: "Amazon S3" }
+    edge:
+      - { id: users, service: users, label: "Users" }
+      - { id: waf, service: waf, label: "AWS WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "IGW" }
+    region:
+      label: "us-east-1"
+      services:
+        - { id: bedrock, service: bedrock, label: "Amazon Bedrock" }
+      vpc:
+        label: "VPC"
+        azs:
+          - id: az1
+            label: "Availability Zone"
+            public_subnet:
+              id: pub1
+              label: "public-subnet-1"
+              resources:
+                - { id: nat1, service: nat_gateway, label: "NAT Gateway" }
+            app_subnet:
+              id: app1
+              label: "app-subnet-1"
+              resources: []
+            db_subnet:
+              id: data1
+              label: "db-subnet-1"
+              resources:
+                - { id: rds1, service: rds, label: "RDS PostgreSQL" }
+                - { id: redis1, service: elasticache, label: "ElastiCache Redis" }
+          - id: az2
+            label: "Availability Zone"
+            public_subnet:
+              id: pub2
+              label: "public-subnet-2"
+              resources: []
+            app_subnet:
+              id: app2
+              label: "app-subnet-2"
+              resources: []
+            db_subnet:
+              id: data2
+              label: "db-subnet-2"
+              resources:
+                - { id: rds2, service: rds, label: "RDS PostgreSQL" }
+          - id: az3
+            label: "Availability Zone"
+            public_subnet:
+              id: pub3
+              label: "public-subnet-3"
+              resources: []
+            app_subnet:
+              id: app3
+              label: "app-subnet-3"
+              resources: []
+            db_subnet:
+              id: data3
+              label: "db-subnet-3"
+              resources:
+                - { id: rds3, service: rds, label: "RDS PostgreSQL" }
+        compute_groups:
+          - { id: app, kind: asg, node_service: ec2, label: "Auto Scaling group" }
+          - { id: worker, kind: asg, node_service: ec2, label: "Auto Scaling group" }
+    edges:
+      - { source: users, target: waf }
+      - { source: waf, target: igw }
+      - { source: igw, target: alb }
+      - { source: alb, target: app }
+      - { source: app, target: worker }
+      - { source: app, target: rds1 }
+      - { source: worker, target: rds1 }
+      - { source: app, target: redis1 }
+      - { source: app, target: s3 }
+      - { source: worker, target: s3 }
+      - { source: worker, target: bedrock }
+
+  - name: "Request Flow"
+    type: flow
+    nodes:
+      - { id: user, service: users, label: "User request", scope: external }
+      - { id: waf, service: waf, label: "AWS WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: appec2, service: ec2, label: "App Tier (EC2 m6a.2xlarge)" }
+      - { id: redis, service: elasticache, label: "ElastiCache Redis" }
+      - { id: rds, service: rds, label: "RDS PostgreSQL" }
+      - { id: worker, service: ec2, label: "Worker Tier (EC2 m6a.xlarge)" }
+      - { id: bedrock, service: bedrock, label: "Amazon Bedrock (Claude / OpenAI)" }
+      - { id: s3, service: s3, label: "Amazon S3" }
+    groups:
+      - id: ignosis_vpc
+        kind: vpc
+        label: "VPC"
+        members: [appec2, worker, redis, rds]
+    edges:
+      - { source: user, target: waf, label: "HTTPS" }
+      - { source: waf, target: alb, label: "filtered" }
+      - { source: alb, target: appec2, label: "route" }
+      - { source: appec2, target: redis, label: "cache lookup" }
+      - { source: appec2, target: rds, label: "query" }
+      - { source: appec2, target: worker, label: "async job" }
+      - { source: worker, target: bedrock, label: "inference" }
+      - { source: worker, target: s3, label: "store results" }

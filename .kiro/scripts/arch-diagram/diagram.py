@@ -191,7 +191,29 @@ class Diagram:
 
     def add_cluster_mark(self, cluster_id: str, kind: str,
                          label: Optional[str] = None) -> str:
-        """Place the AWS ECS/EKS icon and name together in the cluster header."""
+        """Place the AWS ECS/EKS icon and name together in the cluster header.
+
+        For ASG, the group boundary already includes the icon via grIcon, so we
+        only add the label text. For ECS/EKS clusters, we add both the service
+        icon and the label.
+        """
+        # ASG uses grIcon in the container style, so skip the separate icon
+        if kind == "asg":
+            label_cell = Cell(
+                id=self._next_id("clusterlabel"),
+                parent=cluster_id,
+                value=_label_html(label or shapes.get_container(kind).label, font_size=14),
+                style="text;html=1;strokeColor=none;fillColor=none;align=left;"
+                      "verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;",
+                vertex=True,
+                x=30,
+                y=4,
+                width=max(60, layout.LANE_W - 38),
+                height=50,
+            )
+            self.cells.append(label_cell)
+            return ""
+
         service = {"ecs_cluster": "ecs", "eks_cluster": "eks"}.get(kind)
         if not service:
             return ""
@@ -211,14 +233,14 @@ class Diagram:
         label_cell = Cell(
             id=self._next_id("clusterlabel"),
             parent=cluster_id,
-            value=_label_html(label or shapes.get_container(kind).label, font_size=16),
+            value=_label_html(label or shapes.get_container(kind).label, font_size=14),
             style="text;html=1;strokeColor=none;fillColor=none;align=left;"
                   "verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;",
             vertex=True,
             x=58,
-            y=8,
-            width=max(40, layout.LANE_W - 70),
-            height=42,
+            y=4,
+            width=max(60, layout.LANE_W - 66),
+            height=50,
         )
         self.cells.append(label_cell)
         return cell.id

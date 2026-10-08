@@ -9,9 +9,9 @@ Conventions the generator follows so diagrams match the firm's decks
 ```
 Outer border
 ├─ AWS Cloud
-│  ├─ [global row]   CloudFront · Route 53 · S3 · IAM      (account level, OUTSIDE region)
+│  ├─ [global row]   CloudFront · Route 53 · IAM           (outside the Region)
 │  └─ Region (dashed blue)
-│     ├─ [region services row]  ACM · Secrets · GuardDuty · CloudTrail · ECR · Lambda ...
+│     ├─ [regional services row]  S3 · ACM · Secrets · GuardDuty · CloudTrail · ECR · Lambda ...
 │     └─ VPC (green)
 │        ├─ AZ rows (horizontal dashed):  az1 / az2 / az3   ← physical placement
 │        │    public-subnet (green)  → NAT Gateway
@@ -43,19 +43,32 @@ systems (logical grouping × physical zone), not containment.
 
 | scope | renders | examples |
 |-------|---------|----------|
-| global | account level, above the Region | CloudFront, Route 53, S3, IAM |
+| global | account level, above the Region | CloudFront, Route 53, IAM |
 | edge | left strip INSIDE the cloud (Users stay outside) | Users, WAF, CloudFront, ALB |
-| region services | inside Region, outside VPC (incl. CI/CD) | ACM, Secrets, GuardDuty, CloudTrail, CodePipeline, CodeBuild, ECR |
+| region services | inside Region, outside VPC (incl. CI/CD and S3 buckets) | S3, ACM, Secrets, GuardDuty, CloudTrail, CodePipeline, CodeBuild, ECR |
 | public_subnet | web/public tier, shaped by the requested design | NAT Gateway |
 | app_subnet | blue band behind the compute-group lanes | (usually empty) |
 | db_subnet | data tier | RDS, ElastiCache |
 | compute-group node | lane × AZ intersection | EC2 / Fargate |
 
-Route 53 and CloudFront are **global**. Users render **outside** the cloud; WAF /
-CloudFront / ALB render in the **edge** strip inside the cloud. **IGW** sits on the
-left VPC border. NAT Gateway count and placement follow the requested egress,
-resilience, and cost design; do not assume one NAT per VPC or one per AZ.
-**CI/CD** icons live in `region.services` when that scope matches the design.
+Route 53, CloudFront, and IAM are **global**. S3 buckets are regional AWS
+resources: place them in the Region and outside the VPC unless the diagram is
+showing an abstract shared-service catalog rather than a specific bucket.
+Users render **outside** the cloud; WAF / CloudFront / ALB render in the **edge**
+strip inside the cloud. **IGW** sits on the left VPC border. NAT Gateway count
+and placement follow the requested egress, resilience, and cost design; do not
+assume one NAT per VPC or one per AZ. **CI/CD** icons live in `region.services`
+when that scope matches the design.
+
+## Current architecture template
+
+`diagram examples/Comprinno Architecture Template.drawio.xml` is the latest
+visual reference. It demonstrates the branded header and outer frame, shared
+services band, nested Cloud/Region/VPC boundaries, horizontal AZ rows, subnet
+bands, and compute lanes that span AZs. Its metadata, service inventory,
+three-AZ topology, resource counts, and routes belong to that example; they are
+not reusable defaults. Use only the structural style that fits the user's
+stated design. Do not copy sample connections or draw arrows along boundaries.
 
 ## Sizing / aesthetics
 
@@ -64,6 +77,23 @@ resilience, and cost design; do not assume one NAT per VPC or one per AZ.
   when it holds more resources; resources inside a subnet are laid **left→right**.
 - All AZ rows share one height and their subnet columns line up in a grid.
 - One ALB / one CloudFront in the entry column — not one per AZ.
+
+## Labeling convention
+
+Architecture pages use **official AWS service names only** — no parenthetical
+details, instance sizes, or implementation notes:
+
+| Use | Avoid |
+|-----|-------|
+| `Amazon EC2` | `EC2 (m6a.2xlarge)` |
+| `Amazon Bedrock` | `Bedrock (Claude / OpenAI)` |
+| `RDS PostgreSQL` | `RDS PostgreSQL (db.m6g.large)` |
+| `Auto Scaling group` | `App Tier ASG` |
+| `Amazon S3` | `S3 (Documents)` |
+| `VPC` | `Project VPC` |
+| `Availability Zone` | `Availability Zone 1` |
+
+Detailed labels belong on **flow pages** where they explain the processing path.
 
 ## Category colors (AWS 2020 palette)
 

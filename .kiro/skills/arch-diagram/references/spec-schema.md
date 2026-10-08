@@ -102,9 +102,9 @@ Every resource lives in exactly one scope:
 
 | scope | where it renders | examples |
 |-------|------------------|----------|
-| `global` | account level, above/outside the Region box | CloudFront, Route 53, S3, IAM |
+| `global` | account level, above/outside the Region box | CloudFront, Route 53, IAM |
 | `edge` | left strip INSIDE the AWS Cloud, left of the Region (Users stay outside) | Users, WAF, ALB, CloudFront |
-| region `services` | inside Region, outside any VPC (incl. CI/CD icons) | ACM, Secrets Manager, GuardDuty, CloudTrail, Lambda, CodePipeline, CodeBuild, ECR |
+| region `services` | inside Region, outside any VPC (incl. CI/CD icons and S3 buckets) | S3, ACM, Secrets Manager, GuardDuty, CloudTrail, Lambda, CodePipeline, CodeBuild, ECR |
 | AZ `public_subnet` resources | inside a subnet in one AZ | NAT Gateway (typically AZ1 only) |
 | AZ `app_subnet` resources | inside the app-subnet band; compute-group lanes overlay it | (usually left to the lanes) |
 | AZ `db_subnet` resources | inside a subnet in one AZ | RDS, ElastiCache |

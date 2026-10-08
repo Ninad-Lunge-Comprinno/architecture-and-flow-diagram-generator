@@ -1,38 +1,34 @@
 provider: aws
 metadata:
   client_name: "docustack.ai"
-  project: "docustack.ai"
+  project: "Docustack AI"
   version: "1.0"
-  date: "2026-10-06"
-  creator: "To be filled"
-  reviewer: "To be filled"
+  date: "2026-10-07"
+  creator: "Sanvee Karandikar"
+  reviewer: "Saqib Mehraj"
 
 pages:
   - name: "Architecture Diagram"
     type: architecture
-
-    global:
-      - { id: r53, service: route_53, label: "Route 53" }
-      - { id: s3,  service: s3,       label: "S3" }
-
     edge:
-      - { id: users, service: users,                      label: "Users" }
-      - { id: waf,   service: waf,                         label: "WAF" }
-      - { id: alb,   service: application_load_balancer,   label: "ALB (External)" }
-      - { id: igw,   service: internet_gateway,            label: "IGW" }
-
+      - { id: users, service: users, label: "Users" }
+      - { id: waf, service: waf, label: "AWS WAF" }
+      - { id: alb, service: application_load_balancer, label: "ALB" }
+      - { id: igw, service: internet_gateway, label: "Internet Gateway" }
     region:
       label: "ap-south-1 (Mumbai)"
       services:
-        - { id: apigw,      service: api_gateway,              label: "API Gateway" }
-        - { id: lambda,     service: lambda,                   label: "Lambda" }
-        - { id: bedrock,    service: bedrock,                  label: "Bedrock (Anthropic)" }
-        - { id: transcribe, service: transcribe,               label: "Transcribe" }
-        - { id: ecr,        service: ecr,                      label: "ECR" }
-        - { id: msk,        service: managed_streaming_for_kafka, label: "MSK (Kafka)" }
-
+        - { id: route53, service: route_53, label: "Route 53" }
+        - { id: apigw, service: api_gateway, label: "API Gateway" }
+        - { id: lambda, service: lambda, label: "Lambda" }
+        - { id: bedrock, service: bedrock, label: "Bedrock (Anthropic)" }
+        - { id: transcribe, service: transcribe, label: "Transcribe" }
+        - { id: s3, service: s3, label: "S3 (Documents)" }
+        - { id: kafka, service: managed_streaming_for_kafka, label: "Amazon MSK (Kafka)" }
+        - { id: ecr, service: ecr, label: "ECR" }
+        - { id: docdb, service: documentdb, label: "DocumentDB" }
       vpc:
-        label: "docustack Prod VPC"
+        label: "Docustack VPC"
         azs:
           - id: az1
             label: "Availability Zone 1"
@@ -49,9 +45,7 @@ pages:
               id: data1
               label: "db-subnet-1"
               resources:
-                - { id: rds1,   service: rds,        label: "RDS PostgreSQL (Primary)" }
-                - { id: docdb1, service: documentdb, label: "DocumentDB" }
-
+                - { id: rds1, service: rds, label: "RDS PostgreSQL" }
           - id: az2
             label: "Availability Zone 2"
             public_subnet:
@@ -66,9 +60,7 @@ pages:
               id: data2
               label: "db-subnet-2"
               resources:
-                - { id: rds2,   service: rds,        label: "RDS PostgreSQL (Standby)" }
-                - { id: docdb2, service: documentdb, label: "DocumentDB (Replica)" }
-
+                - { id: rds2, service: rds, label: "RDS PostgreSQL" }
           - id: az3
             label: "Availability Zone 3"
             public_subnet:
@@ -83,75 +75,53 @@ pages:
               id: data3
               label: "db-subnet-3"
               resources:
-                - { id: rds3, service: rds, label: "RDS PostgreSQL (Standby)" }
-
+                - { id: rds3, service: rds, label: "RDS PostgreSQL" }
         compute_groups:
+          - { id: asg, kind: asg, node_service: ec2, label: "Auto Scaling Group (EC2)" }
           - { id: eks, kind: eks_cluster, node_service: fargate, label: "EKS Cluster (Fargate)" }
           - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Cluster (Fargate)" }
-          - { id: asg, kind: asg,         node_service: ec2,     label: "EC2 Auto Scaling Group" }
-
     edges:
-      # Public ingress path (web traffic → ALB → clusters)
-      - { source: users, target: waf,  label: "HTTPS" }
-      - { source: waf,   target: igw }
-      - { source: igw,   target: alb }
-      - { source: alb,   target: eks,  label: "route" }
+      - { source: users, target: waf, label: "HTTPS" }
+      - { source: route53, target: waf, label: "DNS" }
+      - { source: waf, target: igw, label: "filtered" }
+      - { source: igw, target: alb }
+      - { source: alb, target: eks, label: "route" }
+      - { source: alb, target: ecs, label: "route" }
+      - { source: alb, target: asg, label: "route" }
+      - { source: apigw, target: lambda, label: "invoke" }
+      - { source: lambda, target: bedrock, label: "OCR + NER" }
+      - { source: lambda, target: s3, label: "store docs" }
+      - { source: bedrock, target: transcribe, label: "audio" }
+      - { source: eks, target: rds1, label: "queries" }
+      - { source: eks, target: docdb, label: "documents" }
+      - { source: ecs, target: rds1, label: "queries" }
+      - { source: asg, target: rds1, label: "queries" }
+      - { source: eks, target: kafka, label: "events" }
+      - { source: ecs, target: kafka, label: "events" }
+      - { source: ecr, target: eks, label: "image pull", dashed: true }
+      - { source: ecr, target: ecs, label: "image pull", dashed: true }
 
-      # Serverless API path — fed from DNS ingress (Route 53 → API Gateway).
-      # Route 53 sits in the global row directly above the region services, so
-      # this entry edge stays short and clear of the ALB/IGW gutter.
-      - { source: r53,    target: apigw, label: "api" }
-      - { source: apigw,  target: lambda, label: "invoke" }
-      - { source: lambda, target: bedrock, label: "OCR / NER" }
-      - { source: bedrock, target: transcribe, label: "transcription" }
-      - { source: bedrock, target: s3, label: "documents", dashed: true }
-
-      # Cluster to data stores
-      # Note: MSK is shown as a region service (it is part of the stack), but
-      # the EKS → MSK event-streaming edge is drawn only on the Request Flow
-      # page to keep the architecture region-service row free of a long
-      # cross-row connector.
-      - { source: eks, target: rds1,   label: "SQL" }
-      - { source: eks, target: docdb1, label: "NoSQL" }
-
-      # EC2 ASG to RDS
-      - { source: asg, target: rds1, label: "SQL" }
-
-      # Deployment
-      - { source: ecr, target: eks, label: "deploy", dashed: true }
-      - { source: ecr, target: ecs, label: "deploy", dashed: true }
-
-  - name: "Request Flow"
+  - name: "Document Processing Flow"
     type: flow
     nodes:
-      - { id: user,       service: users,                     label: "User", scope: external }
-      - { id: r53,        service: route_53,                  label: "Route 53" }
-      - { id: waf,        service: waf,                        label: "WAF" }
-      - { id: apigw,      service: api_gateway,                label: "API Gateway" }
-      - { id: lambda,     service: lambda,                     label: "Lambda" }
-      - { id: alb,        service: application_load_balancer,  label: "ALB" }
-      - { id: eks,        service: eks,                        label: "EKS Fargate", scope: vpc }
-      - { id: s3,         service: s3,                         label: "S3" }
-      - { id: bedrock,    service: bedrock,                    label: "Bedrock (Anthropic)" }
-      - { id: transcribe, service: transcribe,                 label: "Transcribe" }
-      - { id: rds,        service: rds,                        label: "RDS PostgreSQL", scope: vpc }
-      - { id: docdb,      service: documentdb,                 label: "DocumentDB", scope: vpc }
-      - { id: msk,        service: managed_streaming_for_kafka, label: "MSK (Kafka)" }
+      - { id: user, service: users, label: "User uploads document", scope: external }
+      - { id: apigw, service: api_gateway, label: "API Gateway" }
+      - { id: lambda, service: lambda, label: "Ingestion Lambda" }
+      - { id: s3, service: s3, label: "S3 (raw documents)" }
+      - { id: bedrock, service: bedrock, label: "Bedrock OCR + NER" }
+      - { id: transcribe, service: transcribe, label: "Transcribe (audio)" }
+      - { id: decision, service: bedrock, label: "Decision Engine (Bedrock)" }
+      - { id: rds, service: rds, label: "RDS PostgreSQL" }
+      - { id: docdb, service: documentdb, label: "DocumentDB" }
+      - { id: kafka, service: managed_streaming_for_kafka, label: "MSK (events)" }
     edges:
-      - { source: user,   target: r53,    label: "request" }
-      - { source: r53,    target: waf,     label: "resolve" }
-      - { source: waf,    target: apigw,   label: "api call" }
-      - { source: apigw,  target: lambda,  label: "invoke" }
-      - { source: lambda, target: s3,      label: "store doc" }
-      - { source: lambda, target: bedrock, label: "OCR / NER" }
-      - { source: bedrock, target: transcribe, label: "audio transcription" }
-      - { source: waf,    target: alb,     label: "web traffic" }
-      - { source: alb,    target: eks,     label: "route" }
-      - { source: eks,    target: msk,     label: "publish events" }
-      - { source: eks,    target: rds,     label: "SQL" }
-      - { source: eks,    target: docdb,   label: "NoSQL" }
-    groups:
-      - id: docu_vpc
-        kind: vpc
-        label: "docustack Prod VPC"
-        members: [eks, rds, docdb]
+      - { source: user, target: apigw, label: "upload" }
+      - { source: apigw, target: lambda, label: "invoke" }
+      - { source: lambda, target: s3, label: "store" }
+      - { source: s3, target: bedrock, label: "document" }
+      - { source: s3, target: transcribe, label: "audio" }
+      - { source: bedrock, target: decision, label: "entities" }
+      - { source: transcribe, target: decision, label: "transcript" }
+      - { source: decision, target: rds, label: "structured data" }
+      - { source: decision, target: docdb, label: "extracted docs" }
+      - { source: decision, target: kafka, label: "events" }

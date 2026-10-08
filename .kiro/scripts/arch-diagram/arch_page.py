@@ -409,8 +409,15 @@ def _reorder_services_for_vpc_proximity(page: dict) -> None:
 
 
 def _ensure_aws_foundation_services(page: dict, default_provider: str) -> None:
-    """Add standard shared AWS services to every AWS architecture page once."""
+    """Add standard shared AWS services to every AWS architecture page once.
+
+    Injection is skipped when the page (or its parent spec via the page dict)
+    carries ``foundation_services: false``.  This lets specs that model their
+    own observability / security tier remain free of auto-injected clutter.
+    """
     if default_provider.lower() != "aws":
+        return
+    if page.get("foundation_services") is False:
         return
 
     placements = (
@@ -529,7 +536,7 @@ def _emit_arch_nodes(diagram: "Diagram", lo, default_provider: str) -> None:
             )
         else:
             container = shapes.get_container(node.kind)
-            is_named_cluster = node.kind in ("ecs_cluster", "eks_cluster")
+            is_named_cluster = node.kind in ("ecs_cluster", "eks_cluster", "asg")
             diagram.cells.append(Cell(
                 id=node.node_id,
                 parent=node.parent,

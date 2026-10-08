@@ -1,6 +1,6 @@
 {
   "name": "arch-diagram",
-  "description": "Interview the user about missing architecture requirements, then create a focused spec and editable draw.io architecture or flow diagram.",
+  "description": "Reason from the user's requirements, ask only topology-changing questions, then create a template-aligned editable Draw.io architecture and primary flow diagram.",
   "tools": ["read", "write", "shell", "grep", "glob"],
   "allowedTools": ["read", "grep", "glob"],
   "toolsSettings": {

@@ -1,40 +1,23 @@
 # Architecture diagram conventions
 
-For architecture or flow diagram requests, use `.kiro/skills/arch-diagram/SKILL.md`.
-Gather missing architecture decisions conversationally, then write a YAML spec
-and use `.kiro/scripts/arch-diagram/generate_diagram.py`. Do not hand-write XML,
-guess missing requirements, or expand a request into an unrelated service list.
+For architecture requests, use `.kiro/skills/arch-diagram/SKILL.md`. Let Kiro
+reason about the requirements, ask only topology-changing questions, and keep
+the user-facing workflow prompt based. The normal deliverable is one editable
+Draw.io file with one architecture page and one primary flow page; do not add
+extra flows unless requested.
 
-Model components at their real scope and connect only important traffic, data,
-deployment, replication, or dependency paths. Use the examples in
-`diagram examples/` as visual references, with a focus on readable grouping,
-hierarchy, concise labels, and limited edge crossings. Apply availability and
-network choices from the user's requirements; there is no universal AZ, NAT, or
-VPC template.
+Treat `diagram examples/Comprinno Architecture Template.drawio.xml` as the
+current visual reference only. Its example components, metadata, AZ count,
+resource counts, and connections are not defaults. Keep architecture scope
+accurate: global services above the Region, regional resources such as S3
+buckets in the Region and outside the VPC, and external users outside AWS.
 
-For shared ECS/EKS workloads, connect ingress to the cluster boundary unless an
-AZ-specific route is required. When architecture and flow views are both
-requested, cross-check their primary request and data paths and resolve missing
-connections before generating the diagram.
+Use existing specs, shape catalogs, and renderer when they fit. Do not add
+project-specific generator code or introduce a new renderer for a single
+diagram. Use MCP tools only if already available and useful for AWS fact checks
+or native Draw.io editing; never assume an MCP is configured.
 
-For flow views, verify producer-to-consumer direction and show the shortest
-clear sequence. Model a person and their client as one external endpoint when
-they represent the same traffic source/destination; keep them separate only
-when their relationship matters, stack them outside AWS, and route network
-traffic through the client. Keep a shared endpoint on the left even when it
-receives responses. Stack independent branches into compact rows, minimize
-empty columns, and use only bends required by branches or boundaries. Ask about
-missing topology only when it changes the flow. Split independent journeys into
-focused pages when combining them creates long crossovers or a crowded canvas.
-
-The local provider shape catalogs define supported service keys. Do not invent
-stencil names. If a needed service is unsupported, explain that and extend the
-catalog only when that work is part of the request.
-
-For a multi-AZ relational database (RDS or Aurora) spanning three AZs, show one
-database node per AZ (primary plus standby/replica in each remaining AZ) so the
-three-node multi-AZ topology is explicit. Do not draw replication edges between
-the nodes — the AZ placement already communicates multi-AZ; adding replication
-arrows clutters the diagram without adding information. This applies only when
-the user asks for a multi-AZ relational database; do not add database nodes to
-designs that do not include one.
+Keep paths semantically correct and visually clear: few essential arrows,
+short routes, readable labels, no overlaps, and no arrows running along
+container borders. Inspect a rendered preview when available and correct visual
+issues before delivery.
