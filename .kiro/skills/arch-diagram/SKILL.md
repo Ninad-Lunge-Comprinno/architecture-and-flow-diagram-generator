@@ -104,37 +104,29 @@ specific database pattern. Avoid decorative, inferred, and all-to-all arrows.
 
 ## 3. Build and review
 
-Use Kiro's reasoning for architecture choices and the existing renderer for
-repeatable branded Draw.io output. The YAML spec is a compact intermediate
-description, not a substitute for architectural reasoning. Do not write
-project-specific generator code or hand-author a large XML file when the
-existing renderer can express the design. If it cannot, first consider a small
-spec change; only add reusable renderer behavior when multiple diagrams need
-it.
+Use Kiro's reasoning to create the editable Draw.io XML directly. Do not run,
+import, or modify the Python generator in this workflow. Keep the generation
+prompt based: reason about topology first, then build the XML, inspect it, and
+make focused revisions. Do not create project-specific code or a YAML
+intermediate unless the user asks for one.
 
-Use MCP tools only when they are already available and materially help:
+Start from `diagram examples/Comprinno Architecture Template.drawio.xml`.
+Preserve its page frame, logo, title and metadata treatment, AWS icon style,
+colors, boundaries, and sensible page scale. Create exactly two pages named
+`Architecture` and `Flow`. Reuse exact service icon assets and styles from the
+template or supplied examples when available; do not substitute generic icons
+for AWS services. Keep all page content editable.
 
-- use AWS Documentation MCP to verify current AWS service behavior or a
-  disputed placement;
-- use Draw.io MCP for native Draw.io preview, shape lookup, or connector
-  rerouting when the current client supports it;
-- do not switch to a different renderer if it loses the Comprinno template,
-  AWS icon style, or editable Draw.io output.
+Before saving, check the XML structure and review the layout against the plan:
+exactly two pages, correct service scope, readable labels, balanced spacing,
+no icon, label, or connector overlaps, and no arrows running along container
+borders. Use mostly straight connectors and only purposeful bends. If Draw.io
+MCP is configured, use it to open and inspect the result; otherwise inspect
+the XML geometry and state that visual preview was unavailable. Make a focused
+revision when review finds a concrete issue, then recheck the XML.
 
-See `references/mcp-options.md` for the current MCP options and their limits.
-
-Generate the spec and editable file with the existing script:
-
-```bash
-.venv/bin/python .kiro/scripts/arch-diagram/generate_diagram.py \
-  --strict-connectivity --input <project-slug>.spec.yaml
-```
-
-If a PNG preview can be rendered, inspect it visually. Check that there are
-exactly the requested pages, all components and arrows match the plan, labels
-are readable, spacing is balanced, no icons or arrows overlap, and connectors
-do not run along boundaries. Fix clear issues and preview again. A successful
-XML generation alone is not proof that the diagram is visually clean.
+Save the result to the requested output path. Do not report that a visual
+review passed unless a rendered preview was actually inspected.
 
 ## 4. Deliver
 

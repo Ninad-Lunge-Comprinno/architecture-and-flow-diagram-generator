@@ -12,10 +12,12 @@ resource counts, and connections are not defaults. Keep architecture scope
 accurate: global services above the Region, regional resources such as S3
 buckets in the Region and outside the VPC, and external users outside AWS.
 
-Use existing specs, shape catalogs, and renderer when they fit. Do not add
-project-specific generator code or introduce a new renderer for a single
-diagram. Use MCP tools only if already available and useful for AWS fact checks
-or native Draw.io editing; never assume an MCP is configured.
+For the prompt-based workflow, use Kiro's reasoning to create editable Draw.io
+XML directly from the requirements and references. Do not run or modify the
+Python generator or create project-specific code. A supplied YAML spec is a
+topology source, not a required intermediate format. Use MCP tools only when
+already configured and useful for AWS fact checks or native Draw.io editing;
+never assume an MCP is available.
 
 Keep paths semantically correct and visually clear: few essential arrows,
 short routes, readable labels, no overlaps, and no arrows running along
