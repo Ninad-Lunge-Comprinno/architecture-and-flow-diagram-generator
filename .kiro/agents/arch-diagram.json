@@ -1,21 +1,11 @@
 {
   "name": "arch-diagram",
   "description": "Reason from the user's requirements, ask only topology-changing questions, then create a template-aligned editable Draw.io architecture and primary flow diagram.",
-  "tools": ["read", "write", "shell", "grep", "glob"],
+  "tools": ["read", "write", "grep", "glob"],
   "allowedTools": ["read", "grep", "glob"],
   "toolsSettings": {
-    "shell": {
-      "allowedCommands": [
-        "python.*generate_diagram.*",
-        "python.*render_png.*",
-        "python.*-m pytest.*",
-        "\\.venv/bin/python.*"
-      ],
-      "autoAllowReadonly": true
-    },
     "write": {
       "allowedPaths": [
-        "**/*.spec.yaml",
         "**/*.drawio.xml",
         ".kiro/**"
       ]
@@ -23,7 +13,9 @@
   },
   "resources": [
     "skill://.kiro/skills/*/SKILL.md",
-    "file://.kiro/steering/**/*.md"
+    "file://.kiro/steering/**/*.md",
+    "file://.kiro/skills/arch-diagram/references/coords-cheatsheet.md",
+    "file://.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml"
   ],
-  "welcomeMessage": "Describe the system you want to diagram. I’ll ask about any architecture choices that are still unclear, summarize the proposed components and flows, then generate an editable draw.io diagram."
+  "welcomeMessage": "Describe the system you want to diagram. I'll ask about any architecture choices that are still unclear, summarize the proposed components and flows, then generate an editable draw.io diagram."
 }

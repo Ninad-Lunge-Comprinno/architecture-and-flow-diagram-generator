@@ -49,12 +49,21 @@ routine layout choices do not need approval.
 
 ## 2. Apply the house style
 
+**Start with the skeleton.** `references/skeleton-3az.drawio.xml` is a ready-made
+blank 3-AZ architecture with the correct frame, real logo, all containers at the
+right geometry, empty subnet slots, and the full baseline services row already
+present. Copy it to the output path and fill in the blanks — do not build from
+scratch.
+
+**Use the cheatsheet for all geometry.** `references/coords-cheatsheet.md` is a
+single short file with every coordinate, fill colour, and style string you need.
+Read it first; only open `house-style.md` when you need deeper rules or the
+container style strings.
+
 Use `diagram examples/Comprinno Architecture Template.drawio.xml` as the current
-architecture template reference. Use `references/house-style.md` for the
-recurring visual rules, provider shape catalogs for exact icon keys, and
-`references/spec-schema.md` only when creating the renderer's YAML spec.
-Sadhaka AI, MediaMint, and Borderless Access remain useful examples for their
-specific layouts.
+architecture template reference for visual hierarchy and style. Use
+`references/house-style.md` for the full rules. Provider shape catalogs supply
+exact icon keys.
 
 The template's visual hierarchy is:
 
@@ -104,29 +113,97 @@ specific database pattern. Avoid decorative, inferred, and all-to-all arrows.
 
 ## 3. Build and review
 
-Use Kiro's reasoning to create the editable Draw.io XML directly. Do not run,
-import, or modify the Python generator in this workflow. Keep the generation
-prompt based: reason about topology first, then build the XML, inspect it, and
-make focused revisions. Do not create project-specific code or a YAML
-intermediate unless the user asks for one.
+**Generation workflow (fast path):**
 
-Start from `diagram examples/Comprinno Architecture Template.drawio.xml`.
-Preserve its page frame, logo, title and metadata treatment, AWS icon style,
-colors, boundaries, and sensible page scale. Create exactly two pages named
-`Architecture` and `Flow`. Reuse exact service icon assets and styles from the
-template or supplied examples when available; do not substitute generic icons
-for AWS services. Keep all page content editable.
+1. Copy `references/skeleton-3az.drawio.xml` to the output path.
+2. Replace `PROJECT_NAME` on both pages and fill in the metadata.
+3. Look up every coordinate you need in `references/coords-cheatsheet.md` —
+   do not calculate from scratch.
+4. Add service icons into the subnet slots (uncomment the SLOT comments and
+   fill in `resIcon` and `fillColor` from the cheatsheet).
+5. If compute spans AZ rows, uncomment the cluster lane block and fill in the
+   lane label and task icon stencil.
+6. Add edges (all `parent="1"`).
+7. Fill in the Flow page nodes and edges.
+8. Run the mandatory checklist below before saving.
 
-Before saving, check the XML structure and review the layout against the plan:
-exactly two pages, correct service scope, readable labels, balanced spacing,
-no icon, label, or connector overlaps, and no arrows running along container
-borders. Use mostly straight connectors and only purposeful bends. If Draw.io
-MCP is configured, use it to open and inspect the result; otherwise inspect
-the XML geometry and state that visual preview was unavailable. Make a focused
-revision when review finds a concrete issue, then recheck the XML.
+Do not write the container frame, logo, title block, or regional services row
+from scratch — they are already in the skeleton with the correct values.
 
-Save the result to the requested output path. Do not report that a visual
-review passed unless a rendered preview was actually inspected.
+**Use the coordinate system, icon sizes, container styles, and parent/child
+nesting documented in `references/coords-cheatsheet.md` exactly.** Read
+`references/house-style.md` only when you need a style string or a rule that
+is not in the cheatsheet.
+
+### Mandatory pre-save checklist
+
+Before writing the file, verify each item by inspecting the XML:
+
+1. **Canvas** — `mxGraphModel` has `pageWidth="850" pageHeight="1100"`. Outer
+   border has `rounded=0; strokeColor=#000000; strokeWidth=3; fillColor=none`.
+   NOT `strokeColor=#0066CC` or `fillColor=default` (those are the template's
+   visual chrome, not the house style for generated diagrams). Canvas spans
+   ~3100×2600 (architecture) or ~2500×1200 (flow).
+
+2. **Icons** — Every service icon is **120×120**, `fontSize=18`, `fontStyle=0`,
+   `labelWidth=160`, `spacingTop=2`. Labels use `<font style="font-size:18px"><b>…</b></font>`.
+   No 60×60 icons. No `fontSize=14`.
+
+3. **Nesting** — Icons inside subnets have `parent` set to the subnet cell.
+   Icons inside cluster lanes have `parent` set to the lane cell. All edges
+   have `parent="1"`.
+
+4. **Container styles** — Cloud, Region, VPC, AZ, and subnet cells all use the
+   verbatim styles from `house-style.md` section 6. Region is `dashed=1`.
+   VPC is `dashed=0; strokeColor=#248814`. All container borders use
+   `strokeWidth=2` (NOT `strokeWidth=3` or `strokeWidth=5` which are template-only).
+
+5. **AZ spacing and size (CRITICAL — common failure point)** — AZ rows relative
+   to VPC use these VALIDATED values:
+   ```
+   az1: x=520 y=80   w=1640 h=340
+   az2: x=520 y=540  w=1640 h=340   (spacing = 460px)
+   az3: x=520 y=1000 w=1640 h=340
+   ```
+   AZ height is **340** (NOT 720). AZ y-spacing is **460px** (NOT 820px).
+   If your AZs use different values, the lane icon positions will be wrong.
+
+6. **Subnet dimensions** — Check that subnets use the working-output values:
+   `public: w=380 h=250` (default 2-icon; scale per content), `app: w=650 h=250`, `db: w=460 h=250`.
+   NOT the large-canvas values (w=320/1560/1760, h=580). Icons in 250-high subnets sit at y=65.
+
+7. **Cluster lane geometry (CRITICAL — common failure point)** — For a single
+   lane spanning 3 AZs, the lane relative to VPC should be:
+   `x = app_x + (app_w - lane_w)/2` y=80 w=480 h=1260  (centre in app column)  (NOT h=3360, NOT w=230).
+   EKS/ECS→DB exitY = `(db_abs_y_centre - lane_abs_top) / lane_h` (NOT 0.5).
+   Task icons inside the lane: y=110/570/1030 for 3-AZ default (formula: (AZ_y+170)-lane_y-60). NOT y=90/500/910 or y=210/1030/1850.
+   Use the formula: lane-relative y = (AZ_mid_vpc_y - lane_top_y) - 60.
+
+8. **IGW placement** — IGW relative to VPC: `x=-60 y=650 w=120 h=120`.
+   NOT y=720, NOT y=1360. The y=650 aligns IGW with ALB and centres it
+   between the AZ rows.
+
+9. **CloudFront placement** — CF is inline with the IGW/ALB row (same abs y-centre = 1505).
+   cloud-relative y=1195, x=112. NOT in the top global band. Users→CF→IGW→ALB = straight horizontal line.
+
+10. **Global vs regional placement** — IAM and CloudFront are children of
+   `cloud` (not `region`). S3 buckets, ACM, Secrets Manager, KMS, CloudWatch,
+   CloudTrail, ECR are children of `region` (not VPC, not cloud).
+
+11. **No overlapping labels or borders** — Subnet containers do not overlap each
+    other. Icon labels don't overlap container borders (use `labelWidth=160`).
+
+10. **Stencil names verified** — every `resIcon=` value must exist in
+    `references/shapes-aws.md` (stencil column). Never guess. Common blank-box
+    traps: `elastic_container_service` (→ `ecs`), `elastic_kubernetes_service`
+    (→ `eks`), `certificate_manager` (→ `certificate_manager_3`).
+
+12. **Two pages** named exactly `Architecture` and `Flow`.
+
+If any check fails, fix the specific cell(s) before saving. State that visual
+preview was unavailable (no MCP) and list which checks passed.
+
+Save the result to the requested output path.
 
 ## 4. Deliver
 
