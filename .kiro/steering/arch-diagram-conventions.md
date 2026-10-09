@@ -16,8 +16,8 @@ extra flows unless requested.
 4. `diagram examples/Comprinno Architecture Template.drawio.xml` — visual
    style reference only. Do not copy its coordinates or topology.
 
-`outputs/ignosis/ignosis.drawio.xml` is a local-only validated example (not in
-the repo, gitignored) — use it only if present on the local machine.
+Any recent validated output in `outputs/` can serve as a local reference
+(gitignored, not in the repo).
 
 Treat the template's example topology, AZ count, service inventory, metadata,
 and connections as non-defaults. Use only its visual structure.
@@ -30,7 +30,11 @@ and connections as non-defaults. Use only its visual structure.
 - Region: `x=247 y=285 w=2395 h=1745` (relative to cloud)
 - VPC: `x=85 y=260 w=2225 h=1405` (relative to region)
 - AZ rows (relative to VPC): `y=80 / 540 / 1000; h=340; spacing=460px`
-- Subnets (relative to AZ): `public x=35 w=380 h=250` (default 2-icon; scale per content), `app x=pub_right+40 w=650 h=250`, `db x=app_right+40 w=300 h=250` (1 icon default)
+- Subnets (relative to AZ): `public x=35 w=380 h=250` (default 2-icon; scale per content), `app x=pub_right+40 w=lane_w+55 h=250` when the lane is the only content;
+  `app x=pub_right+40 w=(n×120+(n-1)×40+2×40) h=250` when icons are placed directly in the subnet.
+  **Never use w=650 as a fixed default** — size the app subnet to its actual content.
+  The 650 constant was derived for a wide multi-icon layout and is wrong for a single lane.
+  `w=650` (default): use only when the app subnet holds 2+ direct-child icons., `db x=app_right+40 w=300 h=250` (1 icon default)
 - IGW: `x=-60 y=650` (relative to VPC)
 - Icon size: always 120×120. Icon y in 250-high subnet: always 65.
 
@@ -79,8 +83,10 @@ examples**. For any other AZ count, recompute using the formulas in
 - Embed the real Comprinno logo as a fresh base64 blob from
   `Downloads/comprinno-logo.png`; never reuse a stale/truncated blob.
   Always add `strokeColor=none` to the logo image cell style to prevent a border/underline appearing.
-- Size each subnet to its content; keep subnet dimensions identical across AZ
-  rows so columns line up.
+- **Size each subnet to its content.** Keep dimensions identical across AZ rows.
+  App subnet with a lane as only content: `w = lane_w + 55` (35px left + 20px right).
+  App subnet with direct icons: `w = n×120 + (n-1)×40 + 80` (40px each side).
+  Do NOT use a fixed w=650 if the lane is narrower than 595px.
 - **Lambda is regional** — place it in the regional services row (`parent=region`), NOT
   floating inside the VPC.
 - **S3 placement** — S3 as a CloudFront static-site origin goes in the **cloud band**.

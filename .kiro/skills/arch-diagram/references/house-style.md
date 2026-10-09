@@ -1,6 +1,6 @@
 # House Style
 
-Conventions derived from working outputs (ignosis, docustack-ai) and the
+Conventions derived from validated working outputs and the
 Comprinno Architecture Template. Follow these rules exactly — do not scale
 coordinates or change values unless the rule explicitly permits it.
 
@@ -264,7 +264,7 @@ style="fillColor=none;strokeColor=#ED7100;verticalAlign=top;fontStyle=1;
 | Architecture page | `Amazon EC2` | `EC2 (m6a.2xlarge)` |
 | Architecture page | `Amazon S3` | `S3 (Documents)` |
 | Architecture page | `Availability Zone` | `Availability Zone 1` |
-| Architecture page | `VPC` | `Docustack VPC` |
+| Architecture page | `VPC` | `Project VPC` |
 | Flow page | `App Tier (EC2 m6a.2xlarge)` | (detail OK on flow pages) |
 
 Label HTML for icons: `<font style="font-size:18px"><b>Service Name</b></font>`

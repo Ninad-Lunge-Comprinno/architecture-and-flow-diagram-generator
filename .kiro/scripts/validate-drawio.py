@@ -297,7 +297,7 @@ def main():
             geo = c.find("mxGeometry")
             w = geo.get("width") if geo is not None else None
             h = geo.get("height") if geo is not None else None
-            if not cid.endswith("badge") and (w, h) != ("120", "120"):
+            if not (cid.endswith("badge") or "clusterlogo" in cid or "clusterbadge" in cid) and (w, h) != ("120", "120"):
                 failures.append(f"[{pname}] icon {cid!r} is {w}x{h}, expected 120x120")
             m = re.search(r"resIcon=mxgraph\.aws4\.(\w+)", style)
             if m and m.group(1) not in valid:

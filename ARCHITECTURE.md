@@ -65,7 +65,7 @@ sources (most authoritative first):
 | Source | Role |
 |---|---|
 | `diagram examples/Comprinno Architecture Template.drawio.xml` | House-style template — geometry, styles, title block, logo |
-| `outputs/ignosis/ignosis.drawio.xml` | Validated working output using the nested-container coordinate system |
+| `outputs/<project>/<project>.drawio.xml` | Validated working output — any recent output in the outputs folder |
 | `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules, scaling guidance |
 | `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | Formulas and constants for every position |
 | `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton for the default 3-AZ three-tier layout |

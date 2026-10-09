@@ -12,15 +12,12 @@ then writes valid Draw.io XML.
 ## Repository layout
 
 ```
-outputs/                         # ← all client work lives here
+outputs/                         # ← all client work lives here (git-ignored)
 │   Each subfolder = one client / project.
-│   Only the .drawio.xml is committed; PNGs are git-ignored.
+│   Generated XMLs are NOT committed; work is shared out-of-band.
 │
-├── ignosis/
-│   └── ignosis.drawio.xml
-├── docustack-ai/
-│   └── docustack-ai.drawio.xml
-└── ...                          # one folder per client
+└── <project-slug>/
+    └── <project>.drawio.xml     # produced by the agent
 
 diagram examples/                # reference XMLs and PNGs used during design
 flow diagram examples/           # reference flow-page examples
@@ -62,8 +59,8 @@ No Python, no intermediate spec, no CLI commands.
 Open the `arch-diagram` agent and describe the system:
 
 ```
-/arch-diagram three-tier web app for Acme Orders — ECS Fargate, Aurora, 3 AZs,
-              one NAT Gateway, CloudFront in front of S3 static site
+/arch-diagram three-tier web app — ECS Fargate, Aurora PostgreSQL, 3 AZs,
+              one NAT Gateway per AZ, no CDN
 ```
 
 Kiro will:

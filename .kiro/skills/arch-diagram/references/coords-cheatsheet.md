@@ -9,6 +9,24 @@
 > - **Formulas** — compute these from the constants for your specific topology.
 >   Never copy the example outputs from another diagram; recalculate each time.
 
+## ⚡ Precomputed 3-AZ lookup (copy directly for N=3, skip all formulas)
+
+> Use these values as-is for the standard 3-AZ layout. Only recompute if N≠3.
+
+| Element | Value | Notes |
+|---------|-------|-------|
+| igw y (vpc-rel) | **650** | aligns with AZ midpoint |
+| users y (abs) | **1445** | inline with IGW/ALB row |
+| CF cloud-rel y | **1195** | inline with IGW row |
+| lane_h | **1260** | (1000+340)−80 |
+| task_y AZ-1 | **110** | (80+170)−80−60 |
+| task_y AZ-2 | **570** | (540+170)−80−60 |
+| task_y AZ-3 | **1030** | (1000+170)−80−60 |
+| EKS→DB exitY | **0.14** | (1050−875)/1260 |
+| regional row start_x (n=6) | **688** | (2395−1020)/2 |
+| global band start_x (n=2) | **1214** | (2727−300)/2 |
+
+
 ---
 
 ## Canvas & frame (constants)
@@ -53,7 +71,8 @@ AZ height = **340**. AZ y-spacing = **460px**. All constants.
 | Subnet | parent | x | y | w | h | fill |
 |--------|--------|---|---|---|---|------|
 | public | azN | 35 | 50 | **380** | 250 | ← default for 2 icons; use formula for n icons | `#E9F3E6` stroke `#248814` |
-| app | azN | 455 | 50 | 650 | 250 | `#E6F2F8` stroke `#147EBA` |
+| app | azN | 455 | 50 | **lane_w+55** | 250 | `#E6F2F8` stroke `#147EBA` |
+| | | | | *(w=650 only when subnet holds 2+ direct icons, not a lane)* | | |
 | db | azN | 1145 | 50 | 300 | 250 | `#CCE5FF` stroke `#147EBA` |
 
 Keep gaps between subnets at **40px**. DB default width=300 (1 icon, 90px padding each side).
@@ -224,8 +243,16 @@ lane_h = (last_AZ_y + AZ_height) - first_AZ_y
   If AZs start at y=80: lane y=**80**. If AZs start at y=60: lane y=**80** (60+20).
   Always add 20px offset from the AZ container top edge.
 
-**Lane width and x:** (the lane is a child of the VPC, so x is VPC-relative — add az1_x)
-- Single lane: `w=480`, centre in app column:
+**Lane width — size to content, not to the subnet:**
+Lane width = `120 + 2×pad` where pad≥60. Single icon, short label: `lane_w=300`.
+Long label (>20 chars): `lane_w=480`. Dual lanes: `w=240` each.
+
+**App subnet width follows the lane:** `app_w = lane_w + 55`
+(35px left gap + 20px right gap). Do NOT use w=650 as a fixed default.
+Example: lane_w=300 → app_w=355. lane_w=480 → app_w=535.
+
+**Lane x and position:** (VPC-relative — add az1_x)
+- Single lane: centre in app column:
   ```
   lane_x = az1_x + app_subnet_az_x + (app_w - lane_w) / 2
          = 520 + 455 + (650 - 480) / 2 = 1060
@@ -558,7 +585,8 @@ inbound row is crowded, remove the conflicting service instead.
 | subnet height 580 | **250** |
 | public subnet w=300 with 2 icons | **380** |
 | lane w=480 each when 2 lanes | **240** each |
-| lane w=230 | **480** (single) or **240** (dual) |
+| lane w=230 | **300–480** depending on content |
+| app w=650 with single lane | **lane_w + 55** (e.g. 355 for lane_w=300) |
 | lane label fontSize=20, align=center | **14, align=left, spacingLeft=55** |
 | icon size 60×60 | **120×120** |
 | border strokeWidth=2 | **3** |

@@ -1,8 +1,17 @@
 {
   "name": "arch-diagram",
   "description": "Reason from the user's requirements, ask only topology-changing questions, then create a template-aligned editable Draw.io architecture and primary flow diagram.",
-  "tools": ["read", "write", "grep", "glob"],
-  "allowedTools": ["read", "grep", "glob"],
+  "tools": [
+    "read",
+    "write",
+    "grep",
+    "glob"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob"
+  ],
   "toolsSettings": {
     "write": {
       "allowedPaths": [
@@ -11,7 +20,7 @@
     }
   },
   "resources": [
-    "skill://.kiro/skills/*/SKILL.md",
+    "skill://.kiro/skills/arch-diagram/SKILL.md",
     "file://.kiro/steering/**/*.md",
     "file://.kiro/skills/arch-diagram/references/coords-cheatsheet.md",
     "file://.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml"

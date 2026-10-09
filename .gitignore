@@ -4,16 +4,20 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Diagram XML and PNG previews.
-# Draw.io XML sources ARE tracked (examples, skeleton, and client outputs);
-# only the PNG previews under outputs/ are ignored.
+# All generated client outputs — not tracked in git.
+# Open the relevant branch or share files out-of-band.
+outputs/
+
+# Diagram XML sources ARE tracked (references, skeleton, examples).
+# The blanket *.drawio.xml rule below would catch them; exceptions below fix that.
 *.drawio.xml
 !diagram examples/*.drawio.xml
 !flow diagram examples/*.drawio.xml
 !.kiro/skills/arch-diagram/references/*.drawio.xml
-!outputs/**/*.drawio.xml
-outputs/**/*.png
 
-# Stale working directories (cleaned up)
+# PNG previews are never tracked
+*.png
+
+# Stale working directories
 renderdir/
 render_out/

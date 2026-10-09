@@ -14,8 +14,8 @@
 ```yaml
 provider: aws                 # aws | azure | gcp (default provider for services)
 metadata:
-  client_name: "Acme"         # optional; shown as Client Name
-  project: "Acme Migration"   # optional fallback for Client Name
+  client_name: "Example Corp"   # optional; shown as Client Name
+  project: "Cloud Migration"   # optional fallback for Client Name
   version: "1.0"              # all fields optional; missing values display as "To be filled"
   date: "2026-09-22"
   creator: "Your Name"

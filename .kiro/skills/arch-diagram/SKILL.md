@@ -124,7 +124,7 @@ decorative, inferred, and all-to-all arrows.
 1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
    committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
    it is missing, the most recent validated output in
-   `outputs/ignosis/ignosis.drawio.xml` is the fallback.
+   the most recent validated output in `outputs/` is the fallback.
 2. Replace `PROJECT_NAME` on both pages and fill in the metadata.
 3. Look up every coordinate you need in `references/coords-cheatsheet.md` —
    do not calculate from scratch.
@@ -200,8 +200,14 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     y-spacing=460px (constants). For N≠3, recalculate `igw_y = 190 + 230*(N−1)`.
     Never hardcode 3-AZ y-values for a 2-AZ or 4-AZ diagram.
 14. **Subnet dimensions** — `public w=380 h=250` (default 2 icons; scale per content),
-    `app w=650 h=250`, `db w=460 h=250` (2 icons) or `w=300` (1 icon). Icons y=65.
+    `db w=460 h=250` (2 icons) or `w=300` (1 icon). Icons y=65.
+    **App subnet width depends on content:**
+    - Lane only: `app_w = lane_w + 55` (e.g. lane_w=300 → app_w=355, lane_w=480 → app_w=535).
+    - Direct icons: `app_w = n×120 + (n-1)×40 + 80`.
+    - `w=650` is NOT a fixed default — it was derived for a wide multi-icon layout.
     Subnets identical across all AZ rows so columns align.
+    **Lane width:** size to content. `lane_w = 120 + 2×pad` (pad≥60).
+    Single icon with short label: lane_w=300. Long label: lane_w=480.
 15. **Cluster lane geometry** — lane `parent=vpc`, y=az1_y+20, h=(last_AZ_y+340)−az1_y,
     single w=480 / dual w=240 each. Task icon y via formula, not copied. Badge 45×45
     at lane top-left. Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
