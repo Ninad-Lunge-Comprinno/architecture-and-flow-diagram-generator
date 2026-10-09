@@ -57,6 +57,11 @@ examples**. For any other AZ count, recompute using the formulas in
 **Edge routing rules:**
 - **Inbound path Users→CF→IGW→ALB**: all at same abs y-centre (1505). Use `exitX=1 exitY=0.5, entryX=0 entryY=0.5`, no waypoints.
 - **EKS/ECS→DB edge**: exitY is NOT 0.5 — use formula: `exitY = (db_abs_y_centre - lane_abs_top) / lane_h`
+- **Inbound path without CloudFront** (the default when CF is not requested):
+  `Users → IGW → ALB` — all at the same abs y-centre, straight horizontal, no waypoints.
+  The horizontal Users→IGW segment **must not pass through any global-band icon** (Route 53,
+  S3, IAM). If a global-band icon would sit on that y-level between Users and IGW, it belongs
+  in the global band row (cloud_rel_y=70), not inline. Move the icon up — do not reroute the edge.
 - **Baseline edges** (ECR, Secrets): source the LANE border, not a task icon inside it. Source from a task icon with `exitY=0` creates a long vertical line.
 - **EKS/ECS→DB**: use computed `exitY` fraction so edge exits at db's y-centre → straight horizontal line.
 - **All edges**: `parent="1"` (root).
@@ -77,13 +82,26 @@ examples**. For any other AZ count, recompute using the formulas in
 - Size each subnet to its content; keep subnet dimensions identical across AZ
   rows so columns line up.
 - **Lambda is regional** — place it in the regional services row (`parent=region`), NOT
-  floating inside the VPC. Lambda does not belong in a subnet or as a vpc child unless
+  floating inside the VPC.
+- **S3 placement** — S3 as a CloudFront static-site origin goes in the **cloud band**.
+  S3 as a primary object/document store accessed by EKS/ECS/Lambda goes in the
+  **regional services row alongside the compute**. The baseline security row
+  (Secrets Manager, CloudWatch, KMS, etc.) is for monitoring/security services only —
+  do not bury a primary data store in it. If S3 is the main storage service,
+  give it a position that reflects its importance in the architecture. Lambda does not belong in a subnet or as a vpc child unless
   it is a VPC-attached Lambda with a subnet ENI, which must be explicitly modelled.
 - **ECR**: every compute cluster (ECS, EKS) in the diagram should have a dashed
   baseline edge to ECR for image pulls — not just one of them.
+- **Baseline edges on the arch page**: keep only ECR (pull image) and optionally
+  Secrets Manager. Do not draw arch-page arrows to Bedrock, Transcribe, MSK, S3
+  from compute lanes — those belong on the flow page. Every baseline edge that
+  exits a lane top MUST use horizontal waypoints above the VPC border.
 - Connect the load balancer to the **cluster lane border** (not each task).
   Connect the cluster to the **primary database only** (replicas get dashed edges).
-- Place **CloudFront** inline with the IGW/ALB row so the inbound path
+- **CloudFront** must be explicitly requested by the user. Never infer CloudFront
+  from the presence of S3 or a load balancer. If CloudFront is not in the user's
+  spec, do not add it. The phrase "include CF when relevant" has been removed.
+  Place **CloudFront** inline with the IGW/ALB row so the inbound path
   `Users → CloudFront → IGW → ALB` is a straight horizontal line.
   S3 (static-site origin) and IAM stay in the top global band (y=70), centre-aligned.
 
@@ -103,18 +121,28 @@ never assume an MCP is available.
   WAF cloud-relative y must be < region_cloud_y (285): place at y≈85 (80px above region top).
   Connected vertically to ALB: WAF bottom → ALB top (`exitY=1`, `entryY=0`).
   The WAF→ALB edge crossing the region/VPC is intentional — it shows a global rule applying.
-- **Route53** — global service, `parent=cloud`. Place it **equidistant between the cloud left
-  border and the region left border** so it visually sits in the cloud band between those two
-  vertical lines. Formula: `cloud_rel_x = (region_cloud_x - 120) / 2`.
-  For default scale: region_cloud_x=247, so cloud_rel_x=(247-120)/2≈63. Route53 abs left=323,
-  gaps to cloud(63px) and region(64px) are equal.
-  y = same inline row as IGW/ALB. Do NOT set parent=1 — overlap risk.
-  Users must also clear the cloud left border: `users_abs_right + 40 ≤ cloud_abs_x`
-  → `users_x ≤ cloud_abs_x - 40 - 120 = 260-40-120 = 100`. Default: Users x=100 ✓
-  (users abs_right=220, 40px gap to cloud left=260, 103px gap to Route53 abs_left=323)
+- **Route53** — global service, `parent=cloud`. Placement depends on the inbound path:
+  - **When Route 53 is the explicit first hop** (`Users → Route 53 → IGW → ALB`): place it
+    inline with the IGW/ALB row, equidistant between the cloud left border and the region left
+    border. Formula: `cloud_rel_x = (region_cloud_x - 120) / 2` (≈63 for default scale).
+    Route53 abs left=323, gaps to cloud(63px) and region(64px) are equal.
+    y = same inline row as IGW/ALB. Do NOT set parent=1 — overlap risk.
+    Users must also clear the cloud left border: `users_abs_right + 40 ≤ cloud_abs_x`
+    → `users_x ≤ cloud_abs_x - 40 - 120 = 260-40-120 = 100`. Default: Users x=100 ✓
+    (users abs_right=220, 40px gap to cloud left=260, 103px gap to Route53 abs_left=323)
+  - **When Route 53 is NOT on the drawn inbound path** (`Users → IGW → ALB`): place Route 53
+    in the **top global band** (`cloud_rel_y=70`) alongside IAM, S3, etc., using the
+    global-band centre formula. An inline Route 53 would sit on the Users→IGW horizontal
+    segment and overlap it — this is the source of the Route 53 misplacement bug.
+  - **Boundary invariant (both cases):** Route 53 abs-left ≥ cloud_abs_x. Never shift
+    Route 53 left to make room for another service; remove the conflicting service instead.
 
 - **No orphan compute icons** — every EC2/ECS/EKS icon must be inside a subnet or lane,
   not floating directly as a VPC child with no container parent.
+- **Bastion / jump-box placement** — place management EC2 instances in **AZ1 or AZ3**
+  public subnets, never in the middle AZ (AZ2). The middle AZ public subnet sits at the
+  same y-level as the ALB→cluster horizontal edge, causing icon/edge crossings.
+  AZ1 is preferred (top row, visually clear).
 
 Keep paths semantically correct and visually clear: few essential arrows,
 short routes, readable labels, no overlaps, and no arrows running along

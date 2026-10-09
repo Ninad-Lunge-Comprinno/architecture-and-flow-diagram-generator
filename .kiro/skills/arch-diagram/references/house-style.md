@@ -293,7 +293,7 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 | Scope | Container parent | Examples |
 |-------|-----------------|----------|
 | Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), **WAF** |
-| Above ALB (not inline) | root(`1`) | WAF — connected vertically to ALB top; not in the horizontal inbound path |
+| Cloud band above region | `cloud` | WAF — cloud-relative y≈85, x=alb_abs_xc−60−cloud_abs_x; vertical edge to ALB |
 | Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda |
 | VPC entry column | `vpc` | IGW, ALB |
 | Public subnet | inside AZ public-subnet container | NAT Gateway |
@@ -418,6 +418,13 @@ All edges must pass these checks before the file is saved:
       creates a tall vertical line cutting through everything above. Use
       `source="ecslane"` / `source="ekslane"` and add explicit horizontal
       waypoints to route below the regional services row.
+      **Every baseline edge that exits a lane top MUST use horizontal waypoints**
+      at `y = pvpc_abs_top − 30` — no exceptions. This applies to ECR, Secrets
+      Manager, Bedrock, Transcribe, MSK, S3, and any other service above the VPC.
+      **Prefer removing non-essential baseline edges.** Only ECR (image pull) and
+      optionally Secrets Manager are required on the architecture page. Bedrock,
+      Transcribe, MSK, and S3 connections belong on the flow page, not as
+      baseline arrows on the architecture page.
       **Remove or keep very short any label** on baseline dashed edges —
       verbose labels on diagonal/vertical segments overlap icons and borders.
 - [ ] **CloudFront→IGW: straight horizontal. CF is inline with the IGW/ALB row

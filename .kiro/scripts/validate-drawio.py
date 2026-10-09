@@ -61,6 +61,49 @@ def check_flow_page(root, issues):
                                           'mxgraph.aws4.ec2', 'mxgraph.aws4.fargate']):
                 issues.append(f"Flow compute icon '{cid}' is floating (parent=root) — should be inside f-vpc")
 
+
+def check_no_invented_vpc(root, issues):
+    """Scenario B: Lambda+S3 diagrams must not invent a VPC."""
+    cells = list(root.iter('mxCell'))
+    has_lambda = any('mxgraph.aws4.lambda' in c.get('style','') for c in cells)
+    has_rds    = any('mxgraph.aws4.rds' in c.get('style','') or 
+                     'mxgraph.aws4.aurora' in c.get('style','') for c in cells)
+    has_vpc    = any('group_vpc' in c.get('style','') for c in cells)
+    has_ecs    = any('mxgraph.aws4.ecs' in c.get('style','') or 
+                     'mxgraph.aws4.fargate' in c.get('style','') for c in cells)
+    
+    # Only flag if ONLY Lambda (no ECS/RDS which require VPC)
+    if has_lambda and not has_rds and not has_ecs and has_vpc:
+        issues.append(
+            "Scenario B: diagram has Lambda+S3 but also contains a VPC container. "
+            "Lambda does not require a VPC unless explicitly specified."
+        )
+
+
+def check_az_count_consistency(root, issues):
+    """Verify AZ containers match across all resource rows."""
+    cells = list(root.iter('mxCell'))
+    az_cells = [c for c in cells if 'group_availability_zone' in c.get('style','')]
+    az_count = len(az_cells)
+    
+    if az_count == 0:
+        return  # No AZ containers (e.g. Lambda+S3 diagram)
+    
+    if az_count not in (1, 2, 3):
+        issues.append(
+            f"Unusual AZ count: {az_count}. Verify this matches the user's requested topology."
+        )
+    
+    # Check all AZs have the same width (columns must align)
+    widths = set()
+    for az in az_cells:
+        geo = az.find('mxGeometry')
+        if geo is not None and geo.get('width'):
+            widths.add(geo.get('width'))
+    if len(widths) > 1:
+        issues.append(f"AZ containers have inconsistent widths {widths} — columns will not align.")
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: validate-drawio.py <file.drawio.xml>")

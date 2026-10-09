@@ -95,17 +95,21 @@ deployment scope, and principal paths should appear in both. Distinguish
 authentication from application traffic; an identity provider validates access
 but is not automatically a proxy in the request path. Model a person and their
 client as one endpoint when they represent the same actor. Keep external actors
-outside AWS. Include a CloudFront origin path when relevant.
+outside AWS. Include CloudFront **only if the user explicitly requests it** — never infer it from the presence of S3 or a load balancer.
 
-For AWS, show IAM, Secrets Manager, S3, CloudWatch, CloudTrail, and KMS on every
-architecture page, unless the spec already contains them. Treat this as a
-house-style baseline, not a claim that every application directly calls each
-service. Place each resource according to its actual AWS scope: IAM, Route 53,
-and CloudFront are global services; an S3 bucket is regional and normally sits
-inside its Region but outside a VPC. The template's shared-services band may
-show a service outside the Region for visual grouping only when that does not
-misstate a specific resource's scope. Use AWS documentation when the placement
-or behavior is uncertain.
+Include only services that are explicitly present in the user's request, supported
+by the source architecture, or required by the requested design. Do not invent
+services, connections, or infrastructure.
+
+Security and operational services (IAM, CloudWatch, CloudTrail, KMS, Secrets
+Manager, WAF, etc.) are optional. Include them only when the user specifies
+them or the architecture makes them necessary. If relevant baseline services
+are absent, you may note them as recommendations after delivering the diagram —
+never add them silently. This rule applies to AWS, Azure, GCP, and all other
+supported providers.
+
+Place each resource according to its actual scope (global, regional, VPC-bound).
+Use provider documentation when placement or behavior is uncertain.
 
 Follow the user's topology and cloud-provider documentation over example
 diagrams. Ask if the AZ count is not specified; default to 3 AZs if the user
@@ -163,15 +167,10 @@ Before writing the file, verify each item by inspecting the XML:
    VPC is `dashed=0; strokeColor=#248814`. All container borders use
    `strokeWidth=2` (NOT `strokeWidth=3` or `strokeWidth=5` which are template-only).
 
-5. **AZ spacing and size (CRITICAL — common failure point)** — AZ rows relative
-   to VPC use these VALIDATED values:
-   ```
-   az1: x=520 y=80   w=1640 h=340
-   az2: x=520 y=540  w=1640 h=340   (spacing = 460px)
-   az3: x=520 y=1000 w=1640 h=340
-   ```
-   AZ height is **340** (NOT 720). AZ y-spacing is **460px** (NOT 820px).
-   If your AZs use different values, the lane icon positions will be wrong.
+5. **AZ spacing and size** — AZ height=**340**, y-spacing=**460px** (constants,
+   never change). For **N=3 AZs** (default): az1 y=80, az2 y=540, az3 y=1000.
+   For other N: `igw_y = 190 + 230*(N−1)`. See coords-cheatsheet.md for formulas.
+   Validate the correct number of AZs against the user's request — validate the correct number of AZs against the user's request.
 
 6. **Subnet dimensions** — Check that subnets use the working-output values:
    `public: w=380 h=250` (default 2-icon; scale per content), `app: w=650 h=250`, `db: w=460 h=250`.
@@ -188,41 +187,88 @@ Before writing the file, verify each item by inspecting the XML:
    NOT y=720, NOT y=1360. The y=650 aligns IGW with ALB and centres it
    between the AZ rows.
 
-9. **CloudFront placement** — CF is inline with the IGW/ALB row (same abs y-centre = 1505).
-   cloud-relative y=1195, x=112. NOT in the top global band. Users→CF→IGW→ALB = straight horizontal line.
+9. **Route 53 boundary check** — Route53 abs left (`cloud_abs_x + cloud_rel_x`) must be
+   ≥ `cloud_abs_x`. Never shift Route53 left to make room for another service; if the
+   inbound row is crowded, remove the invented service instead.
 
-10. **Global vs regional placement** — IAM, Route 53, and CloudFront are children
+10. **CloudFront placement** — *Only applies if the user explicitly requested CloudFront.
+   If CloudFront is not in the request, skip this entirely — do not add the icon or
+   reserve its position.* When CF is present: CF is inline with the IGW/ALB row
+   (same abs y-centre = 1505). cloud-relative y=1195, x=112. NOT in the top global band.
+   Users→CF→IGW→ALB = straight horizontal line.traight horizontal line.
+
+11. **Global vs regional placement** — IAM, Route 53, and CloudFront are children
    of `cloud` (not `region`). An S3 bucket's placement depends on its role: an S3
    bucket serving as a **CloudFront static-site origin** goes in the cloud band
    (`parent=cloud`); an S3 bucket used as **application data storage** is regional
    and goes in the Region (`parent=region`). ACM, Secrets Manager, KMS, CloudWatch,
    CloudTrail, ECR are children of `region` (not VPC, not cloud).
 
-11. **No overlapping labels or borders** — Subnet containers do not overlap each
+11b. **Row spacing** — the regional services row and the global band are each
+     centre-aligned within their own container using the centre formula (180px icon pitch).
+     After ANY icon add or delete, re-verify there are no gaps and spacing is uniform.
+     A deleted icon must not leave a double-width gap.
+
+12. **No overlapping labels or borders** — Subnet containers do not overlap each
     other. Icon labels don't overlap container borders (use `labelWidth=160`).
 
-12. **No orphan compute icons** — every EC2, Lambda, ECS task, or EKS worker must be
+13. **No orphan compute icons** — every EC2, Lambda, ECS task, or EKS worker must be
     placed inside a subnet, lane, or ASG container. A compute icon floating directly
     inside the VPC (vpc child, no subnet parent) with zero edges is always wrong — remove it
     or move it to the correct container. Check: every compute icon has ≥1 edge and a
     logical container parent (subnet or lane).
 
-13. **WAF placement** — WAF is global. Place it above the ALB (same x-column, y = ALB_y_top − 200),
-    connected by a vertical edge (exitY=1 → entryY=0). WAF parent=root(1). NOT in regional row.
+14. **WAF placement** — WAF is a global service. `parent=cloud` (NOT parent=1 and NOT in the
+    regional services row). Position: cloud-relative x = `alb_abs_xc − 60 − cloud_abs_x`,
+    cloud-relative y ≈ 85 (above region_cloud_y=285, leaving 80px gap). Connected to ALB by
+    a vertical edge: `exitX=0.5 exitY=1 → entryX=0.5 entryY=0`. This makes WAF visually
+    stay inside the cloud boundary while sitting above the region.
 
-14. **Logo cell** — brand/f-brand style must include `strokeColor=none` to prevent border/underline.
+15. **Logo cell** — brand/f-brand style must include `strokeColor=none` to prevent border/underline.
 
-15. **Stencil names verified** — every `resIcon=` value must exist in
+16. **Stencil names verified** — every `resIcon=` value must exist in
     `references/shapes-aws.md` (stencil column). Never guess. Common blank-box
     traps: `elastic_container_service` (→ `ecs`), `elastic_kubernetes_service`
     (→ `eks`), `certificate_manager` (→ `certificate_manager_3`).
 
-16. **Two pages** named exactly `Architecture` and `Flow`.
+17. **Two pages** named exactly `Architecture` and `Flow`.
 
 If any check fails, fix the specific cell(s) before saving. State that visual
 preview was unavailable (no MCP) and list which checks passed.
 
 Save the result to the requested output path.
+
+
+## Validation scenarios
+
+Before saving, verify the generated diagram against the applicable scenario:
+
+**Scenario A — ECS Fargate + RDS, 3 AZs**
+- Each AZ has a public subnet (NAT), app subnet (ECS lane), and db subnet (RDS).
+- ALB connects to the ECS cluster lane (not to individual tasks).
+- RDS Writer in AZ-1, Readers in AZ-2/3 with dashed replication edges.
+- No floating compute icons — all ECS tasks are inside the lane container.
+
+**Scenario B — Lambda + S3, no VPC**
+- No VPC, subnets, IGW, NAT, or ALB containers in the diagram.
+- Lambda and S3 are regional services (parent=region or parent=cloud).
+- Do not invent a VPC because Lambda can optionally attach to one.
+
+**Scenario C — CloudFront + private S3 origin**
+- S3 appears as a CloudFront origin in the cloud band (not as a public bucket).
+- Edge is labelled "origin" or "static assets", not "public access".
+- No S3 bucket policy or ACL icons invented.
+
+**Scenario D — Azure or GCP architecture**
+- Use Azure/GCP icon stencils from shapes-azure.md / shapes-gcp.md.
+- Do not add AWS baseline services (IAM, CloudWatch, etc.).
+- Apply the provider's actual scope hierarchy (subscription/resource-group or project/region).
+
+**Scenario E — 2-AZ layout, no CDN**
+- Only two AZ rows: az1 y=80, az2 y=540. No az3.
+- igw_y = 190 + 230*(2−1) = 420. users_y = 795 + 420 = 1215.
+- No CloudFront icon invented. Inbound path: Users → IGW → ALB.
+- VPC height and lane height recalculated from N=2 formulas.
 
 ## 4. Deliver
 

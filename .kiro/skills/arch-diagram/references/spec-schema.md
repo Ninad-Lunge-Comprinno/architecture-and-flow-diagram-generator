@@ -1,11 +1,13 @@
-# Intermediate Spec Schema (grid layout)
+# Intermediate Spec Schema (reference only)
 
-The generator (`generate_diagram.py`) consumes a YAML/JSON spec and emits a
-`.drawio.xml` file. This schema describes the firm's house-style layout, which
-is a **grid with overlapping compute-group lanes** (see `house-style.md`).
+> **This schema is not part of the active workflow.**
+> The agent generates Draw.io XML directly from user requirements using
+> `SKILL.md` and the reference files. No Python generator is used.
+> This document is kept as a reference for the house-style layout structure
+> and may be useful when describing a topology before generating XML.
+> Do not instruct the agent to produce a YAML spec as an intermediate step.
 
-The agent authors this spec from the user's requirements, the user reviews it,
-then the generator renders it deterministically.
+## Layout structure reference
 
 ## Top-level structure
 
