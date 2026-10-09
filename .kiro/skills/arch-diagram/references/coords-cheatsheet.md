@@ -126,7 +126,13 @@ cf_cloud_rel_x = cf_abs_right - 120 - cloud_abs_x = 552 - 120 - 260 = 172
 
 **S3 (CF static-site origin) and IAM** — top global band, **centre-aligned**:
 ```
-n = number of global band icons (S3, IAM, Route53...)
+n = number of global band icons (S3, IAM, Route53 is `parent=cloud` at cloud-rel x=30.
+Route53 abs left = `cloud_abs_x + 30` = 290 (for default scale).
+`users_x` must satisfy BOTH constraints:
+  1. `users_abs_right + 40 ≤ cloud_abs_x`  → `users_x ≤ cloud_abs_x - 160 = 100`
+  2. `users_abs_right + 40 ≤ Route53_abs_left` → `users_x ≤ Route53_abs_left - 160`
+Constraint 1 is usually tighter. Default: **users_x = 100** (abs_right=220, 40px to cloud left=260).
+Route53...)
 group_w = n × 120 + (n-1) × 60
 start_x = (cloud_width - group_w) / 2
 x_i = start_x + i × 180
@@ -202,7 +208,9 @@ lane_h = (last_AZ_y + AZ_height) - first_AZ_y
        = (1000 + 340) - 80 = 1260   [for 3-AZ default]
 ```
 
-**Lane y:** always = `az1_y` = **80**
+**Lane y:** `az1_y + 20` (offset 20px inside AZ1 top to avoid label overlap).
+  If AZs start at y=80: lane y=**80**. If AZs start at y=60: lane y=**80** (60+20).
+  Always add 20px offset from the AZ container top edge.
 
 **Lane width and x:**
 - Single lane: `w=480`, centre in app column: `x = app_az_x + (app_w - lane_w) / 2 = 415 + (650-480)/2 = 415+85 = 500`. Round to **500** or adjust to avoid overlap with db subnet.
@@ -383,6 +391,94 @@ Flow nodes: 120×120, spine at y≈500, spacing = **320px** centre-to-centre (co
 Branch nodes (e.g. S3): same x as anchor, y = spine_y − 240.
 
 ---
+
+
+## ECR baseline edge waypoints — formula
+
+Both EKS and ECS clusters must have a dashed `pull image` edge to ECR.
+Source: the lane container border (`exitY=0`). Use horizontal waypoints:
+
+```
+waypoint_y = pvpc_abs_top - 30
+           = cloud_y + region_cloud_y + pvpc_region_y - 30
+
+For each lane:
+  lane_abs_xc = pvpc_abs_x + lane_vpc_x + lane_w/2
+  ecr_abs_xc  = region_abs_x + ecr_region_x + 60
+
+Waypoints: (lane_abs_xc, waypoint_y), (ecr_abs_xc, waypoint_y)
+```
+
+Remove edge labels on baseline edges — verbose labels overlap container borders.
+
+
+## Flow page layout — containers and alignment
+
+Flow pages should show **AWS Cloud → Region → VPC** containers as context.
+All service icons have `parent` matching their actual AWS scope.
+
+### Container parents in flow diagrams
+
+| Service | Parent | Reason |
+|---------|--------|--------|
+| Users | root(1) | External, outside cloud |
+| Route 53, WAF, CloudFront | `f-cloud` | Global services |
+| S3, Bedrock, Transcribe, MSK, RDS, DocumentDB, Lambda | `f-region` | Regional, outside VPC |
+| IGW, ALB, ECS/EKS compute | `f-vpc` | VPC-bound |
+
+### Spine alignment (critical — prevents edge bends)
+
+All nodes on the main horizontal path MUST share the same abs y-centre.
+Compute a single `spine_abs_yc` and derive every y from it:
+
+```
+spine_abs_yc = vay + vpc_icon_y + 60
+  vpc_icon_y = vcy + (vch - 120) // 2   (centres 120px icon in VPC height)
+
+For nodes in VPC (parent=f-vpc):
+  node_y = vpc_icon_y
+
+For nodes in Region (parent=f-region):
+  node_y = spine_abs_yc - 60 - ray   (ray = cloud_y + region_cloud_y)
+
+For nodes parent=1:
+  node_y = spine_abs_yc - 60
+```
+
+If source and target y-centres differ by even 1px, orthogonal router adds a bend.
+
+### WAF x-alignment in flow (must match ALB exactly)
+
+```
+alb_abs_xc  = vpc_abs_x + alb_vpc_rel_x + 60
+waf_cloud_x = alb_abs_xc - 60 - cloud_abs_x
+waf_cloud_y = region_cloud_y - 120 - 20   (20px gap above region top)
+```
+
+### Route 53 in flow page
+
+Route 53 is `parent=f-cloud`. Cloud-relative x equidistant between cloud and region:
+```
+r53_cloud_x = (region_cloud_x - 120) // 2
+r53_cloud_y = spine_abs_yc - 60 - cloud_abs_y
+```
+
+### S3 and regional services: must be RIGHT of VPC right border
+
+```
+min_region_rel_x = vpc_abs_right - region_abs_x + gap(40)
+                 = (vpc_region_rel_x + vpc_width) + gap
+```
+S3/Bedrock/Transcribe etc. must have `region_rel_x ≥ min_region_rel_x` or they
+visually appear inside the VPC.
+
+### Users x in flow
+
+```
+users_x = cloud_abs_x - gap(40) - 120
+```
+Default: cloud_x=380 → users_x=220, right=340, gap to cloud=40px.
+
 
 ## Common mistakes (constants that are often wrong)
 

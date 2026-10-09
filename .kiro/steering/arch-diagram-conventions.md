@@ -65,13 +65,22 @@ and connections as non-defaults. Use only its visual structure.
 - Default to a **3-AZ** three-tier layout unless the user specifies otherwise.
 - Embed the real Comprinno logo as a fresh base64 blob from
   `Downloads/comprinno-logo.png`; never reuse a stale/truncated blob.
+  Always add `strokeColor=none` to the logo image cell style to prevent a border/underline appearing.
 - Size each subnet to its content; keep subnet dimensions identical across AZ
   rows so columns line up.
+- **Lambda is regional** — place it in the regional services row (`parent=region`), NOT
+  floating inside the VPC. Lambda does not belong in a subnet or as a vpc child unless
+  it is a VPC-attached Lambda with a subnet ENI, which must be explicitly modelled.
+- **ECR**: every compute cluster (ECS, EKS) in the diagram should have a dashed
+  baseline edge to ECR for image pulls — not just one of them.
 - Connect the load balancer to the **cluster lane border** (not each task).
   Connect the cluster to the **primary database only** (replicas get dashed edges).
 - Place **CloudFront** inline with the IGW/ALB row so the inbound path
   `Users → CloudFront → IGW → ALB` is a straight horizontal line.
   S3 (static-site origin) and IAM stay in the top global band (y=70), centre-aligned.
+
+**Environment scope:** Default to a **single environment** (prod only) unless the user
+explicitly asks for multi-environment. Do not add Dev/QA/Staging VPCs unless requested.
 
 For the prompt-based workflow, use Kiro's reasoning to create editable Draw.io
 XML directly from the requirements and references. Do not run or modify the
@@ -80,7 +89,28 @@ topology source, not a required intermediate format. Use MCP tools only when
 already configured and useful for AWS fact checks or native Draw.io editing;
 never assume an MCP is available.
 
+- **WAF is a global service** — place it in the **cloud band above the region**
+  (`parent=cloud`), not in the regional services row and not inside the VPC.
+  Same x-column as ALB: `waf_cloud_rel_x = alb_abs_x - cloud_abs_x`.
+  WAF cloud-relative y must be < region_cloud_y (285): place at y≈85 (80px above region top).
+  Connected vertically to ALB: WAF bottom → ALB top (`exitY=1`, `entryY=0`).
+  The WAF→ALB edge crossing the region/VPC is intentional — it shows a global rule applying.
+- **Route53** — global service, `parent=cloud`. Place it **equidistant between the cloud left
+  border and the region left border** so it visually sits in the cloud band between those two
+  vertical lines. Formula: `cloud_rel_x = (region_cloud_x - 120) / 2`.
+  For default scale: region_cloud_x=247, so cloud_rel_x=(247-120)/2≈63. Route53 abs left=323,
+  gaps to cloud(63px) and region(64px) are equal.
+  y = same inline row as IGW/ALB. Do NOT set parent=1 — overlap risk.
+  Users must also clear the cloud left border: `users_abs_right + 40 ≤ cloud_abs_x`
+  → `users_x ≤ cloud_abs_x - 40 - 120 = 260-40-120 = 100`. Default: Users x=100 ✓
+  (users abs_right=220, 40px gap to cloud left=260, 103px gap to Route53 abs_left=323)
+
 Keep paths semantically correct and visually clear: few essential arrows,
 short routes, readable labels, no overlaps, and no arrows running along
 container borders. Inspect a rendered preview when available and correct visual
 issues before delivery.
+
+- **Flow page service placement**: Use correct AWS container parents.
+  Compute a single `spine_abs_yc` from the VPC icon y-centre and derive all
+  node y-positions from it — mismatched y-centres create edge bends.
+  Regional services (S3, RDS etc.) must be placed right of the VPC right border.

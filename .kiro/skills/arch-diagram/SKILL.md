@@ -193,7 +193,18 @@ Before writing the file, verify each item by inspecting the XML:
 11. **No overlapping labels or borders** — Subnet containers do not overlap each
     other. Icon labels don't overlap container borders (use `labelWidth=160`).
 
-10. **Stencil names verified** — every `resIcon=` value must exist in
+10. **No orphan compute icons** — every EC2, Lambda, ECS task, or EKS worker must be
+    placed inside a subnet, lane, or ASG container. A compute icon floating directly
+    inside the VPC (vpc child, no subnet parent) with zero edges is always wrong — remove it
+    or move it to the correct container. Check: every compute icon has ≥1 edge and a
+    logical container parent (subnet or lane).
+
+11. **WAF placement** — WAF is global. Place it above the ALB (same x-column, y = ALB_y_top − 200),
+    connected by a vertical edge (exitY=1 → entryY=0). WAF parent=root(1). NOT in regional row.
+
+11. **Logo cell** — brand/f-brand style must include `strokeColor=none` to prevent border/underline.
+
+12. **Stencil names verified** — every `resIcon=` value must exist in
     `references/shapes-aws.md` (stencil column). Never guess. Common blank-box
     traps: `elastic_container_service` (→ `ecs`), `elastic_kubernetes_service`
     (→ `eks`), `certificate_manager` (→ `certificate_manager_3`).
