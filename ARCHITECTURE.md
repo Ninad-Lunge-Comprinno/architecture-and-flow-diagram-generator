@@ -1,9 +1,10 @@
 # How the Skill Works — Technical Reference
 
-This document describes the end-to-end pipeline that turns a user request into
-a draw.io diagram. It covers the agent workflow, spec format, rendering engine,
-layout algorithm, and edge routing in enough detail to understand, extend, or
-debug the system.
+This document describes the end-to-end approach that turns a user request into a
+draw.io diagram. The project has no code: diagrams are authored directly by
+Kiro's reasoning, guided by Markdown steering files and visual references. This
+document covers the agent workflow, the house-style rules the agent applies, the
+emitted draw.io XML structure, and how the agent self-checks its output.
 
 ---
 
@@ -13,31 +14,21 @@ debug the system.
 User request
     │
     ▼
-Agent (Kiro) ──── reads SKILL.md ────► gathers requirements
+Agent (Kiro) ── reads SKILL.md + references + template ──► gathers requirements
     │
-    ▼ writes
-<project>.spec.yaml          ← structured YAML; the source of truth
+    ▼ reasons about scope, components, placement, flow
     │
-    ▼ python generate_diagram.py --input …
-┌────────────────────────────────────────────┐
-│              Rendering pipeline            │
-│                                            │
-│  1. validate_spec()                        │
-│  2. _fix_regional_placement()              │
-│  3. routing.plan_region_service_order()    │
-│  4. layout.build()   → Layout object       │
-│  5. emit nodes (icons + containers)        │
-│  6. route_edges()    → waypoints + ports   │
-│  7. find_conflicts() → validation report   │
-│  8. render_xml()     → .drawio.xml         │
-└────────────────────────────────────────────┘
+    ▼ writes draw.io XML directly (no code, no intermediate spec)
+<project>.drawio.xml      ← one Architecture page + one Flow page
     │
-    ▼
-<project>.drawio.xml    (git-ignored, regenerated on demand)
+    ▼ (optional) rendered preview inspected and corrected
+delivered to outputs/<slug>/
 ```
 
-No coordinates are hand-authored. Every position, container size, and connector
-waypoint is computed deterministically from the spec.
+There is no rendering engine, no layout algorithm, and no routing module. Every
+coordinate, container size, and connector waypoint is reasoned out by the agent
+from the house-style constants documented in the reference files and applied
+directly in the XML it writes.
 
 ---
 
@@ -45,301 +36,98 @@ waypoint is computed deterministically from the spec.
 
 The agent follows `.kiro/skills/arch-diagram/SKILL.md`:
 
-1. **Gather** — read the request; ask one focused set of questions for choices
-   that would change the architecture (provider, compute, AZ count, data tier,
-   flows). Do not ask about information already supplied.
+1. **Gather** — read the request; ask one focused set of questions only for
+   choices that would change the architecture (provider, compute, AZ count, data
+   tier, flows). Do not ask about information already supplied.
 2. **Model** — choose components at their correct AWS scope (global, region,
    VPC, AZ, subnet). Only include what is needed to explain the system; avoid
    decorative or speculative services.
 3. **Summarise** — present the proposed components and main traffic paths in a
    few bullets before generating. This gives the user a chance to correct scope
-   or service choices before rendering.
-4. **Write spec** — produce `outputs/<slug>/<project>.spec.yaml`.
-5. **Run generator** — `python .kiro/scripts/arch-diagram/generate_diagram.py --input …`
-6. **Report** — report the output paths, page types, key assumptions, and any
-   remaining routing warnings.
+   or service choices before the diagram is written.
+4. **Author XML** — write `outputs/<slug>/<project>.drawio.xml` directly, using
+   the geometry constants and placement rules from the references.
+5. **Self-check and report** — verify boundary containment, alignment, and edge
+   routing against the house-style rules; inspect a rendered preview when one is
+   available; then report the output path, page types, and key assumptions.
+
+A supplied `.spec.yaml` is treated as an optional topology **source** describing
+what to draw — it is not a required intermediate format and is not consumed by
+any generator.
 
 ---
 
-## 2. Spec format
+## 2. Inputs the agent reads
 
-The spec is a YAML file consumed by `generate_diagram.py`. Two page types are
-supported on the same document.
+Rather than running code, the agent grounds its output in these authoritative
+sources (most authoritative first):
 
-### Architecture page
+| Source | Role |
+|---|---|
+| `diagram examples/Comprinno Architecture Template.drawio.xml` | House-style template — geometry, styles, title block, logo |
+| `outputs/ignosis/ignosis.drawio.xml` | Validated working output using the nested-container coordinate system |
+| `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules, scaling guidance |
+| `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | Formulas and constants for every position |
+| `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton for the default 3-AZ three-tier layout |
+| `.kiro/skills/arch-diagram/references/shapes-*.md` | AWS / Azure / GCP stencil catalogs |
+| `.kiro/steering/arch-diagram-conventions.md` | Always-on rules and common failure corrections |
 
-```yaml
-provider: aws
-metadata:
-  project: "Acme Orders"
-  version: "1.0"
-  date: "2026-10-01"
-  creator: "Architecture Team"
+Treat the template's example topology, AZ count, service inventory, and
+connections as non-defaults — only its visual structure is reused.
 
-pages:
-  - name: "Architecture Diagram"
-    type: architecture
+---
 
-    global:    # Account-level; rendered above the Region box
-      - { id: cf, service: cloudfront, label: "CloudFront" }
+## 3. Placement scopes
 
-    edge:      # Ingress strip; Users go outside the cloud, rest inside
-      - { id: users, service: users,    label: "Customers" }
-      - { id: waf,   service: waf,      label: "WAF" }
-      - { id: alb,   service: application_load_balancer }
-      - { id: igw,   service: internet_gateway }
-
-    region:
-      label: "us-east-1"
-      services:            # Inside Region, outside any VPC
-        - { id: ecr, service: ecr }
-
-      vpc:
-        label: "App VPC"
-        azs:
-          - id: az1
-            public_subnet:  { id: pub1, resources: [ { id: nat1, service: nat_gateway } ] }
-            app_subnet:     { id: app1, resources: [] }
-            db_subnet:      { id: db1,  resources: [ { id: aurora1, service: aurora } ] }
-        compute_groups:
-          - { id: ecs, kind: ecs_cluster, node_service: fargate, label: "ECS Fargate" }
-
-    edges:
-      - { source: users, target: waf }
-      - { source: waf,   target: igw }
-      - { source: igw,   target: alb }
-      - { source: alb,   target: ecs }
-      - { source: ecs,   target: aurora1, label: "SQL" }
-      - { source: ecr,   target: ecs, label: "deploy", dashed: true }
-```
-
-**Placement scopes** — where a resource renders:
+Where each service renders is decided by its AWS scope. The agent places icons
+into the correct container parent:
 
 | Scope | Container | Examples |
 |---|---|---|
-| `global` | Above the Region box | CloudFront, Route 53, S3, IAM |
-| `edge` | Left strip inside the Cloud | WAF, ALB, IGW (Users stay outside) |
-| `region.services` | Inside Region, outside VPC | ECR, Cognito, Lambda, Secrets Manager |
-| `public_subnet` | Web/DMZ tier in an AZ | NAT Gateway, Bastion |
-| `app_subnet` | App tier band (usually empty; lanes overlay it) | — |
-| `db_subnet` | Data tier in an AZ | Aurora, ElastiCache, RDS |
-| `compute_groups` | Vertical lane spanning all AZ rows | Fargate tasks, EC2 workers |
+| Global | Cloud band above the Region box | CloudFront, Route 53, WAF, S3, IAM |
+| Ingress band | Inline IGW/ALB row inside the Cloud | IGW, ALB (Users stay outside the cloud) |
+| Region services | Inside Region, outside any VPC | ECR, Cognito, Lambda, Secrets Manager |
+| Public subnet | Web/DMZ tier in an AZ | NAT Gateway, Bastion |
+| App subnet | App tier band (lanes overlay it) | — |
+| DB subnet | Data tier in an AZ | Aurora, ElastiCache, RDS |
+| Compute lanes | Vertical lane spanning all AZ rows | Fargate tasks, EC2 workers, EKS/ECS |
 
-### Flow page
+Key placement rules the agent enforces (from the conventions file):
 
-```yaml
-  - name: "Order Flow"
-    type: flow
-    nodes:
-      - { id: customer, service: users,   label: "Customer" }
-      - { id: api,      service: api_gateway }
-      - { id: handler,  service: lambda,  label: "Order Handler" }
-      - { id: db,       service: aurora }
-    edges:
-      - { source: customer, target: api,     label: "POST /order" }
-      - { source: api,      target: handler, label: "invoke" }
-      - { source: handler,  target: db,      label: "INSERT" }
-```
-
-Flow nodes are laid out left-to-right by topological rank. Independent branches
-sit in separate rows. External actors (users, IoT devices) stay left; VPC
-members sit in a right-hand lane.
+- **Lambda is regional** — placed in the regional services row, not inside a VPC
+  subnet (unless a VPC-attached Lambda with a subnet ENI is explicitly modelled).
+- **WAF and Route 53 are global** — placed in the cloud band above the region.
+- **CloudFront** sits inline with the IGW/ALB row so the inbound path
+  `Users → CloudFront → IGW → ALB` is a straight horizontal line.
+- Every compute cluster (ECS, EKS) gets a dashed baseline edge to **ECR** for
+  image pulls.
 
 ---
 
-## 3. Rendering pipeline — module by module
+## 4. Geometry — reasoned, not computed by code
 
-### `generate_diagram.py` — orchestrator
+The agent applies fixed house-style constants and derives positions with the
+formulas in `coords-cheatsheet.md` and the conventions file. These are applied
+by hand in the XML, not produced by a layout engine. The core constants:
 
-Entry point. `build_document(spec)` calls the sub-steps below and returns an
-`ET.Element` (the mxfile). `main()` handles CLI argument parsing, reads the
-YAML, calls `build_document`, and writes the XML.
+- **Canvas border**: `x=0 y=-40 w=3100 h=2600; strokeWidth=3`
+- **Cloud**: `x=260 y=250 w=2727 h=2115`
+- **Region** (rel. to cloud): `x=247 y=285 w=2395 h=1745`
+- **VPC** (rel. to region): `x=85 y=260 w=2225 h=1405`
+- **AZ rows** (rel. to VPC): `y=80 / 540 / 1000; h=340; spacing=460`
+- **Subnets** (rel. to AZ): public `x=35 w=380 h=250`; app `w=650`; db `w=300`
+- **Icon size**: always 120×120; icon y in a 250-high subnet is always 65
 
-**Architecture page pipeline** (`build_architecture_page`):
-
-```
-_fix_regional_placement(page)          # silently move regional services (Lambda, DynamoDB, etc.)
-                                       # out of VPC subnets into region.services before layout
-routing.plan_region_service_order(page) # sort region services: VPC-connected go last (nearest VPC)
-_check_unique_ids / _validate_services  # spec validation — raises SpecError on bad input
-layout.build(page)  →  Layout           # compute all node positions + container sizes
-overlap_check(lo)                       # warn on sibling-icon collisions
-emit nodes (add_icon / append Cell)     # write every positioned node to the Diagram
-BFS pre-routing (route_all_edges)       # batch-route non-semantic edges obstacle-aware
-semantic case routing (Cases 0-5)       # per-edge intent-aware routing
-spec overrides applied                  # source_point / target_point / waypoints win
-find_conflicts(routes, icon_boxes)      # report icon-crossings and edge-edge overlaps
-render_xml(mxfile)                      # ET.tostring → UTF-8 XML with declaration
-```
-
-> `_fix_regional_placement` silently migrates services like DynamoDB, Lambda,
-> SQS that are incorrectly placed inside VPC subnets in the spec. It prints an
-> `ℹ AUTO-FIXED` message per migrated service but does not block generation.
-
-**Flow page pipeline** (`build_flow_page`):
-
-```
-_flow_layout(nodes, edges, groups)     # topological rank assignment + row packing
-emit nodes (add_icon)                  # place each icon at its computed (x, y)
-_route_flow_edges(edges, boxes)        # multi-pass obstacle-aware routing
-emit edges (add_edge)                  # write connectors with exit/entry fractions + waypoints
-```
+Derived positions (users y, CloudFront y, regional icon x spread, lane heights,
+cluster→DB exit fractions) are computed from the documented formulas each time
+rather than copied from another diagram. Default layout is a 3-AZ three-tier,
+single prod environment unless the user specifies otherwise.
 
 ---
 
-### `layout.py` — grid layout engine
+## 5. draw.io XML structure
 
-Computes every node's position and every container's size from the spec without
-any user-supplied coordinates. The output is a `Layout` object containing:
-
-- `nodes` — flat list of `Node(id, kind, parent, x, y, w, h, service, label)`
-- `abs_boxes` — `{id: (abs_x, abs_y, w, h)}` in page coordinates (used by routing)
-- `az_gaps`, `az_rows` — AZ gap corridors for edge routing
-- `vpc_corridor_x` — left spine x for fan-out routing
-- `region_right_x` — right corridor for region→VPC edge detours
-
-**Key decisions made by `layout.build()`:**
-
-1. **Tier widths are uniform across AZs** — all public subnets share the same
-   width; same for app and db. This keeps the grid aligned.
-2. **AZ row heights are per-AZ** — a row is as tall as its tallest subnet, so
-   AZs with more DB resources are taller than sparse ones.
-3. **db_subnets use a single-row layout** — icons spread horizontally. Other
-   subnet tiers use a 2-column grid.
-4. **Ingress gutter** — Shield/WAF sit in a left gutter of the Region box;
-   ALB/APIGW sit in a left gutter of the VPC box. Both gutters are sized to
-   hold their icons centred and vertically aligned to the middle AZ gap.
-5. **Compute-group lanes** — vertical boxes that span all AZ rows, overlaid on
-   the app-subnet band. Lane width = `ICON + 2 × 30 px`; height is computed
-   from first to last AZ, with a small overhang for the lane label.
-6. **Region services** use `REGION_ROW_ICONS = 21` icons per row. Services
-   connected to the VPC are pushed to the last row (closest to the VPC) by
-   `routing.plan_region_service_order`.
-
-**Spacing tokens** (defined at module top):
-
-```python
-ICON = 120           # icon box size
-ICON_GAP = 60        # gap between sibling icons
-TIER_GAP = 80        # gap between subnet columns inside an AZ
-AZ_GAP = 120         # gap between AZ rows
-LANE_GAP = 50        # gap between compute-group lane columns
-VPC_PAD_X = 65       # VPC left/right internal padding
-REGION_PAD_X = 85    # Region left/right internal padding
-CLOUD_PAD_X = 85     # Cloud right internal padding
-```
-
-All container sizes derive from these tokens, so changing one constant
-consistently affects the whole layout.
-
----
-
-### `routing.py` — edge routing and placement planning
-
-Two responsibilities:
-
-#### 3a. `plan_region_service_order(page)`
-
-Reorders `region.services` in-place before layout runs. Services are scored:
-
-| Score | Meaning | Position |
-|---|---|---|
-| 0 | No connections | Front (rendered in early rows, far from VPC) |
-| 1 | Connected to another region service | Middle |
-| 2 | Connected to an APIGW/ALB gutter item (e.g. Lambda) | End (last row, near VPC) |
-| 3 | Connected to a VPC element (e.g. ECR→ECS) | Very end |
-
-This ensures Lambda lands in the last row adjacent to the APIGW gutter, and ECR
-lands adjacent to the ECS lane — keeping their edges short.
-
-#### 3b. Architecture edge routing
-
-Architecture page edges go through two stages:
-
-**Stage 1 — BFS pre-routing** (`routing.route_all_edges`): Before the per-edge
-loop, edges that don't match any semantic case are batched and routed together
-through the BFS obstacle-aware router. It discretises the diagram to a 20 px
-grid, marks icon+label boxes as blocked, routes longest-first so long edges
-claim corridors first, and applies soft-obstacle penalties so successive edges
-spread into separate channels automatically. This handles general connections
-like `glue→s3` (region service to global icon) cleanly without crossing other
-icons.
-
-**Stage 2 — Semantic case routing**: Edges with intentional visual patterns
-bypass BFS and use one of these cases (in priority order):
-
-| Case | Condition | Route strategy |
-|---|---|---|
-| 0 | Same y-level, source left of target, path is clear | Straight horizontal, 0 waypoints |
-| 1 | Source in ingress band → VPC/tall container | Exit bottom → horizontal above VPC → enter top |
-| 2 | Region service → tall cluster (ECR deploy) | Exit bottom → staggered horizontal in svc-VPC gap → enter top; multiple sources fan-in symmetrically |
-| 2b | Cluster → DB icon (same AZ row) | Exit right at row-top band → drop into DB icon top; preceding stores use gap corridors |
-| 2c | Cluster → region service above VPC | Exit cluster top → rise to gap between svc row bottom and VPC top → enter target from below |
-| 3 | Lane → icon (Sadhaka geometry, target at or below lane top) | Exit right at bus_y (AZ-gap centre) → horizontal → enter top |
-| 4 | Same-row left→right (in AZ row) | Straight; or upper/lower band jog verified by `_seg_hits_resource()` |
-| 5 | Fallback | BFS result if available; else `_route_edge()` geometric fallback |
-
-**Spec overrides**: Any edge can specify `source_point: "fx,fy"`, `target_point:
-"fx,fy"`, or `waypoints: [[x,y],...]` to force explicit geometry. These always
-win over computed routing. When `source_point` changes the exit x-fraction, the
-first waypoint's x is updated to match, keeping the first segment orthogonal.
-
-**House style**: `label=""` is enforced on all architecture page edges. Spec
-`label` values are documentation only and are not rendered as connector text.
-
-The `_seg_hits_resource()` function checks whether a candidate polyline crosses
-any resource icon before committing to a path, enabling straight → upper-band →
-lower-band fallback in Case 4.
-
-**All routing thresholds are named constants** defined at the top of
-`generate_diagram.py` (e.g. `TALL_CONTAINER_H = 240`, `BUS_ABOVE_TARGET = 75`,
-`FAN_STAGGER_STEP = 28`) and in `routing.py` (`TASKDB_CLEAR_BASE`,
-`DB_EXIT_LEFT_FX`, etc.). See source for the full list.
-
-#### 3c. Flow edge routing — `_route_flow_edges()`
-
-Multi-pass obstacle-aware router for flow pages:
-
-1. **Topological spanning** — longer edges are routed first (they need more
-   space); short backbone runs are treated as pinned.
-2. **Shape classification** — each edge is classified "h" (side-to-side) or
-   "v" (top-to-bottom) based on whether horizontal distance exceeds vertical
-   distance. Edges where dy > dx get "v" to avoid diagonal exits.
-3. **Port allocation** — `_plan_flow_ports()` assigns each edge's exit and
-   entry to one of five declared anchor fractions (0, 0.25, 0.5, 0.75, 1.0)
-   on the icon's border. Ports are snapped to these anchors so arrows attach
-   at the icon's declared connection points, not arbitrary positions.
-4. **Channel selection** — `_flow_options()` generates candidates (straight →
-   upper-band jog → lower-band jog → column-based detour). Each is checked
-   against icon obstacles; the lowest-penalty candidate wins.
-5. **Rework loop** (up to 3 passes) — edges still crossing icons have their
-   shape flipped (h↔v) and are re-routed.
-6. **Conflict report** — `routing.find_conflicts()` tallies residual icon
-   crossings and edge-edge overlaps and prints them as warnings.
-
-**Key fix (anchor snapping):** Port fractions and path endpoint coordinates are
-both snapped to the same icon anchor grid, eliminating the sub-pixel y-mismatch
-that previously caused diagonal attachment at icon borders.
-
----
-
-### `shapes.py` — shape catalog
-
-Single source of truth for every service stencil, colour, and category.
-Three dicts: `_AWS`, `_AZURE`, `_GCP`. Lookup function: `get_shape(provider, key)`.
-
-For AWS, any unknown key falls back to `get_shape_dynamic()`, which infers a
-stencil name and colour from the key string — so new services work without a
-catalog entry. For Azure and GCP, unknown keys raise `UnknownServiceError`.
-
-A test (`test_references.py`) fails the build if `shapes.py` and the
-`references/shapes-*.md` markdown catalogs drift apart.
-
----
-
-## 4. draw.io XML structure
-
-The emitted XML follows draw.io's uncompressed format:
+The agent emits draw.io's uncompressed format directly:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -350,21 +138,19 @@ The emitted XML follows draw.io's uncompressed format:
 
     <!-- containers (Cloud, Region, VPC, AZ, subnet, lane) -->
     <mxCell id="cloud" parent="1" value="AWS Cloud" style="points=...;..." vertex="1">
-      <mxGeometry x="260" y="250" width="3570" height="3080" as="geometry" />
+      <mxGeometry x="260" y="250" width="2727" height="2115" as="geometry" />
     </mxCell>
 
     <!-- resource icons -->
     <mxCell id="ecs" parent="vpc" value="ECS Fargate" style="shape=mxgraph.aws4.ecs;..." vertex="1">
-      <mxGeometry x="765" y="80" width="180" height="1215" as="geometry" />
+      <mxGeometry x="765" y="80" width="120" height="120" as="geometry" />
     </mxCell>
 
     <!-- edges with explicit connection points -->
     <mxCell edge="1" source="alb" target="ecs"
-            style="edgeStyle=orthogonalEdgeStyle;exitX=1.0;exitY=0.5;entryX=0.0;entryY=0.5;...">
+            style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.5;entryX=0;entryY=0.5;...">
       <mxGeometry relative="1" as="geometry">
-        <Array as="points">
-          <mxPoint x="1190" y="1610" />
-        </Array>
+        <Array as="points"><mxPoint x="1190" y="1505" /></Array>
       </mxGeometry>
     </mxCell>
   </root>
@@ -381,67 +167,43 @@ The emitted XML follows draw.io's uncompressed format:
 | `Array as="points"` | Intermediate waypoints for multi-bend paths |
 | `style="..."` | Full draw.io style string including stencil, colour, and label position |
 
-Labels are wrapped in HTML (`<font style="font-size:18px;"><b>...</b></font>`) so
-draw.io renders them with the house-style font. Edge labels use `label=""` —
-spec labels are documentation only and are not rendered on connector lines.
+Edge routing rules the agent applies (from the conventions file):
+
+- **Inbound path** `Users → CF → IGW → ALB`: all share the same absolute
+  y-centre; `exitX=1 exitY=0.5, entryX=0 entryY=0.5`, no waypoints.
+- **Cluster → DB**: `exitY` is a computed fraction so the edge exits at the DB's
+  y-centre and runs straight horizontally.
+- **Baseline edges** (ECR, Secrets): source the lane border, not a task icon.
+- **All edges** use `parent="1"` (root).
 
 ---
 
-## 5. Validation
+## 6. Stencils
 
-Three layers of validation run before and after rendering:
+Stencil names follow the draw.io `mxgraph.aws4.<name>` convention
+(`mxgraph.azure.<name>`, `mxgraph.gcp2.<name>` for the other providers). The
+agent never guesses a stencil name — it verifies each one against
+`references/shapes-*.md` before use. Common corrections to watch for:
+`elastic_container_service` → `ecs`, `elastic_kubernetes_service` → `eks`,
+`certificate_manager` → `certificate_manager_3`.
 
-| Layer | When | What it checks |
-|---|---|---|
-| `_check_unique_ids` | Before layout | No duplicate IDs on a page |
-| `_validate_services` | Before layout | Every service key is known (or dynamic fallback) |
-| `_check_edges` | Before layout | Every edge source/target ID exists |
-| `overlap_check(lo)` | After layout | Sibling icons in the same container don't physically overlap |
-| `_architecture_connectivity_warnings` | After layout | Ingress path completeness (WAF→IGW, IGW→ALB, actors have entry points) |
-| `find_conflicts(routes)` | After routing | Edge-over-icon and edge-over-edge crossings |
-
-Warnings are printed to stdout but do not block output unless `--strict-connectivity`
-is passed.
+To add a service, add a row to the relevant `shapes-*.md` catalog.
 
 ---
 
-## 6. Adding a new service
+## 7. Self-checks before delivery
 
-1. Open `shapes.py` and add an entry to the appropriate dict:
-   ```python
-   # AWS
-   _AWS["my_service"] = ("my_service", "compute", "My Service")
-   #                       stencil suffix  category   default label
-   ```
-2. Add the same row to `references/shapes-aws.md`.
-3. Run `pytest` — `test_references.py` will fail if the two are out of sync.
+There is no automated test suite. The agent validates its own output against the
+house-style rules before delivering:
 
-Stencil names follow the draw.io `mxgraph.aws4.<suffix>` convention. Browse
-existing entries in `shapes.py` for the pattern.
-
----
-
-## 7. Testing
-
-```bash
-source .venv/bin/activate
-pytest                        # 185 tests
-pytest -k "layout"            # run a subset
-pytest --tb=short -q          # compact output
-```
-
-Key test files:
-
-| File | What it covers |
+| Check | What it confirms |
 |---|---|
-| `test_grid.py` | Architecture page layout: container hierarchy, lane placement, subnet sizing |
-| `test_polish.py` | Icon styles, edge stroke widths, label wrapping, routing heuristics |
-| `test_overlap.py` | Overlap checker: detects collisions, skips intentional lane-over-AZ overlaps |
-| `test_layout_requirements.py` | Regression tests: WAF+ALB side-by-side, external actors outside cloud, Lambda row, boundary containment |
-| `test_routing.py` | `plan_region_service_order`: APIGW-connected services land in last row; ECR at end |
-| `test_regional_fix.py` | Auto-migration of regional services out of VPC subnets |
-| `test_references.py` | `shapes.py` ↔ `shapes-aws.md` drift; SKILL.md front-matter; house-style container list |
-| `test_generate.py` | XML validity, unique IDs, edge references, title block |
-| `test_shapes.py` | Shape lookup, style strings, dynamic fallback, unknown service handling |
-| `test_flow_layout.py` | Flow page layout: topological ordering, fan-out, explicit position overrides |
-| `test_dynamic_catalog.py` | AWS dynamic shape fallback for unknown service keys |
+| Boundary containment | Every icon sits fully inside its declared container |
+| Column alignment | Subnet widths are identical across AZ rows so columns line up |
+| Scope correctness | Lambda regional, WAF/Route 53 global, CloudFront inline with IGW/ALB |
+| Edge geometry | Inbound path is a straight horizontal line; no arrows run along borders |
+| Stencil validity | Every `shape=` key exists in the shape catalog |
+| Visual review | A rendered preview is inspected and corrected when one is available |
+
+Deliverables are one editable `.drawio.xml` with one Architecture page and one
+primary Flow page; extra flow pages are added only when requested.

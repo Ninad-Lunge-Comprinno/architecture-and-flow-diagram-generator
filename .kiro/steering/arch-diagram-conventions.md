@@ -7,12 +7,17 @@ Draw.io file with one architecture page and one primary flow page; do not add
 extra flows unless requested.
 
 **Visual reference precedence (most authoritative first):**
-1. `diagram examples/Comprinno Architecture Template.drawio.xml` — the current
-   house-style template. Read its XML for geometry, styles, and layout decisions.
-2. `outputs/ignosis/ignosis.drawio.xml` — a validated working output using the
-   nested-container coordinate system documented in `references/house-style.md`.
-3. `references/house-style.md` — rules, container styles, and scaling guidance.
-4. `references/coords-cheatsheet.md` — formulas and constants for all positions.
+1. `references/coords-cheatsheet.md` — **the only source for geometry numbers**.
+   All x/y/w/h values, formulas, and derived positions live here. Do not read
+   numbers from any other file.
+2. `references/skeleton-3az.drawio.xml` — ready-made blank 3-AZ architecture.
+   Copy it; fill in the topology. Never build containers from scratch.
+3. `references/house-style.md` — style strings and layout rules (no numbers).
+4. `diagram examples/Comprinno Architecture Template.drawio.xml` — visual
+   style reference only. Do not copy its coordinates or topology.
+
+`outputs/ignosis/ignosis.drawio.xml` is a local-only validated example (not in
+the repo, gitignored) — use it only if present on the local machine.
 
 Treat the template's example topology, AZ count, service inventory, metadata,
 and connections as non-defaults. Use only its visual structure.
@@ -30,6 +35,9 @@ and connections as non-defaults. Use only its visual structure.
 - Icon size: always 120×120. Icon y in 250-high subnet: always 65.
 
 **Derived positions — always compute from formulas, never copy from another diagram:**
+The specific values below (e.g. CloudFront y=1195, Users y=1445) are **N=3
+examples**. For any other AZ count, recompute using the formulas in
+`references/coords-cheatsheet.md` — do not reuse these numbers.
 - **Users y**: `cloud_y + region_y + vpc_y + igw_vpc_y = 250+285+260+650 = 1445`
 - **CloudFront y** (inline with IGW row): `region_y + vpc_y + igw_y = 285+260+650 = 1195` (cloud-relative)
 - **Regional icons x**: `start_x = (2395 - n×120 - (n-1)×60) / 2`, then `x_i = start_x + i×180`
@@ -104,6 +112,9 @@ never assume an MCP is available.
   Users must also clear the cloud left border: `users_abs_right + 40 ≤ cloud_abs_x`
   → `users_x ≤ cloud_abs_x - 40 - 120 = 260-40-120 = 100`. Default: Users x=100 ✓
   (users abs_right=220, 40px gap to cloud left=260, 103px gap to Route53 abs_left=323)
+
+- **No orphan compute icons** — every EC2/ECS/EKS icon must be inside a subnet or lane,
+  not floating directly as a VPC child with no container parent.
 
 Keep paths semantically correct and visually clear: few essential arrows,
 short routes, readable labels, no overlaps, and no arrows running along

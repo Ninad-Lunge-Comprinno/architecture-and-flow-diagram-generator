@@ -6,8 +6,7 @@
   "toolsSettings": {
     "write": {
       "allowedPaths": [
-        "**/*.drawio.xml",
-        ".kiro/**"
+        "outputs/**"
       ]
     }
   },

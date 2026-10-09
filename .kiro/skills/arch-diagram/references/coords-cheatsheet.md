@@ -1,5 +1,9 @@
 # Coordinate Cheatsheet
 
+> **Single source of truth:** This is the single source of truth for all geometry
+> numbers. `house-style.md` contains style strings and rules only. Do not duplicate
+> numbers in other files.
+
 > **Two types of values here:**
 > - **Constants** — fixed dimensions that define the scale. Copy verbatim.
 > - **Formulas** — compute these from the constants for your specific topology.
@@ -38,6 +42,9 @@ AZ height = **340**. AZ y-spacing = **460px**. All constants.
 |------|--------|---|---|---|---|
 | igw | vpc | -60 | 650 | 120 | 120 |
 | alb | vpc | 160 | 650 | 120 | 120 |
+
+> **y=650 is the N=3 value.** The IGW/ALB row centres vertically on the AZ stack,
+> so for other AZ counts use `igw_y = 190 + 230*(N-1)` (see Users node section).
 
 ---
 
@@ -78,12 +85,22 @@ gap = 40px recommended
 
 Users sits on the same horizontal row as IGW/ALB so the inbound path is a straight line.
 
+> **N-AZ generalisation** — the IGW/ALB/CF row and the lane height depend on the
+> number of AZs (N). The values below (650 / 1445 / 1195 / 1260) are the N=3 case.
+> Recompute with these formulas for any other N:
+> ```
+> igw_y       = 190 + 230*(N-1)                     # 650 for N=3
+> users_y     = cloud_y + region_y + vpc_y + igw_y  # = 795 + igw_y  (1445 for N=3)
+> cf_cloud_y  = 545 + igw_y                          # 1195 for N=3
+> lane_h      = 340 + 460*(N-1)                      # 1260 for N=3
+> ```
+
 ```
 users_abs_y_centre = vpc_abs_y + igw_vpc_y + icon_half
                    = (cloud_y + region_y + vpc_y) + igw_y + 60
-                   = (250 + 285 + 260) + 650 + 60 = 1505
+                   = (250 + 285 + 260) + 650 + 60 = 1505   [N=3]
 
-users_y = users_abs_y_centre - 60 = 1445
+users_y = users_abs_y_centre - 60 = 1445   [N=3]
 users_x = 60  (left of cloud boundary)
 ```
 
@@ -99,45 +116,31 @@ users_x = 60  (left of cloud boundary)
 horizontal inbound path.
 
 ```
-cf_y (cloud-relative) = igw_abs_y - cloud_abs_y - icon_half
-                      = (vpc_abs_y + igw_vpc_y) - cloud_abs_y - 60
-                      = (795 + 650) - 250 - 60 = 1135
-```
-> Note: using the working-output values: vpc_abs_y = cloud_y+region_y+vpc_y = 250+285+260=795.
-> cf_y = 795+650-250-60 = 1135. But since CF is a child of cloud (cloud_y=250):
-> cf_cloud_rel_y = 1135 - 250 + 250 = ... actually:
-> cf_abs_top = cf_abs_y_centre - 60 = 1505-60 = 1445. CF parent=cloud(abs y=250).
-> cf_cloud_rel_y = 1445 - 250 = 1195. ✓ (matches the validated value)
-
-```
 cf_cloud_rel_y = igw_abs_y_centre - icon_half - cloud_abs_y
                = 1505 - 60 - 250 = 1195
 ```
 
-**CloudFront x** — place left of the VPC left edge with a 40px gap:
+**CloudFront x** — place left of the IGW icon (which sits at vpc-relative x=-60) with a 40px gap:
 ```
-vpc_abs_left = cloud_abs_x + region_cloud_x + vpc_region_x = 260+247+85 = 592
-cf_abs_right = vpc_abs_left - 40 = 552
-cf_cloud_rel_x = cf_abs_right - 120 - cloud_abs_x = 552 - 120 - 260 = 172
+igw_abs_left   = vpc_abs_left + igw_vpc_x = 592 + (-60) = 532
+cf_abs_right   = igw_abs_left - 40 = 492
+cf_cloud_rel_x = cf_abs_right - 120 - cloud_abs_x = 492 - 120 - 260 = 112
 ```
-> Validated working value: x=112. The difference is because IGW at x=-60 means vpc_abs_left
-> for the IGW icon edge is 592-60=532, so cf_abs_right < 532: cf_cloud_rel_x = 532-120-260=152.
-> Use **x=112** (leaves 40px gap to IGW).
 
 **S3 (CF static-site origin) and IAM** — top global band, **centre-aligned**:
 ```
-n = number of global band icons (S3, IAM, Route53 is `parent=cloud` at cloud-rel x=30.
-Route53 abs left = `cloud_abs_x + 30` = 290 (for default scale).
-`users_x` must satisfy BOTH constraints:
-  1. `users_abs_right + 40 ≤ cloud_abs_x`  → `users_x ≤ cloud_abs_x - 160 = 100`
-  2. `users_abs_right + 40 ≤ Route53_abs_left` → `users_x ≤ Route53_abs_left - 160`
-Constraint 1 is usually tighter. Default: **users_x = 100** (abs_right=220, 40px to cloud left=260).
-Route53...)
+n = number of global band icons (S3, IAM)
 group_w = n × 120 + (n-1) × 60
 start_x = (cloud_width - group_w) / 2
 x_i = start_x + i × 180
 ```
 For n=2 (S3 + IAM): `start_x = (2727 - 300) / 2 = 1213.5 ≈ 1214`
+
+**Route 53** is `parent=cloud` at cloud-relative x=30 (Route53 abs left = `cloud_abs_x + 30` = 290 for default scale).
+`users_x` must satisfy BOTH constraints:
+  1. `users_abs_right + 40 ≤ cloud_abs_x`  → `users_x ≤ cloud_abs_x - 160 = 100`
+  2. `users_abs_right + 40 ≤ Route53_abs_left` → `users_x ≤ Route53_abs_left - 160`
+Constraint 1 is usually tighter. Default: **users_x = 100** (abs_right=220, 40px to cloud left=260).
 
 | Icon | formula | example (n=2) |
 |------|---------|---------------|
@@ -212,9 +215,14 @@ lane_h = (last_AZ_y + AZ_height) - first_AZ_y
   If AZs start at y=80: lane y=**80**. If AZs start at y=60: lane y=**80** (60+20).
   Always add 20px offset from the AZ container top edge.
 
-**Lane width and x:**
-- Single lane: `w=480`, centre in app column: `x = app_az_x + (app_w - lane_w) / 2 = 415 + (650-480)/2 = 415+85 = 500`. Round to **500** or adjust to avoid overlap with db subnet.
-- Two lanes: `w=240` each. `x_lane1 = app_az_x + gap`, `x_lane2 = x_lane1 + 240 + 20`
+**Lane width and x:** (the lane is a child of the VPC, so x is VPC-relative — add az1_x)
+- Single lane: `w=480`, centre in app column:
+  ```
+  lane_x = az1_x + app_subnet_az_x + (app_w - lane_w) / 2
+         = 520 + 455 + (650 - 480) / 2 = 1060
+  ```
+  Use **1060**.
+- Two lanes: `w=240` each. `x_lane1 = az1_x + app_subnet_az_x + gap`, `x_lane2 = x_lane1 + 240 + 20`
 
 **Task icon x inside lane (centres 120px icon):**
 ```
@@ -277,15 +285,13 @@ exitY = (1050 - 875) / 1260 = 0.139 ≈ 0.14
 CF and IGW share the same absolute y-centre — the edge should be **horizontal** with no jog.
 
 ```
-exitX=1  exitY = formula  (see EKS/ECS→DB section below)   (exit CF right-centre)
-entryX=0 entryY=0.5  (enter IGW left-centre)
-No waypoints needed — same y-centre, straight horizontal.
+exitX=1;exitY=0.5; entryX=0;entryY=0.5; no waypoints needed.
 ```
 
 > CloudFront is always inline with IGW (same y-centre). These waypoints are only needed if CF is deliberately placed above the IGW row in an exceptional layout:
 CF left and travelling down the left side of the cloud boundary:
 ```
-exitX=0 exitY = formula  (see EKS/ECS→DB section below)   entryX=0 entryY=0.5
+exitX=0 exitY=1  entryX=0 entryY=0.5
 waypoints: x = cloud_abs_x - 40, y = cf_abs_y_centre
            x = cloud_abs_x - 40, y = igw_abs_y_centre
 ```
@@ -447,6 +453,16 @@ For nodes parent=1:
 
 If source and target y-centres differ by even 1px, orthogonal router adds a bend.
 
+### Flow page spine spacing
+
+Spine nodes are spaced **280px centre-to-centre** on the main horizontal path.
+Branch nodes (S3, WAF, RDS) sit 220px above or below the spine.
+
+```
+node_x_i = first_node_x + i * 280
+branch_y  = spine_abs_yc - 220 - 60   (above spine)
+```
+
 ### WAF x-alignment in flow (must match ALB exactly)
 
 ```
@@ -479,6 +495,12 @@ users_x = cloud_abs_x - gap(40) - 120
 ```
 Default: cloud_x=380 → users_x=220, right=340, gap to cloud=40px.
 
+
+## Route 53 equidistant formula
+
+`cloud_rel_x = (region_cloud_x - 120) / 2 = (247-120)/2 = 63`
+
+cloud_rel_y = spine_abs_yc - 60 - cloud_abs_y (= 1135 for 3-AZ default)
 
 ## Common mistakes (constants that are often wrong)
 

@@ -4,11 +4,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Generated diagram XML and PNG previews — reproduced from spec files.
-# Spec (.spec.yaml) files ARE tracked; generated outputs are not.
+# Diagram XML and PNG previews.
+# Draw.io XML sources ARE tracked (examples, skeleton, and client outputs);
+# only the PNG previews under outputs/ are ignored.
 *.drawio.xml
 !diagram examples/*.drawio.xml
 !flow diagram examples/*.drawio.xml
+!.kiro/skills/arch-diagram/references/*.drawio.xml
+!outputs/**/*.drawio.xml
 outputs/**/*.png
 
 # Stale working directories (cleaned up)

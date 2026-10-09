@@ -108,14 +108,19 @@ misstate a specific resource's scope. Use AWS documentation when the placement
 or behavior is uncertain.
 
 Follow the user's topology and cloud-provider documentation over example
-diagrams. Do not assume three AZs, a NAT Gateway, a CDN, a WAF, a VPC, or a
-specific database pattern. Avoid decorative, inferred, and all-to-all arrows.
+diagrams. Ask if the AZ count is not specified; default to 3 AZs if the user
+does not answer. All geometry in the cheatsheet assumes N=3. Do not assume a
+NAT Gateway, a CDN, a WAF, a VPC, or a specific database pattern. Avoid
+decorative, inferred, and all-to-all arrows.
 
 ## 3. Build and review
 
 **Generation workflow (fast path):**
 
-1. Copy `references/skeleton-3az.drawio.xml` to the output path.
+1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
+   committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
+   it is missing, the most recent validated output in
+   `outputs/ignosis/ignosis.drawio.xml` is the fallback.
 2. Replace `PROJECT_NAME` on both pages and fill in the metadata.
 3. Look up every coordinate you need in `references/coords-cheatsheet.md` —
    do not calculate from scratch.
@@ -186,30 +191,33 @@ Before writing the file, verify each item by inspecting the XML:
 9. **CloudFront placement** — CF is inline with the IGW/ALB row (same abs y-centre = 1505).
    cloud-relative y=1195, x=112. NOT in the top global band. Users→CF→IGW→ALB = straight horizontal line.
 
-10. **Global vs regional placement** — IAM and CloudFront are children of
-   `cloud` (not `region`). S3 buckets, ACM, Secrets Manager, KMS, CloudWatch,
+10. **Global vs regional placement** — IAM, Route 53, and CloudFront are children
+   of `cloud` (not `region`). An S3 bucket's placement depends on its role: an S3
+   bucket serving as a **CloudFront static-site origin** goes in the cloud band
+   (`parent=cloud`); an S3 bucket used as **application data storage** is regional
+   and goes in the Region (`parent=region`). ACM, Secrets Manager, KMS, CloudWatch,
    CloudTrail, ECR are children of `region` (not VPC, not cloud).
 
 11. **No overlapping labels or borders** — Subnet containers do not overlap each
     other. Icon labels don't overlap container borders (use `labelWidth=160`).
 
-10. **No orphan compute icons** — every EC2, Lambda, ECS task, or EKS worker must be
+12. **No orphan compute icons** — every EC2, Lambda, ECS task, or EKS worker must be
     placed inside a subnet, lane, or ASG container. A compute icon floating directly
     inside the VPC (vpc child, no subnet parent) with zero edges is always wrong — remove it
     or move it to the correct container. Check: every compute icon has ≥1 edge and a
     logical container parent (subnet or lane).
 
-11. **WAF placement** — WAF is global. Place it above the ALB (same x-column, y = ALB_y_top − 200),
+13. **WAF placement** — WAF is global. Place it above the ALB (same x-column, y = ALB_y_top − 200),
     connected by a vertical edge (exitY=1 → entryY=0). WAF parent=root(1). NOT in regional row.
 
-11. **Logo cell** — brand/f-brand style must include `strokeColor=none` to prevent border/underline.
+14. **Logo cell** — brand/f-brand style must include `strokeColor=none` to prevent border/underline.
 
-12. **Stencil names verified** — every `resIcon=` value must exist in
+15. **Stencil names verified** — every `resIcon=` value must exist in
     `references/shapes-aws.md` (stencil column). Never guess. Common blank-box
     traps: `elastic_container_service` (→ `ecs`), `elastic_kubernetes_service`
     (→ `eks`), `certificate_manager` (→ `certificate_manager_3`).
 
-12. **Two pages** named exactly `Architecture` and `Flow`.
+16. **Two pages** named exactly `Architecture` and `Flow`.
 
 If any check fails, fix the specific cell(s) before saving. State that visual
 preview was unavailable (no MCP) and list which checks passed.
@@ -218,5 +226,5 @@ Save the result to the requested output path.
 
 ## 4. Deliver
 
-Provide the spec and editable Draw.io paths, identify the two page purposes,
-and mention any assumptions that remain. Keep the summary brief.
+Provide the Draw.io file path, identify the two page purposes, and mention any
+assumptions that remain. Keep the summary brief.
