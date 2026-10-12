@@ -18,12 +18,16 @@
 | igw y (vpc-rel) | **650** | aligns with AZ midpoint |
 | users y (abs) | **1445** | inline with IGW/ALB row |
 | CF cloud-rel y | **1195** | inline with IGW row |
-| lane_h | **1260** | (1000+340)−80 |
-| task_y AZ-1 | **110** | (80+170)−80−60 |
-| task_y AZ-2 | **570** | (540+170)−80−60 |
-| task_y AZ-3 | **1030** | (1000+170)−80−60 |
-| EKS→DB exitY | **0.14** | (1050−875)/1260 |
-| ECS→AZ3 DB exitY | **0.87** | (1970−875)/1260 — for cluster connecting to AZ-3 db |
+| lane_x (vpc-rel) | **1002** | app_vpc_x + 27 |
+| lane_y (vpc-rel) | **170** | app_vpc_y_first + 40 |
+| lane_w | **301** | app_w - 54 (for app_w=355) |
+| lane_h | **1110** | fits inside app subnets |
+| task_y AZ-1 | **25** | centred in AZ-1 app subnet (lane-rel) |
+| task_y AZ-2 | **485** | centred in AZ-2 app subnet (lane-rel) |
+| task_y AZ-3 | **945** | centred in AZ-3 app subnet (lane-rel) |
+| task_x | **90** | (301−120)/2 |
+| EKS→DB exitY | **0.08** | (1050−965)/1110 |
+| ECS→AZ3 DB exitY | **0.95** | (1015+50+65+60−965)/1110 — for cluster connecting to AZ-3 db |
 | regional row start_x (n=6) | **688** | (2395−1020)/2 |
 | regional row start_x (n=7) | **598** | (2395−1200)/2 |
 | global band start_x (n=2) | **1214** | (2727−300)/2 |
@@ -241,17 +245,36 @@ and clear of the task label. Only connect directly to an individual task when
 the user specifically asks to show a task-level interaction. Apply the same
 layout pattern to EKS workloads when one service is replicated across AZs.
 
-**Lane height:**
+**Lane must render INSIDE the app subnet column** — the lane's orange border must
+not extend beyond the blue app subnet borders. The lane spans from inside the
+first app subnet through inside the last app subnet, crossing the inter-AZ gaps.
+
+**Lane geometry — fit inside app subnets:**
 ```
-lane_h = (last_AZ_y + AZ_height) - first_AZ_y
-       = (1000 + 340) - 80 = 1260   [for 3-AZ default]
+# App subnet vpc-relative position
+app_vpc_x = az_x + app_az_x = 520 + 455 = 975
+app_vpc_y_first = az1_y + app_az_y = 80 + 50 = 130
+app_vpc_y_last_bottom = az3_y + app_az_y + app_h = 1000 + 50 + 250 = 1300
+
+# Lane position (vpc-relative) — inside the app subnet column
+lane_padding = 27                     # horizontal padding inside subnet
+lane_top_padding = 40                 # vertical padding for subnet label
+lane_bottom_padding = 20
+
+lane_x = app_vpc_x + lane_padding = 975 + 27 = 1002
+lane_y = app_vpc_y_first + lane_top_padding = 130 + 40 = 170
+lane_w = app_w - (2 × lane_padding)   # e.g. 355 - 54 = 301 for app_w=355
+lane_h = (app_vpc_y_last_bottom - lane_bottom_padding) - lane_y
+       = (1300 - 20) - 170 = 1110     [for 3-AZ, app_h=250]
 ```
 
-**Lane y:** `az1_y + 20` (offset 20px inside AZ1 top to avoid label overlap).
-  If AZs start at y=80: lane y=**80**. If AZs start at y=60: lane y=**80** (60+20).
-  Always add 20px offset from the AZ container top edge.
+**3-AZ default values (copy directly):**
+- `lane_x = 1002` (vpc-relative)
+- `lane_y = 170` (vpc-relative)
+- `lane_w = 301` (for app_w=355, lane fits inside subnet)
+- `lane_h = 1110`
 
-**Lane width — size to content, not to the subnet:**
+**Lane width — size to content:**
 Lane width = `120 + 2×pad` where pad≥60. Single icon, short label: `lane_w=300`.
 Long label (>20 chars): `lane_w=480`. Dual lanes: `w=240` each.
 
@@ -259,42 +282,33 @@ Long label (>20 chars): `lane_w=480`. Dual lanes: `w=240` each.
 (35px left gap + 20px right gap). Do NOT use w=650 as a fixed default.
 Example: lane_w=300 → app_w=355. lane_w=480 → app_w=535.
 
-**Lane x and position:** (VPC-relative — add az1_x)
-- Single lane: centre in app column:
-  ```
-  lane_x = az1_x + app_subnet_az_x + (app_w - lane_w) / 2
-         = 520 + 455 + (650 - 480) / 2 = 1060
-  ```
-  Use **1060**.
-- Two lanes: `w=240` each. `x_lane1 = az1_x + app_subnet_az_x + gap`, `x_lane2 = x_lane1 + 240 + 20`
-
 **Task icon x inside lane (centres 120px icon):**
 ```
 task_x = (lane_width - 120) / 2
 ```
-Single lane (w=480): task_x = **180**
+Single lane (w=301): task_x = **90**
 Dual lane (w=240): task_x = **60**
 
-**Task icon y inside lane — FORMULA (not hardcoded):**
+**Task icon y inside lane — centred in app subnet region:**
 ```
-az_mid_vpc_y = az_y + AZ_height/2          (midpoint of AZ row, vpc-relative)
-task_y = (az_mid_vpc_y - lane_top_vpc_y) - icon_half
-       = (az_y + 170) - 80 - 60
+# Task should be centred vertically in the portion of lane overlapping each AZ's app subnet
+app_center_vpc_y = az_y + app_az_y + (app_h / 2) = az_y + 50 + 125 = az_y + 175
+task_y = app_center_vpc_y - 60 - lane_y   # (lane-relative)
 ```
 
-| AZ | az_y | az_mid_vpc_y | task_y |
-|----|------|-------------|--------|
-| AZ-1 | 80 | 250 | 110 |
-| AZ-2 | 540 | 710 | 570 |
-| AZ-3 | 1000 | 1170 | 1030 |
+| AZ | az_y | app_center_vpc_y | task_y (lane-rel) |
+|----|------|------------------|-------------------|
+| AZ-1 | 80 | 255 | 25 |
+| AZ-2 | 540 | 715 | 485 |
+| AZ-3 | 1000 | 1175 | 945 |
 
-> These table values are the formula outputs for the 3-AZ default. **If you change
-> AZ positions, recalculate using the formula, not by copying this table.**
+> These table values are for the 3-AZ default with lane_y=170. **If you change
+> AZ positions or lane geometry, recalculate using the formula.**
 
 **Badge (45×45, parent=vpc):**
 ```
-badge_x = lane_x + 8
-badge_y = lane_y + 8 = 88
+badge_x = lane_x + 8 = 1010
+badge_y = lane_y + 8 = 178
 ```
 
 ---
@@ -311,12 +325,12 @@ db_abs_y_centre = cloud_y + region_y + vpc_y + az1_y + db_az_y + db_icon_y + ico
 lane_abs_top    = cloud_y + region_y + vpc_y + lane_vpc_y
 ```
 
-For the 3-AZ working-output defaults with Aurora in AZ-1 db-subnet:
+For the 3-AZ defaults with Aurora in AZ-1 db-subnet (lane_y=170, lane_h=1110):
 ```
 aurora_abs_y_centre = 250+285+260+80+50+65+60 = 1050
-lane_abs_top        = 250+285+260+80 = 875
-lane_height         = 1260
-exitY = (1050 - 875) / 1260 = 0.139 ≈ 0.14
+lane_abs_top        = 250+285+260+170 = 965
+lane_height         = 1110
+exitY = (1050 - 965) / 1110 = 0.077 ≈ 0.08
 ```
 
 > **Recalculate this whenever the database's AZ row or the lane's vpc-relative y changes.**

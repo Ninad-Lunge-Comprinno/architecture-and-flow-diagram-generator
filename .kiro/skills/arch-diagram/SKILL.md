@@ -219,9 +219,10 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     Subnets identical across all AZ rows so columns align.
     **Lane width:** size to content. `lane_w = 120 + 2×pad` (pad≥60).
     Single icon with short label: lane_w=300. Long label: lane_w=480.
-15. **Cluster lane geometry** — lane `parent=vpc`, y=az1_y+20, h=(last_AZ_y+340)−az1_y,
-    single w=480 / dual w=240 each. Task icon y via formula, not copied. Badge 45×45
-    at lane top-left. Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
+15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
+    3-AZ defaults: x=1002, y=170, w=301, h=1110. Task icons centred in each AZ's app subnet
+    region: task_y = 25/485/945 (lane-relative). Badge 45×45 at x=1010, y=178.
+    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
     ECS/EKS stencils are `ecs`/`eks` (not `elastic_container_service`/`elastic_kubernetes_service`).
 16. **IGW placement** — vpc-relative `x=-60 y=650`. Straddles the VPC left border.
 17. **Row spacing** — regional row and global band each independently centre-aligned
