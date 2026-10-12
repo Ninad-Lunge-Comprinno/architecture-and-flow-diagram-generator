@@ -23,8 +23,16 @@
 | task_y AZ-2 | **570** | (540+170)−80−60 |
 | task_y AZ-3 | **1030** | (1000+170)−80−60 |
 | EKS→DB exitY | **0.14** | (1050−875)/1260 |
+| ECS→AZ3 DB exitY | **0.87** | (1970−875)/1260 — for cluster connecting to AZ-3 db |
 | regional row start_x (n=6) | **688** | (2395−1020)/2 |
+| regional row start_x (n=7) | **598** | (2395−1200)/2 |
 | global band start_x (n=2) | **1214** | (2727−300)/2 |
+| global band start_x (n=4) | **1034** | (2727−660)/2 |
+| **Dual lanes** x_lane1 (vpc-rel) | **1010** | az1_x+app_x+(app_w−total_w)/2 |
+| **Dual lanes** x_lane2 (vpc-rel) | **1270** | lane1_x+240+20 |
+| dual lane task_x | **60** | (240−120)/2 |
+| dual app_w (2 lanes 240+gap) | **555** | 2×240+20+55 |
+| dual db_x (az-rel) | **1055** | app_x+app_w+40 = 455+555+40 |
 
 
 ---

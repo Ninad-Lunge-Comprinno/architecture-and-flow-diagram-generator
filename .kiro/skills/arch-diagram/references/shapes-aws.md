@@ -1,5 +1,40 @@
 # AWS Shape Catalog
 
+## ⚡ Quick stencil lookup (most-used services)
+
+| Service | stencil suffix | fillColor |
+|---------|---------------|-----------|
+| ALB | `application_load_balancer` | `#8C4FFF` |
+| Aurora | `aurora` | `#C925D1` |
+| CloudFront | `cloudfront` | `#8C4FFF` |
+| CloudTrail | `cloudtrail` | `#E7157B` |
+| CloudWatch | `cloudwatch_2` | `#E7157B` |
+| EC2 | `ec2` | `#ED7100` |
+| ECR | `ecr` | `#ED7100` |
+| ECS badge | `ecs` | `#ED7100` |
+| EKS badge | `eks` | `#ED7100` |
+| ElastiCache/Redis | `elasticache` | `#C925D1` |
+| Fargate task | `fargate` | `#ED7100` |
+| GuardDuty | `guardduty` | `#DD344C` |
+| IAM | `identity_and_access_management` | `#DD344C` |
+| IGW | `internet_gateway` | `#8C4FFF` |
+| KMS | `key_management_service` | `#DD344C` |
+| Lambda | `lambda` | `#ED7100` |
+| MSK/Kafka | `managed_streaming_for_kafka` | `#E7157B` |
+| NAT Gateway | `nat_gateway` | `#8C4FFF` |
+| RDS | `rds` | `#C925D1` |
+| Route 53 | `route_53` | `#8C4FFF` |
+| S3 | `s3` | `#7AA116` |
+| Secrets Manager | `secrets_manager` | `#DD344C` |
+| Users | `users` | `#232F3E` |
+| WAF | `waf` | `#DD344C` |
+
+> Full prefix for all: `mxgraph.aws4.<stencil suffix>`
+> Verify before use — never guess.
+
+---
+
+
 Service keys usable in a spec under `provider: aws`. This table mirrors
 `.kiro/scripts/arch-diagram/shapes.py` (the source of truth); a consistency
 test fails the build if they drift apart.
