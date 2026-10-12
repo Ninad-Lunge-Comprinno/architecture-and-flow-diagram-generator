@@ -1,0 +1,41 @@
+name: Validate Diagrams
+
+on:
+  push:
+    branches: [main, 'fix/**', 'feature/**']
+    paths:
+      - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
+      - '.kiro/scripts/validate-drawio.py'
+      - '.github/workflows/validate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
+      - '.kiro/scripts/validate-drawio.py'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate skeleton
+        run: |
+          echo "=== Validating canonical skeleton ==="
+          python3 .kiro/scripts/validate-drawio.py .kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
+
+      - name: Validate example diagrams (if present)
+        run: |
+          echo "=== Checking diagram examples ==="
+          for f in "diagram examples"/*.drawio.xml; do
+            if [ -f "$f" ]; then
+              echo "Validating: $f"
+              python3 .kiro/scripts/validate-drawio.py "$f" || echo "Warning: $f has issues (non-blocking for examples)"
+            fi
+          done
+        continue-on-error: true
