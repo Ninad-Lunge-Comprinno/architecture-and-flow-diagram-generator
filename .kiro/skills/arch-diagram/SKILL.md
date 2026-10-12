@@ -259,10 +259,14 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     to individual task icons. One ALB→lane edge replaces N ALB→task edges.
 25. **Cluster→primary DB only** — connect compute lane to the Writer/primary DB.
     Replicas get only dashed replication edges from the primary.
-26. **Baseline edges minimised** — architecture page: keep only ECR (image pull)
-    and optionally Secrets Manager. Bedrock, Transcribe, MSK, S3, and other
-    service-call edges belong on the Flow page, not as baseline arch-page arrows.
-27. **Baseline edge routing** — every baseline edge that exits a lane top (`exitY=0`)
+26. **Architecture page edges — minimal set only:**
+    - **Inbound path**: Users → (CloudFront →) IGW → ALB → cluster lane
+    - **ECR**: dashed edge from lane to ECR (image pull)
+    - **Database**: lane → primary DB (solid), DB replication edges (dashed)
+    - **Nothing else.** SQS, SNS, MSK, S3, Bedrock, Transcribe, Secrets Manager,
+      CloudWatch, KMS, and all other service connections belong on the **Flow page only**.
+    The Architecture page shows *where services are deployed*, not *how they communicate*.
+27. **Baseline edge routing** — the ECR edge that exits a lane top (`exitY=0`)
     MUST use horizontal waypoints at `y = pvpc_abs_top − 30` before turning toward
     the target. No exceptions. Edges from nested task icons create vertical lines.
 28. **Multi-DB edges** — when EKS/ECS connects to two icons in the same db subnet

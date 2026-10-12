@@ -98,10 +98,13 @@ examples**. For any other AZ count, recompute using the formulas in
   it is a VPC-attached Lambda with a subnet ENI, which must be explicitly modelled.
 - **ECR**: every compute cluster (ECS, EKS) in the diagram should have a dashed
   baseline edge to ECR for image pulls — not just one of them.
-- **Baseline edges on the arch page**: keep only ECR (pull image) and optionally
-  Secrets Manager. Do not draw arch-page arrows to Bedrock, Transcribe, MSK, S3
-  from compute lanes — those belong on the flow page. Every baseline edge that
-  exits a lane top MUST use horizontal waypoints above the VPC border.
+- **Architecture page edges — minimal set only:**
+  - Inbound path: Users → (CloudFront →) IGW → ALB → cluster lane
+  - ECR: dashed edge from lane to ECR
+  - Database: lane → primary DB, plus dashed replication edges
+  - **Nothing else.** SQS, SNS, MSK, S3, Bedrock, Transcribe, Secrets Manager,
+    CloudWatch, KMS — all service connections go on the **Flow page only**.
+  The Architecture page shows *where services are deployed*, not *how they communicate*.
 - Connect the load balancer to the **cluster lane border** (not each task).
   Connect the cluster to the **primary database only** (replicas get dashed edges).
 - **CloudFront** must be explicitly requested by the user. Never infer CloudFront

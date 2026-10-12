@@ -474,12 +474,26 @@ Branch nodes (e.g. S3): same x as anchor, y = spine_y − 240.
 ---
 
 
-## ECR baseline edge waypoints — formula
+## Architecture page edges — allowed set
+
+**Only these edges belong on the Architecture page:**
+1. **Inbound path**: Users → (CloudFront →) IGW → ALB → cluster lane (solid)
+2. **ECR**: lane → ECR (dashed, "pull image")
+3. **Database**: lane → primary DB (solid), primary → replica (dashed replication)
+
+**Everything else goes on Flow page only:**
+- SQS, SNS, MSK, Kinesis (messaging/streaming)
+- Bedrock, Transcribe, Comprehend (AI/ML)
+- S3 (when used as data store)
+- Secrets Manager, CloudWatch, KMS (operational)
+- Lambda invocations, API calls, event triggers
+
+The Architecture page shows **where services are deployed** (containers, subnets, AZs).
+The Flow page shows **how requests flow through services** (numbered steps, branches).
+
+## ECR edge waypoints — formula
 
 Both EKS and ECS clusters must have a dashed `pull image` edge to ECR.
-**This is the only baseline edge required on the architecture page.** Other service
-connections (Bedrock, Transcribe, MSK, S3) are shown on the flow page — do not
-duplicate them as baseline arrows on the arch page unless explicitly requested.
 Source: the lane container border (`exitY=0`). Use horizontal waypoints:
 
 ```
@@ -493,7 +507,7 @@ For each lane:
 Waypoints: (lane_abs_xc, waypoint_y), (ecr_abs_xc, waypoint_y)
 ```
 
-Remove edge labels on baseline edges — verbose labels overlap container borders.
+Keep ECR edge unlabelled or use a short label like "pull" — verbose labels overlap container borders.
 
 
 ## Flow page layout — containers and alignment
