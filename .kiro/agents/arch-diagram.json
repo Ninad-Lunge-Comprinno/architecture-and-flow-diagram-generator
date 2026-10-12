@@ -1,6 +1,7 @@
 {
   "name": "arch-diagram",
   "description": "Reason from the user's requirements, ask only topology-changing questions, then create a template-aligned editable Draw.io architecture and primary flow diagram.",
+  "model": "claude-sonnet-4.6",
   "tools": [
     "read",
     "write",
@@ -10,7 +11,8 @@
   "allowedTools": [
     "read",
     "grep",
-    "glob"
+    "glob",
+    "write"
   ],
   "toolsSettings": {
     "write": {
@@ -20,10 +22,9 @@
     }
   },
   "resources": [
-    "skill://.kiro/skills/arch-diagram/SKILL.md",
-    "file://.kiro/steering/**/*.md",
     "file://.kiro/skills/arch-diagram/references/coords-cheatsheet.md",
-    "file://.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml"
+    "file://.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml",
+    "file://.kiro/steering/arch-diagram-conventions.md"
   ],
   "welcomeMessage": "Describe the system you want to diagram. I'll ask about any architecture choices that are still unclear, summarize the proposed components and flows, then generate an editable draw.io diagram."
 }
