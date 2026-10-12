@@ -121,6 +121,12 @@ decorative, inferred, and all-to-all arrows.
 
 **Generation workflow (fast path):**
 
+> **Speed target ≤5 min.** Main time sinks to avoid:
+> - Recomputing precomputed values — use the ⚡ lookup table in `coords-cheatsheet.md` directly.
+> - Multiple stencil-lookup round-trips — use the ⚡ quick table at the top of `shapes-aws.md`.
+> - Writing XML in many small chunks — write Architecture page in ≤2 write calls, Flow in 1.
+> - Running 4 separate validation shells — use `validate-drawio.py` once at the end.
+
 1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
    committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
    it is missing, the most recent validated output in
@@ -134,7 +140,12 @@ decorative, inferred, and all-to-all arrows.
    lane label and task icon stencil.
 6. Add edges (all `parent="1"`).
 7. Fill in the Flow page nodes and edges.
-8. Run the mandatory checklist below before saving.
+8. Run the validator and mandatory checklist before saving:
+   ```
+   python3 .kiro/scripts/validate-drawio.py <output-file.drawio.xml>
+   ```
+   Include the validator's output in your final report. If validation fails,
+   fix the issues before delivering.
 
 Do not write the container frame, logo, title block, or regional services row
 from scratch — they are already in the skeleton with the correct values.
