@@ -264,18 +264,23 @@ def check_page_name_consistency(diagrams, issues):
                     labels.add(text.lower())
         page_labels[diag_name] = labels
 
-    if len(page_labels) == 2 and 'Architecture' in page_labels and 'Flow' in page_labels:
-        arch_labels = page_labels.get('Architecture', set())
-        flow_labels = page_labels.get('Flow', set())
-        # Services on flow but not arch are fine (flow may aggregate)
-        # Services on arch but not flow: warn only for compute
-        compute_in_arch_not_flow = {
-            l for l in arch_labels if any(k in l for k in ['eks', 'ecs', 'fargate', 'lambda'])
-            and l not in flow_labels
-        }
-        if compute_in_arch_not_flow:
-            issues.append(f"[Consistency] Compute services on Architecture page not found on Flow page: "
-                          f"{compute_in_arch_not_flow}. Verify both pages are consistent.")
+    # NOTE: Consistency check disabled for now.
+    # Rule #15 says task icons should be "Fargate Task"/"EC2 Node" (task type).
+    # Rule #37 says service labels should be identical on both pages.
+    # These rules conflict: Architecture has task icons inside lanes with task-type labels,
+    # but Flow page has the cluster as a single icon (e.g., "EKS" or "ECS Fargate").
+    # Until this is clarified, we skip the consistency check to avoid false positives.
+    #
+    # if len(page_labels) == 2 and 'Architecture' in page_labels and 'Flow' in page_labels:
+    #     arch_labels = page_labels.get('Architecture', set())
+    #     flow_labels = page_labels.get('Flow', set())
+    #     compute_in_arch_not_flow = {
+    #         l for l in arch_labels if any(k in l for k in ['eks', 'ecs', 'fargate', 'lambda'])
+    #         and l not in flow_labels
+    #     }
+    #     if compute_in_arch_not_flow:
+    #         issues.append(f"[Consistency] Compute services on Architecture page not found on Flow page: "
+    #                       f"{compute_in_arch_not_flow}. Verify both pages are consistent.")
 
 
 def check_icon_overlaps(model, issues, page_name="Architecture"):
@@ -311,6 +316,7 @@ def check_icon_overlaps(model, issues, page_name="Architecture"):
         return (x, y)
 
     # Collect icons with their absolute bounding boxes
+    # EXCLUDE badges (45x45) — they intentionally overlap lane borders
     icons = []
     for cell in model.iter('mxCell'):
         style = cell.get('style', '')
@@ -324,6 +330,12 @@ def check_icon_overlaps(model, issues, page_name="Architecture"):
 
         w = float(geo.get('width', 120))
         h = float(geo.get('height', 120))
+
+        # Skip badges (45x45 icons that sit on lane borders)
+        is_badge = (w <= 50 and h <= 50) or 'badge' in cell_id.lower()
+        if is_badge:
+            continue
+
         abs_x, abs_y = get_abs_coords(cell_id)
 
         icons.append({
@@ -477,6 +489,11 @@ def main():
     path = Path(sys.argv[1])
     issues = []
 
+    # Detect if this is a reference/template file (not a final output)
+    is_reference = any(x in str(path).lower() for x in [
+        'template', 'skeleton', 'diagram examples', 'flow diagram examples'
+    ])
+
     # 1. Parse XML
     try:
         tree = ET.parse(path)
@@ -493,18 +510,19 @@ def main():
 
     page_names = [d.get("name") for d in diagrams]
 
-    # Check for required pages
-    if "Architecture" not in page_names:
-        issues.append("Missing required page 'Architecture'")
-    if "Flow" not in page_names:
-        issues.append("Missing required page 'Flow'")
+    # Check for required pages (skip for reference/template files)
+    if not is_reference:
+        if "Architecture" not in page_names:
+            issues.append("Missing required page 'Architecture'")
+        if "Flow" not in page_names:
+            issues.append("Missing required page 'Flow'")
 
-    # Check page order and extra pages
-    if page_names and page_names != ["Architecture", "Flow"]:
-        if set(page_names) == {"Architecture", "Flow"}:
-            issues.append(f"Page order should be ['Architecture', 'Flow'], found {page_names}")
-        elif len(page_names) > 2:
-            issues.append(f"Expected 2 pages ['Architecture', 'Flow'], found {len(page_names)}: {page_names}")
+        # Check page order and extra pages
+        if page_names and page_names != ["Architecture", "Flow"]:
+            if set(page_names) == {"Architecture", "Flow"}:
+                issues.append(f"Page order should be ['Architecture', 'Flow'], found {page_names}")
+            elif len(page_names) > 2:
+                issues.append(f"Expected 2 pages ['Architecture', 'Flow'], found {len(page_names)}: {page_names}")
 
     # Load valid stencils
     valid = load_valid_stencils()

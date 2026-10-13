@@ -1,6 +1,6 @@
 # Azure Shape Catalog (starter set)
 
-Service keys usable in a spec under `provider: azure`. Mirrors `shapes.py`.
+Service keys usable in architecture diagrams under `provider: azure`.
 Azure uses the `mxgraph.azure.*` stencil family. This is a starter set; extend
 it following the workflow at the bottom.
 
@@ -19,6 +19,7 @@ it following the workflow at the bottom.
 | virtual_network | networking | #0079D6 | mxgraph.azure.virtual_networks | Virtual Network |
 
 ## Adding a new Azure service
-1. Add the entry to `_AZURE` in `shapes.py` (`key: (stencil, fill, category, label)`).
-2. Add a matching row here.
-3. Run `pytest` to confirm no drift.
+
+1. Add a row to the table above with: key, category, fill color, stencil, and default label
+2. The stencil must be a valid `mxgraph.azure.*` shape
+3. Test by placing the icon in a diagram to verify it renders correctly

@@ -35,13 +35,13 @@
 ---
 
 
-Service keys usable in a spec under `provider: aws`. This table mirrors
-`.kiro/scripts/arch-diagram/shapes.py` (the source of truth); a consistency
-test fails the build if they drift apart.
+Service keys usable in architecture diagrams under `provider: aws`. This is the
+canonical reference for AWS service stencils. The validator uses this table to
+check that all icons reference valid stencils.
 
-> Note: Any service key **not** listed here is also accepted — the engine
-> derives a best-effort stencil automatically from the key name. Add to
-> this table and to `_AWS` in `shapes.py` to make it permanent.
+> **Adding a new service:** Add a row to the table below. The stencil name must
+> match what's available in the draw.io AWS 2020 icon set. Test by placing the
+> icon in a diagram and verifying it renders correctly.
 
 | key | category | fill | stencil | default label |
 |-----|----------|------|---------|---------------|
@@ -192,6 +192,8 @@ test fails the build if they drift apart.
 | x_ray | management | #E7157B | mxgraph.aws4.xray | AWS X-Ray |
 
 ## Adding a new AWS service
-1. Add to `_AWS` in `shapes.py`
-2. Add a matching row here
-3. Run `pytest` — the drift test enforces the match
+
+1. Add a row to the table above with: key, category, fill color, stencil, and default label
+2. The stencil must be a valid `mxgraph.aws4.*` shape from the draw.io AWS 2020 icon set
+3. Test by placing the icon in a diagram — if it renders as a broken image, the stencil name is wrong
+4. Run the validator: `python3 .kiro/scripts/validate-drawio.py <your-diagram.drawio.xml>`

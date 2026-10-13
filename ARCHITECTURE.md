@@ -1,10 +1,13 @@
 # How the Skill Works — Technical Reference
 
 This document describes the end-to-end approach that turns a user request into a
-draw.io diagram. The project has no code: diagrams are authored directly by
-Kiro's reasoning, guided by Markdown steering files and visual references. This
-document covers the agent workflow, the house-style rules the agent applies, the
-emitted draw.io XML structure, and how the agent self-checks its output.
+draw.io diagram. Diagrams are authored directly by Kiro's reasoning, guided by
+Markdown steering files and visual references. This document covers the agent
+workflow, the house-style rules the agent applies, the emitted draw.io XML
+structure, and how the agent self-checks its output.
+
+A Python validator (`.kiro/scripts/validate-drawio.py`) is available for manual
+QA but is not run automatically during generation.
 
 ---
 

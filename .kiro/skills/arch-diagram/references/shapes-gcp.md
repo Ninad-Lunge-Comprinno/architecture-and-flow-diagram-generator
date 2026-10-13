@@ -1,9 +1,7 @@
 # GCP Shape Catalog (starter set)
 
-Service keys usable in a spec under `provider: gcp`. Mirrors `shapes.py`.
-Core GCP services render as embedded official Google Cloud icon SVGs (image
-shapes), so they match the current GCP icon set in draw.io. Keys without an
-embedded icon fall back to the `mxgraph.gcp2.*` stencil family. This is a
+Service keys usable in architecture diagrams under `provider: gcp`.
+Core GCP services use the `mxgraph.gcp2.*` stencil family. This is a
 starter set; extend it following the workflow at the bottom.
 
 | key | category | fill | stencil | default label |
@@ -32,6 +30,7 @@ starter set; extend it following the workflow at the bottom.
 | user | general | #4285F4 | mxgraph.gcp2.user | User |
 
 ## Adding a new GCP service
-1. Add the entry to `_GCP` in `shapes.py` (`key: (stencil, fill, category, label)`).
-2. Add a matching row here.
-3. Run `pytest` to confirm no drift.
+
+1. Add a row to the table above with: key, category, fill color, stencil, and default label
+2. The stencil must be a valid `mxgraph.gcp2.*` shape
+3. Test by placing the icon in a diagram to verify it renders correctly

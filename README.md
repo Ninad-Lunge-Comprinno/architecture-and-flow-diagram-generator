@@ -9,6 +9,13 @@ Diagrams are authored directly by Kiro's reasoning — no code is run at
 generation time. The agent reads the requirements, references, and template,
 then writes valid Draw.io XML.
 
+**Validation:** A Python validator (`.kiro/scripts/validate-drawio.py`) is
+available to check generated diagrams for common issues. The agent does not
+run this automatically — it's a manual QA tool:
+```bash
+python3 .kiro/scripts/validate-drawio.py outputs/<project>/<project>.drawio.xml
+```
+
 ## Repository layout
 
 ```
