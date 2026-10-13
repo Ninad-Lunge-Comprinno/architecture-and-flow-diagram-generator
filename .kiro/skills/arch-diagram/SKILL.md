@@ -101,12 +101,13 @@ Include only services that are explicitly present in the user's request, support
 by the source architecture, or required by the requested design. Do not invent
 services, connections, or infrastructure.
 
-Security and operational services (IAM, CloudWatch, CloudTrail, KMS, Secrets
-Manager, WAF, etc.) are optional. Include them only when the user specifies
-them or the architecture makes them necessary. If relevant baseline services
-are absent, you may note them as recommendations after delivering the diagram —
-never add them silently. This rule applies to AWS, Azure, GCP, and all other
-supported providers.
+**Baseline services are always included.** Every production AWS architecture
+should show CloudWatch (monitoring), CloudTrail (audit), KMS (encryption), and
+IAM (identity). Add these to the regional services row (CloudWatch, CloudTrail,
+KMS) and global band (IAM) even if the user doesn't explicitly request them.
+They represent essential operational hygiene. Other security services (WAF,
+Secrets Manager, GuardDuty, etc.) are optional — include only when the user
+specifies them or the architecture requires them.
 
 Place each resource according to its actual scope (global, regional, VPC-bound).
 Use provider documentation when placement or behavior is uncertain.

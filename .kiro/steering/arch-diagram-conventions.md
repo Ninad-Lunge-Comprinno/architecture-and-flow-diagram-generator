@@ -80,6 +80,10 @@ examples**. For any other AZ count, recompute using the formulas in
 
 **Other layout rules:**
 - Default to a **3-AZ** three-tier layout unless the user specifies otherwise.
+- **Baseline services always included** — every diagram gets CloudWatch, CloudTrail,
+  KMS (regional row) and IAM (global band) even if user doesn't ask. These are
+  essential operational hygiene. Other security services (WAF, Secrets Manager,
+  GuardDuty) are optional — only if user requests or architecture requires.
 - **Container widths are fixed constants** — Cloud, Region, VPC, and AZ containers use
   skeleton default widths. Do not shrink them to fit content. Whitespace at the right
   edge is expected and acceptable. This ensures consistent framing across diagrams.
