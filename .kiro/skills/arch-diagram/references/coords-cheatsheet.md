@@ -35,6 +35,9 @@
 | **Dual lanes** x_lane1 (vpc-rel) | **1010** | az1_x+app_x+(app_w−total_w)/2 |
 | **Dual lanes** x_lane2 (vpc-rel) | **1270** | lane1_x+240+20 |
 | dual lane task_x | **60** | (240−120)/2 |
+| dual lane task_y AZ-1 | **85** | 25+60 label clearance |
+| dual lane task_y AZ-2 | **545** | 485+60 |
+| dual lane task_y AZ-3 | **1005** | 945+60 |
 | dual app_w (2 lanes 240+gap) | **555** | 2×240+20+55 |
 | dual db_x (az-rel) | **1055** | app_x+app_w+40 = 455+555+40 |
 
@@ -305,6 +308,10 @@ task_y = app_center_vpc_y - 60 - lane_y   # (lane-relative)
 
 > These table values are for the 3-AZ default with lane_y=170. **If you change
 > AZ positions or lane geometry, recalculate using the formula.**
+
+**Dual-lane label clearance:** With narrow lanes (w=240) and long labels like
+"EKS Cluster (API)", the label text wraps and overlaps task icons. Add +60px
+to each task_y for dual lanes: **AZ-1=85, AZ-2=545, AZ-3=1005**.
 
 **Badge (45×45, parent=vpc):**
 ```

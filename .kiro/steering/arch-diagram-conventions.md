@@ -80,6 +80,10 @@ examples**. For any other AZ count, recompute using the formulas in
 
 **Other layout rules:**
 - Default to a **3-AZ** three-tier layout unless the user specifies otherwise.
+- **Container widths are fixed constants** — Cloud, Region, VPC, and AZ containers use
+  skeleton default widths. Do not shrink them to fit content. Whitespace at the right
+  edge is expected and acceptable. This ensures consistent framing across diagrams.
+  Only subnets and lanes should be sized to their content.
 - Embed the real Comprinno logo as a fresh base64 blob from
   `Downloads/comprinno-logo.png`; never reuse a stale/truncated blob.
   Always add `strokeColor=none` to the logo image cell style to prevent a border/underline appearing.

@@ -140,7 +140,7 @@ decorative, inferred, and all-to-all arrows.
    lane label and task icon stencil.
 6. Add edges (all `parent="1"`).
 7. Fill in the Flow page nodes and edges.
-8. Ask the user to run the validator before finalizing:
+8. Run the validator before finalizing:
    ```
    python3 .kiro/scripts/validate-drawio.py <output-file.drawio.xml>
    ```
