@@ -22,6 +22,7 @@
     }
   },
   "resources": [
+    "skill://.kiro/skills/arch-diagram/SKILL.md",
     "file://.kiro/skills/arch-diagram/references/coords-cheatsheet.md",
     "file://.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml",
     "file://.kiro/steering/arch-diagram-conventions.md"

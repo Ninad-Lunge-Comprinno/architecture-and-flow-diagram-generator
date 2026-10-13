@@ -18,9 +18,9 @@
 | igw y (vpc-rel) | **650** | aligns with AZ midpoint |
 | users y (abs) | **1445** | inline with IGW/ALB row |
 | CF cloud-rel y | **1195** | inline with IGW row |
-| lane_x (vpc-rel) | **1002** | app_vpc_x + 27 |
+| lane_x (vpc-rel) | **1010** | app_vpc_x + 35 |
 | lane_y (vpc-rel) | **170** | app_vpc_y_first + 40 |
-| lane_w | **301** | app_w - 54 (for app_w=355) |
+| lane_w | **300** | app_w - 55 (for app_w=355) |
 | lane_h | **1110** | fits inside app subnets |
 | task_y AZ-1 | **25** | centred in AZ-1 app subnet (lane-rel) |
 | task_y AZ-2 | **485** | centred in AZ-2 app subnet (lane-rel) |
@@ -257,21 +257,22 @@ app_vpc_y_first = az1_y + app_az_y = 80 + 50 = 130
 app_vpc_y_last_bottom = az3_y + app_az_y + app_h = 1000 + 50 + 250 = 1300
 
 # Lane position (vpc-relative) — inside the app subnet column
-lane_padding = 27                     # horizontal padding inside subnet
-lane_top_padding = 40                 # vertical padding for subnet label
+lane_left_padding = 35                 # horizontal padding inside subnet (left)
+lane_right_padding = 20                # horizontal padding inside subnet (right)
+lane_top_padding = 40                  # vertical padding for subnet label
 lane_bottom_padding = 20
 
-lane_x = app_vpc_x + lane_padding = 975 + 27 = 1002
+lane_x = app_vpc_x + lane_left_padding = 975 + 35 = 1010
 lane_y = app_vpc_y_first + lane_top_padding = 130 + 40 = 170
-lane_w = app_w - (2 × lane_padding)   # e.g. 355 - 54 = 301 for app_w=355
+lane_w = app_w - lane_left_padding - lane_right_padding   # e.g. 355 - 55 = 300 for app_w=355
 lane_h = (app_vpc_y_last_bottom - lane_bottom_padding) - lane_y
        = (1300 - 20) - 170 = 1110     [for 3-AZ, app_h=250]
 ```
 
 **3-AZ default values (copy directly):**
-- `lane_x = 1002` (vpc-relative)
+- `lane_x = 1010` (vpc-relative)
 - `lane_y = 170` (vpc-relative)
-- `lane_w = 301` (for app_w=355, lane fits inside subnet)
+- `lane_w = 300` (for app_w=355, lane fits inside subnet)
 - `lane_h = 1110`
 
 **Lane width — size to content:**

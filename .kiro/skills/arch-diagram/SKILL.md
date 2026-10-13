@@ -140,12 +140,11 @@ decorative, inferred, and all-to-all arrows.
    lane label and task icon stencil.
 6. Add edges (all `parent="1"`).
 7. Fill in the Flow page nodes and edges.
-8. Run the validator and mandatory checklist before saving:
+8. Ask the user to run the validator before finalizing:
    ```
    python3 .kiro/scripts/validate-drawio.py <output-file.drawio.xml>
    ```
-   Include the validator's output in your final report. If validation fails,
-   fix the issues before delivering.
+   If validation fails, fix the issues. CI also runs this check on PRs.
 
 Do not write the container frame, logo, title block, or regional services row
 from scratch — they are already in the skeleton with the correct values.
@@ -220,8 +219,8 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     **Lane width:** size to content. `lane_w = 120 + 2×pad` (pad≥60).
     Single icon with short label: lane_w=300. Long label: lane_w=480.
 15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
-    3-AZ defaults: x=1002, y=170, w=301, h=1110. Task icons centred in each AZ's app subnet
-    region: task_y = 25/485/945 (lane-relative). Badge 45×45 at x=1010, y=178.
+    3-AZ defaults: x=1010, y=170, w=300, h=1110. Task icons centred in each AZ's app subnet
+    region: task_y = 25/485/945 (lane-relative). Badge 45×45 at x=1018, y=178.
     Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
     ECS/EKS stencils are `ecs`/`eks` (not `elastic_container_service`/`elastic_kubernetes_service`).
 16. **IGW placement** — vpc-relative `x=-60 y=650`. Straddles the VPC left border.
@@ -292,9 +291,11 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 ---
 
 #### H. Flow page
-33. **Flow containers** — flow page shows Cloud → Region → VPC containers as scope
-    context. Service parents match their AWS scope (IGW/ALB/ECS/EKS → `f-vpc`;
+33. **Flow containers (recommended)** — when the flow involves VPC-scoped services,
+    showing Cloud → Region → VPC containers provides scope context.
+    Service parents should match their AWS scope (IGW/ALB/ECS/EKS → `f-vpc`;
     S3/RDS/MSK/Lambda/Bedrock → `f-region`; Route53/WAF/CloudFront → `f-cloud`; Users → root).
+    Simpler flows may omit containers entirely — use judgement based on complexity.
 34. **Flow spine alignment** — all spine nodes share the same abs y-centre.
     Compute `spine_abs_yc = vay + (vch−120)/2 + 60` and derive every node y from it.
     Any y mismatch → edge bend. Regional services must be right of VPC right border.
