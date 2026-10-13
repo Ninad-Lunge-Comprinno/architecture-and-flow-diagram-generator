@@ -221,9 +221,12 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     Single icon with short label: lane_w=300. Long label: lane_w=480.
 15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
     3-AZ defaults: x=1010, y=170, w=300, h=1110. Task icons centred in each AZ's app subnet
-    region: task_y = 25/485/945 (lane-relative). Badge 45×45 at x=1018, y=178.
-    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
+    region: task_y = 25/485/945 (single lane) or 85/545/1005 (dual lanes with +60 label clearance).
+    Badge 45×45 at x=1018, y=178.
+    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=2`.
     ECS/EKS stencils are `ecs`/`eks` (not `elastic_container_service`/`elastic_kubernetes_service`).
+    **Task icon labels**: Use the task type ("Fargate Task", "EC2 Node", "Worker") — NOT the
+    cluster name. The cluster name goes in the lane label only.
 16. **IGW placement** — vpc-relative `x=-60 y=650`. Straddles the VPC left border.
 17. **Row spacing** — regional row and global band each independently centre-aligned
     at 180px pitch. After any icon add/delete, re-verify no double-width gaps remain.
@@ -235,14 +238,15 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 
 #### E. Route 53 and inbound path
 19. **Route 53 placement** — conditional on inbound path:
-    - Route 53 IS the first hop (`Users→R53→IGW→ALB`): inline at cloud-rel x=63,
-      y = spine row. R53 abs-left ≥ cloud_abs_x (never shifted left for another service).
+    - Route 53 IS the first hop (`Users→R53→IGW→ALB` or `Users→R53→CF→IGW→ALB`):
+      inline at cloud-rel x=63, y=1195 (spine row).
     - Route 53 is NOT on the inbound path: top global band at `cloud_rel_y=70`.
     Never place Route 53 inline when the inbound path is `Users → IGW → ALB` —
     it would overlap the horizontal Users→IGW edge.
-20. **CloudFront gate** — only present if the user explicitly requested it. If not
-    requested: no CF icon, no edge, no reserved position. When present: inline with
-    IGW/ALB row at cloud-rel y=1195, x=112. Inbound path straight horizontal.
+20. **CloudFront placement** — only present if user explicitly requested it. When present:
+    - **CF only** (no R53 inline): cloud-rel x=112, y=1195.
+    - **R53 + CF together**: R53 at x=63, CF at x=160, both y=1195.
+    Both must be at the same y-level for a horizontal inbound path.
 21. **Inbound path clearance** — the horizontal Users→IGW segment must not pass
     through any global-band icon. If a global icon sits on that y-level, move it
     to the global band row (cloud_rel_y=70) — never reroute the edge around it.

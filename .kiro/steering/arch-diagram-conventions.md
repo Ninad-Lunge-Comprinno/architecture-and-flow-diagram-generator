@@ -54,7 +54,7 @@ examples**. For any other AZ count, recompute using the formulas in
 
 **Cluster lanes (ECS/EKS/ASG):**
 - Lane y = az1_y = 80. Lane height = formula above. Single lane w=480; dual lanes w=240 each.
-- Use `fontSize=14; spacingLeft=55; align=left; strokeWidth=3` on lane label.
+- Use `fontSize=14; spacingLeft=55; align=left; strokeWidth=2` on lane label.
 - Badge: 45×45, parented to `vpc`, at `x=lane_x+8, y=88`.
 - Two lanes of w=480 each overflow the app column — use w=240 each for dual lanes.
 

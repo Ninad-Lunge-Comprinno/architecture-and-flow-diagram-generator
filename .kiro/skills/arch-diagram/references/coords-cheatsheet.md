@@ -150,20 +150,48 @@ users_x = 60  (left of cloud boundary)
 > If CloudFront is not in the request, skip this section entirely —
 > do not add the icon or reserve its position.
 
-**CloudFront** sits inline with the IGW/ALB row (not in the top band) for a clean
-horizontal inbound path.
+### Inbound path positioning — three cases
 
+The inline row contains icons that sit at the same y-level as IGW/ALB to form a
+straight horizontal inbound path. Position depends on which services are present:
+
+**Case 1: Route 53 only** (`Users → R53 → IGW → ALB`):
 ```
-cf_cloud_rel_y = igw_abs_y_centre - icon_half - cloud_abs_y
-               = 1505 - 60 - 250 = 1195
+r53_cloud_rel_x = 63
+r53_cloud_rel_y = 1195  (same y as IGW row)
 ```
 
-**CloudFront x** — place left of the IGW icon (which sits at vpc-relative x=-60) with a 40px gap:
+**Case 2: CloudFront only** (`Users → CF → IGW → ALB`):
 ```
-igw_abs_left   = vpc_abs_left + igw_vpc_x = 592 + (-60) = 532
-cf_abs_right   = igw_abs_left - 40 = 492
-cf_cloud_rel_x = cf_abs_right - 120 - cloud_abs_x = 492 - 120 - 260 = 112
+cf_cloud_rel_x = 112
+cf_cloud_rel_y = 1195
 ```
+
+**Case 3: Route 53 + CloudFront** (`Users → R53 → CF → IGW → ALB`):
+```
+# Route 53 goes first (leftmost), CloudFront second
+# Both at same y-level for horizontal path
+
+r53_abs_right = users_abs_right + 40 + 120 = 220 + 40 + 120 = 380
+r53_cloud_rel_x = r53_abs_right - 120 - cloud_abs_x = 380 - 120 - 260 = 0
+# BUT x=0 overlaps cloud label. Use x=63 minimum.
+r53_cloud_rel_x = 63
+
+cf_abs_left = r53_abs_right + 40 = 380 + 40 = 420
+cf_cloud_rel_x = cf_abs_left - cloud_abs_x = 420 - 260 = 160
+
+# Both at inline y
+r53_cloud_rel_y = 1195
+cf_cloud_rel_y = 1195
+```
+
+**Summary table — inline row x positions (cloud-relative):**
+
+| Present | R53 x | CF x |
+|---------|-------|------|
+| R53 only | 63 | — |
+| CF only | — | 112 |
+| R53 + CF | 63 | 160 |
 
 **S3 (CF static-site origin) and IAM** — top global band, **centre-aligned**:
 ```
