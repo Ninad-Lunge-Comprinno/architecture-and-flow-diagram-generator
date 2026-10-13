@@ -167,64 +167,43 @@ users_x = 60  (left of cloud boundary)
 
 ## Global row icons (children of cloud) — FORMULA
 
-> **Only applies if CloudFront was explicitly requested by the user.**
-> If CloudFront is not in the request, skip this section entirely —
-> do not add the icon or reserve its position.
+### Route 53 — ALWAYS in global band
 
-### Geometry constraint — CRITICAL
+Route 53 is **DNS resolution**, not a network hop. It does NOT belong inline with IGW.
+- **Always place R53 in the global band** at `cloud_rel x=72, y=70`
+- **Never draw R53 edges on the Architecture page** — DNS flow belongs on Flow page only
+- R53 sits alongside IAM, S3 in the top row
 
-Available space between cloud-left (abs x=260) and IGW (abs x=532) is **272px**.
-- One icon inline: 120px → ✓ fits with 40px gaps on each side
-- Two icons inline: 280px (120+40+120) → ✗ **does not fit** — will overlap IGW
+### CloudFront positioning
 
-**Therefore: Never place R53 and CF side-by-side inline.**
+> **Only add CloudFront if explicitly requested by the user.**
 
-### Inbound path positioning — four cases
+CloudFront IS a network hop (edge cache), so it goes inline with IGW:
+- **CF present**: `cloud_rel x=72, y=1195` (inline with IGW row)
+- **CF absent**: Users connects directly to IGW
 
-**Case 1: Neither R53 nor CF** (`Users → IGW → ALB`):
-```
-# No icons in the inline gutter. Users connects directly to IGW.
-# Users at abs_x=100, IGW at abs_x=532. Clear path.
-```
+### Inbound path on Architecture page
 
-**Case 2: Route 53 only** (`Users → R53 → IGW → ALB`):
-```
-r53_cloud_rel_x = 72   # centred in the 272px space: (272-120)/2 ≈ 76, use 72
-r53_cloud_rel_y = 1195
-# R53 abs: x=332, right=452. Gap to IGW(532): 80px ✓
-```
+The Architecture page shows the **network path**, not DNS resolution:
 
-**Case 3: CloudFront only** (`Users → CF → IGW → ALB`):
-```
-cf_cloud_rel_x = 72   # same position as R53-only case
-cf_cloud_rel_y = 1195
-```
+| CloudFront | Inbound path |
+|------------|--------------|
+| Yes | Users → CloudFront → IGW → ALB → cluster |
+| No | Users → IGW → ALB → cluster |
 
-**Case 4: Route 53 + CloudFront** (`Users → R53 → CF → IGW → ALB`):
-```
-# ⚠️ Cannot fit both inline — use vertical stacking:
-# R53 goes to GLOBAL BAND (top), CF takes the inline position
+**Route53 is NEVER on the Architecture inbound path.**
+DNS resolution (Users→R53) is shown on the **Flow page** only.
 
-r53_cloud_rel_x = 72
-r53_cloud_rel_y = 70   # global band, NOT inline
+### Summary table — icon positions (cloud-relative)
 
-cf_cloud_rel_x = 72
-cf_cloud_rel_y = 1195  # inline position
+| Icon | x | y | Notes |
+|------|---|---|-------|
+| Route 53 | 72 | **70** | Always global band (DNS, not network hop) |
+| CloudFront | 72 | 1195 | Inline with IGW (only if requested) |
+| IAM | centre formula | 70 | Global band |
+| S3 (origin) | centre formula | 70 | Global band (if CF origin) |
 
-# Edge path: Users→R53(top, vertical)→CF(inline)→IGW→ALB
-# The Users→R53 segment is vertical; R53→CF is vertical; CF→IGW→ALB is horizontal.
-```
-
-**Summary table — icon positions (cloud-relative):**
-
-| Present | R53 x | R53 y | CF x | CF y | Notes |
-|---------|-------|-------|------|------|-------|
-| Neither | — | — | — | — | Users→IGW direct |
-| R53 only | 72 | 1195 | — | — | R53 inline |
-| CF only | — | — | 72 | 1195 | CF inline |
-| R53 + CF | 72 | **70** | 72 | 1195 | R53 in global band, CF inline |
-
-**S3 (CF static-site origin) and IAM** — top global band, **centre-aligned**:
+**Global band centre formula** (for IAM, S3, R53):
 ```
 n = number of global band icons (S3, IAM)
 group_w = n × 120 + (n-1) × 60
@@ -233,12 +212,10 @@ x_i = start_x + i × 180
 ```
 For n=2 (S3 + IAM): `start_x = (2727 - 300) / 2 = 1213.5 ≈ 1214`
 
-**Route 53** is `parent=cloud` at cloud-relative x=63 when placed inline (Case A — see
-Route 53 placement section). Route53 abs left = `cloud_abs_x + 63` = 323 for default scale.
-`users_x` must satisfy BOTH constraints:
-  1. `users_abs_right + 40 ≤ cloud_abs_x`  → `users_x ≤ cloud_abs_x - 160 = 100`
-  2. `users_abs_right + 40 ≤ Route53_abs_left` → `users_x ≤ Route53_abs_left - 160`
-Constraint 1 is usually tighter. Default: **users_x = 100** (abs_right=220, 40px to cloud left=260).
+**Users x-position:**
+`users_x` must satisfy: `users_abs_right + 40 ≤ cloud_abs_x`
+→ `users_x ≤ cloud_abs_x - 160 = 100`
+Default: **users_x = 100** (abs_right=220, 40px gap to cloud left=260).
 
 | Icon | formula | example (n=2) |
 |------|---------|---------------|
@@ -657,27 +634,21 @@ Default: cloud_x=380 → users_x=100, right=340, gap to cloud=40px.
 
 ## Route 53 placement (conditional)
 
-Route 53 is always `parent=cloud`. Its **x-position depends on the inbound path**:
+## Route 53 placement — ALWAYS global band
 
-**Case A — Route 53 IS the first hop** (request path is `Users → Route 53 → IGW → ALB`):
-Place Route 53 inline with the IGW/ALB row so the inbound path is a straight horizontal line.
-```
-cloud_rel_x = (region_cloud_x - 120) / 2 = (247-120)/2 = 63   ← equidistant cloud↔region
-cloud_rel_y = spine_abs_yc - 60 - cloud_abs_y  (= 1135 for 3-AZ default)
-```
+Route 53 is **DNS resolution**, not a network hop. It does NOT belong on the Architecture
+page inbound path.
 
-**Case B — Route 53 is NOT on the drawn inbound path** (path is `Users → IGW → ALB`):
-Place Route 53 in the **top global band** alongside IAM, S3, etc. using the global-band
-centre formula. Do NOT place it inline — an inline Route 53 would sit directly on the
-Users→IGW horizontal segment and overlap it visually.
+**Placement:** Always in the **global band** at `cloud_rel y=70`, centre-aligned with other
+global icons (IAM, S3).
+
+**Edges:** Route 53 edges (Users→R53→service) belong on the **Flow page only**.
+Do NOT draw Route 53 edges on the Architecture page.
+
 ```
-cloud_rel_y = 70   (global band top row)
+cloud_rel_y = 70   (global band)
 cloud_rel_x = global-band centre formula: start_x + i × 180
 ```
-
-**Boundary invariant (both cases):** Route 53 abs-left (`cloud_abs_x + cloud_rel_x`) must be
-≥ `cloud_abs_x`. Never shift Route 53 left to make room for another service; if the
-inbound row is crowded, remove the conflicting service instead.
 
 ## Common mistakes (constants that are often wrong)
 

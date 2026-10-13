@@ -251,51 +251,57 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 
 #### E. Route 53, CloudFront, and inbound path
 
-**Geometry constraint:** The space between cloud-left (abs x=260) and IGW (abs x=532)
-is only **272px**. Two 120px icons with a 40px gap need 280px. Therefore:
-- **One icon inline** (R53 or CF, not both) fits with proper spacing.
-- **Two icons inline** (R53 + CF) will overlap IGW — use vertical stacking instead.
-
-19. **Route 53 placement** — conditional on inbound path:
-    - **R53 only** (no CF): inline at cloud-rel `x=72, y=1195`. Path: Users→R53→IGW→ALB.
-    - **R53 + CF both present**: R53 in global band at `cloud_rel x=72, y=70`.
-      CF takes the inline position. Path: Users→R53(top)→CF(inline)→IGW→ALB.
-    - **R53 not on inbound path**: global band at `cloud_rel x=72, y=70`.
+19. **Route 53 placement** — Route53 is DNS resolution, NOT part of the network request
+    path. It ALWAYS goes in the **global band** at `cloud_rel x=72, y=70`, alongside IAM.
+    - Do NOT place Route53 inline with IGW — that implies it's a network hop, which is wrong.
+    - Do NOT draw Route53 edges on the Architecture page — DNS is shown on Flow page only.
+    - Route53 icon shows "DNS is managed" not "requests go through Route53".
+    
 20. **CloudFront placement** — only present if user explicitly requested it:
-    - **CF only** (no R53): inline at cloud-rel `x=72, y=1195`. Path: Users→CF→IGW→ALB.
-    - **CF + R53 both present**: CF inline at `x=72, y=1195`, R53 moves to global band.
-    - **Never place R53 and CF side-by-side inline** — geometry makes this impossible
-      without overlapping IGW.
-21. **Inbound path clearance** — verify no icon sits on the Users→IGW horizontal
-    (y=1445 abs). Icons that would block this line go to the global band (y=70).
+    - Inline at cloud-rel `x=72, y=1195` (same row as IGW).
+    - Path on Architecture: Users → CF → IGW → ALB (CloudFront IS a network hop).
+    - If CloudFront is NOT requested, Users connects directly to IGW.
+    
+21. **Inbound path on Architecture page** — shows the NETWORK path, not DNS:
+    - **With CloudFront**: Users → CloudFront → IGW → ALB → cluster
+    - **Without CloudFront**: Users → IGW → ALB → cluster
+    - Route53 is NEVER on the Architecture page inbound path.
+    
 22. **Users position** — `parent=1` (outside cloud), `x ≤ 100` so abs-right=220,
-    leaving 40px gap to cloud left=260 and 40px gap to R53/CF if inline.
+    leaving 40px gap to cloud left=260.
+
+23. **Internal ALB** — when architecture has both external and internal ALBs:
+    - External ALB: vpc-rel `x=160, y=650` (inline with IGW, receives internet traffic)
+    - Internal ALB: place in **AZ-1 or AZ-2 public subnet** (NOT AZ-3 to avoid edge crossings)
+    - Internal ALB connects from cluster lane to backend services, not from IGW.
+    - Label clearly: "External ALB" vs "Internal ALB".
 
 ---
 
 #### F. Edges and connections
-23. **No invented connections** — every edge represents a real data flow or control
+24. **No invented connections** — every edge represents a real data flow or control
     plane relationship from the user's spec. Do not invent connections to complete a
     "nice" architecture. If unsure, omit and note.
-24. **ALB→cluster, not ALB→task** — ALB connects to the cluster lane border, never
+25. **ALB→cluster, not ALB→task** — ALB connects to the cluster lane border, never
     to individual task icons. One ALB→lane edge replaces N ALB→task edges.
-25. **Cluster→primary DB only** — connect compute lane to the Writer/primary DB.
+26. **Cluster→primary DB only** — connect compute lane to the Writer/primary DB.
     Replicas get only dashed replication edges from the primary.
-26. **Architecture page edges — minimal set only:**
+27. **Architecture page edges — minimal set only:**
     - **Inbound path**: Users → (CloudFront →) IGW → ALB → cluster lane
+      (Route53 is NOT on the inbound path — it's DNS, not a network hop)
     - **ECR**: dashed edge from lane to ECR (image pull)
     - **Database**: lane → primary DB (solid), DB replication edges (dashed)
-    - **Nothing else.** SQS, SNS, MSK, S3, Bedrock, Transcribe, Secrets Manager,
+    - **Nothing else.** Route53, SQS, SNS, MSK, S3, Bedrock, Transcribe, Secrets Manager,
       CloudWatch, KMS, and all other service connections belong on the **Flow page only**.
     The Architecture page shows *where services are deployed*, not *how they communicate*.
-27. **Baseline edge routing** — the ECR edge that exits a lane top (`exitY=0`)
+28. **Baseline edge routing** — the ECR edge that exits a lane top (`exitY=0`)
     MUST use horizontal waypoints at `y = pvpc_abs_top − 30` before turning toward
     the target. No exceptions. Edges from nested task icons create vertical lines.
-28. **Multi-DB edges** — when EKS/ECS connects to two icons in the same db subnet
+29. **Multi-DB edges** — when EKS/ECS connects to two icons in the same db subnet
     (e.g. RDS + DocumentDB), use distinct exit/entry points: primary via computed
     exitY (left entry), secondary via entryY=0 (top entry). Never two edges from
     the identical exit point to adjacent icons.
-29. **EKS/ECS→DB exitY** — use the formula `(db_abs_yc − lane_abs_top) / lane_h`,
+30. **EKS/ECS→DB exitY** — use the formula `(db_abs_yc − lane_abs_top) / lane_h`,
     not 0.5. Verify it produces a straight horizontal line (source and target share
     the same abs y-centre).
 30. **Edge density** — prefer ≤8 edges on the architecture page. Decorative or
@@ -356,25 +362,23 @@ Save the result to the requested output path.
 Use these decision trees when generating placement. They encode hard geometry
 constraints and AWS-correct patterns.
 
-### Decision tree 1: Inbound path icons (R53, CF, WAF)
+### Decision tree 1: Inbound path (Architecture page)
+
+Route53 is DNS resolution — it is NEVER on the Architecture page inbound path.
+The Architecture page shows network hops only.
 
 ```
 Is CloudFront requested?
-├── NO: Is Route53 on inbound path?
-│       ├── NO → Users → IGW → ALB (no icons in left gutter)
-│       └── YES → R53 inline at cloud-rel (72, 1195)
-│                 Path: Users → R53 → IGW → ALB
+├── NO → Inbound path: Users → IGW → ALB → cluster
+│        Route53 in global band (y=70), NO edge to it
 │
-└── YES: Is Route53 also on inbound path?
-        ├── NO → CF inline at cloud-rel (72, 1195)
-        │        Path: Users → CF → IGW → ALB
-        │
-        └── YES → ⚠️ CANNOT FIT BOTH INLINE (only 272px space, need 280px)
-                  R53 → global band at (72, 70)
-                  CF → inline at (72, 1195)
-                  Path: Users → R53(top) → CF(inline) → IGW → ALB
-                  Edge has vertical R53→CF segment
+└── YES → Inbound path: Users → CloudFront → IGW → ALB → cluster
+          CloudFront inline at (72, 1195)
+          Route53 in global band (y=70), NO edge to it
 ```
+
+**Route53 edges go on Flow page only** — show DNS resolution in the request flow,
+not on the Architecture page deployment view.
 
 ### Decision tree 2: Database placement
 

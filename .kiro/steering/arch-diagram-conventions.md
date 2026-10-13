@@ -141,18 +141,20 @@ never assume an MCP is available.
   WAF cloud-relative y must be < region_cloud_y (285): place at y≈85 (80px above region top).
   Connected vertically to ALB: WAF bottom → ALB top (`exitY=1`, `entryY=0`).
   The WAF→ALB edge crossing the region/VPC is intentional — it shows a global rule applying.
-- **Route53 and CloudFront** — both are `parent=cloud`. **Critical geometry constraint:**
-  The space between cloud-left (260) and IGW (532) is only **272px**. Two icons need 280px.
-  **Never place R53 and CF side-by-side inline — they will overlap IGW.**
-  
-  Placement by case:
-  - **R53 only** (no CF): inline at `cloud_rel x=72, y=1195`. Path: Users→R53→IGW→ALB.
-  - **CF only** (no R53): inline at `cloud_rel x=72, y=1195`. Path: Users→CF→IGW→ALB.
-  - **R53 + CF together**: R53 in **global band** at `x=72, y=70`; CF inline at `x=72, y=1195`.
-    Path has vertical segments: Users→R53(top)→CF(inline)→IGW→ALB.
-  - **Neither R53 nor CF**: Users connects directly to IGW. Clear horizontal path.
-  
-  Users must clear cloud left border: `users_x ≤ 100` (abs_right=220, 40px gap to cloud).
+- **Route53** — DNS resolution, NOT a network hop. **Always in the global band** at
+  `cloud_rel x=72, y=70`, alongside IAM. Route53 edges belong on the **Flow page only** —
+  do NOT draw Users→R53 on the Architecture page.
+- **CloudFront** — only if explicitly requested. Inline at `cloud_rel x=72, y=1195`.
+  CloudFront IS a network hop (edge cache), so it appears on the Architecture inbound path:
+  Users → CloudFront → IGW → ALB.
+- **Inbound path on Architecture** — shows network path, not DNS:
+  - With CloudFront: Users → CF → IGW → ALB → cluster
+  - Without CloudFront: Users → IGW → ALB → cluster
+  Route53 is NEVER on the Architecture page inbound path.
+- **Internal ALB** — when architecture has both external and internal ALBs:
+  - External ALB: vpc-rel `x=160, y=650` (inline with IGW)
+  - Internal ALB: place in **AZ-1 or AZ-2 public subnet** (NOT AZ-3)
+  - Internal ALB connects from cluster to backend services, not from IGW
 
 - **No orphan compute icons** — every EC2/ECS/EKS icon must be inside a subnet or lane,
   not floating directly as a VPC child with no container parent.
