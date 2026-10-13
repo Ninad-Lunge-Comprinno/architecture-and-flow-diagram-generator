@@ -236,22 +236,27 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 
 ---
 
-#### E. Route 53 and inbound path
+#### E. Route 53, CloudFront, and inbound path
+
+**Geometry constraint:** The space between cloud-left (abs x=260) and IGW (abs x=532)
+is only **272px**. Two 120px icons with a 40px gap need 280px. Therefore:
+- **One icon inline** (R53 or CF, not both) fits with proper spacing.
+- **Two icons inline** (R53 + CF) will overlap IGW — use vertical stacking instead.
+
 19. **Route 53 placement** — conditional on inbound path:
-    - Route 53 IS the first hop (`Users→R53→IGW→ALB` or `Users→R53→CF→IGW→ALB`):
-      inline at cloud-rel x=63, y=1195 (spine row).
-    - Route 53 is NOT on the inbound path: top global band at `cloud_rel_y=70`.
-    Never place Route 53 inline when the inbound path is `Users → IGW → ALB` —
-    it would overlap the horizontal Users→IGW edge.
-20. **CloudFront placement** — only present if user explicitly requested it. When present:
-    - **CF only** (no R53 inline): cloud-rel x=112, y=1195.
-    - **R53 + CF together**: R53 at x=63, CF at x=160, both y=1195.
-    Both must be at the same y-level for a horizontal inbound path.
-21. **Inbound path clearance** — the horizontal Users→IGW segment must not pass
-    through any global-band icon. If a global icon sits on that y-level, move it
-    to the global band row (cloud_rel_y=70) — never reroute the edge around it.
+    - **R53 only** (no CF): inline at cloud-rel `x=72, y=1195`. Path: Users→R53→IGW→ALB.
+    - **R53 + CF both present**: R53 in global band at `cloud_rel x=72, y=70`.
+      CF takes the inline position. Path: Users→R53(top)→CF(inline)→IGW→ALB.
+    - **R53 not on inbound path**: global band at `cloud_rel x=72, y=70`.
+20. **CloudFront placement** — only present if user explicitly requested it:
+    - **CF only** (no R53): inline at cloud-rel `x=72, y=1195`. Path: Users→CF→IGW→ALB.
+    - **CF + R53 both present**: CF inline at `x=72, y=1195`, R53 moves to global band.
+    - **Never place R53 and CF side-by-side inline** — geometry makes this impossible
+      without overlapping IGW.
+21. **Inbound path clearance** — verify no icon sits on the Users→IGW horizontal
+    (y=1445 abs). Icons that would block this line go to the global band (y=70).
 22. **Users position** — `parent=1` (outside cloud), `x ≤ 100` so abs-right=220,
-    leaving 40px gap to cloud left=260 and ≥40px gap to Route 53 if inline.
+    leaving 40px gap to cloud left=260 and 40px gap to R53/CF if inline.
 
 ---
 
@@ -333,14 +338,111 @@ preview was unavailable (no MCP) and list which checks passed.
 Save the result to the requested output path.
 
 
+## Decision trees for intelligent placement
+
+Use these decision trees when generating placement. They encode hard geometry
+constraints and AWS-correct patterns.
+
+### Decision tree 1: Inbound path icons (R53, CF, WAF)
+
+```
+Is CloudFront requested?
+├── NO: Is Route53 on inbound path?
+│       ├── NO → Users → IGW → ALB (no icons in left gutter)
+│       └── YES → R53 inline at cloud-rel (72, 1195)
+│                 Path: Users → R53 → IGW → ALB
+│
+└── YES: Is Route53 also on inbound path?
+        ├── NO → CF inline at cloud-rel (72, 1195)
+        │        Path: Users → CF → IGW → ALB
+        │
+        └── YES → ⚠️ CANNOT FIT BOTH INLINE (only 272px space, need 280px)
+                  R53 → global band at (72, 70)
+                  CF → inline at (72, 1195)
+                  Path: Users → R53(top) → CF(inline) → IGW → ALB
+                  Edge has vertical R53→CF segment
+```
+
+### Decision tree 2: Database placement
+
+```
+What database deployment pattern?
+│
+├── RDS Single-AZ
+│   └── One icon in db-subnet-1
+│       Label: "RDS PostgreSQL" (or engine name)
+│
+├── RDS Multi-AZ (Instance)
+│   ├── Writer icon in db-subnet-1
+│   │   Label: "RDS Writer (Multi-AZ)"
+│   └── Standby icon in db-subnet-2  ← DIFFERENT AZ, not same as writer!
+│       Label: "RDS Standby"
+│       Edge: dashed "sync replication"
+│       ⚠️ Standby is NOT a reader — it's for failover only
+│
+├── RDS Multi-AZ (Cluster)
+│   ├── Writer in db-subnet-1
+│   ├── Reader in db-subnet-2
+│   └── Reader in db-subnet-3
+│       All have "(Multi-AZ Cluster)" in label
+│       Edges: dashed from Writer to each Reader
+│
+├── Aurora
+│   ├── Writer only requested → One icon in db-subnet-1
+│   │   Label: "Aurora (Multi-AZ)" — storage is automatically replicated
+│   └── Writer + Readers requested
+│       ├── Writer in db-subnet-1
+│       └── Readers in db-subnet-2, db-subnet-3
+│
+└── Read Replicas (separate from Multi-AZ)
+    └── Each replica in its specified AZ
+        Label: "Read Replica"
+        Edge: dashed "async replication"
+```
+
+### Decision tree 3: Icon overlap prevention
+
+```
+Before placing any icon, check:
+│
+├── Icon in left gutter (between cloud-left and IGW)?
+│   └── Calculate: icon_abs_right = cloud_x + icon_cloud_rel_x + 120
+│       Is icon_abs_right + 40 > IGW_abs_x (532)?
+│       ├── YES → ❌ OVERLAP — move icon to global band (y=70) or remove
+│       └── NO → ✓ Fits
+│
+├── Two icons at same (x,y)?
+│   └── ❌ OVERLAP — offset one by 160px x or 180px y
+│
+├── Icon in same row as existing icon?
+│   └── Check: icon1_right + 40 ≤ icon2_left
+│       ├── NO → ❌ OVERLAP — use vertical stacking or different row
+│       └── YES → ✓ Fits
+│
+└── Edge crosses icon?
+    └── Move icon to different row, or reroute edge with waypoints
+```
+
 ## Validation scenarios
 
 Before saving, verify the generated diagram against the applicable scenario:
 
-**Scenario A — ECS Fargate + RDS, 3 AZs**
-- Each AZ has a public subnet (NAT), app subnet (ECS lane), and db subnet (RDS).
+**Database placement patterns (critical — Multi-AZ ≠ Read Replicas):**
+- **RDS Single-AZ**: One icon in db-subnet-1. Label: "RDS PostgreSQL".
+- **RDS Multi-AZ (Instance)**: Writer in db-subnet-1, **Standby** in db-subnet-2.
+  Standby is NOT a reader — it's a hot standby for automatic failover.
+  Label: "RDS Writer (Multi-AZ)" and "RDS Standby". Dashed edge: "sync replication".
+- **RDS Multi-AZ (Cluster)**: Writer in db1, Reader in db2, Reader in db3.
+  All three are failover targets. Label includes "(Multi-AZ Cluster)".
+- **Aurora**: Writer in db1. If user requests readers, place in db2/db3.
+  Aurora storage is automatically Multi-AZ — one icon with "Aurora (Multi-AZ)" is often sufficient.
+- **Read Replicas** (distinct from Multi-AZ): Async replication, readable, manual promotion.
+  Place each replica in its specified AZ. Label: "Read Replica".
+
+**Scenario A — ECS Fargate + RDS Multi-AZ, 3 AZs**
+- Each AZ has a public subnet (NAT), app subnet (ECS lane), and db subnet.
 - ALB connects to the ECS cluster lane (not to individual tasks).
-- RDS Writer in AZ-1, Readers in AZ-2/3 with dashed replication edges.
+- RDS Multi-AZ: Writer in db-subnet-1, Standby in db-subnet-2. db-subnet-3 empty or has replica.
 - No floating compute icons — all ECS tasks are inside the lane container.
 
 **Scenario B — Lambda + S3, no VPC**

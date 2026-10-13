@@ -278,6 +278,151 @@ def check_page_name_consistency(diagrams, issues):
                           f"{compute_in_arch_not_flow}. Verify both pages are consistent.")
 
 
+def check_icon_overlaps(model, issues, page_name="Architecture"):
+    """Check for overlapping icons based on absolute coordinates."""
+    if model is None:
+        return
+
+    # Build parent hierarchy to compute absolute coords
+    cells = {c.get('id'): c for c in model.iter('mxCell')}
+
+    def get_abs_coords(cell_id, visited=None):
+        """Recursively compute absolute x,y from parent chain."""
+        if visited is None:
+            visited = set()
+        if cell_id in visited:
+            return (0, 0)
+        visited.add(cell_id)
+
+        cell = cells.get(cell_id)
+        if cell is None:
+            return (0, 0)
+
+        geo = cell.find('mxGeometry')
+        x = float(geo.get('x', 0)) if geo is not None else 0
+        y = float(geo.get('y', 0)) if geo is not None else 0
+
+        parent_id = cell.get('parent')
+        if parent_id and parent_id != '1' and parent_id != '0':
+            px, py = get_abs_coords(parent_id, visited)
+            x += px
+            y += py
+
+        return (x, y)
+
+    # Collect icons with their absolute bounding boxes
+    icons = []
+    for cell in model.iter('mxCell'):
+        style = cell.get('style', '')
+        if 'resourceIcon' not in style:
+            continue
+
+        cell_id = cell.get('id', '')
+        geo = cell.find('mxGeometry')
+        if geo is None:
+            continue
+
+        w = float(geo.get('width', 120))
+        h = float(geo.get('height', 120))
+        abs_x, abs_y = get_abs_coords(cell_id)
+
+        icons.append({
+            'id': cell_id,
+            'x': abs_x,
+            'y': abs_y,
+            'w': w,
+            'h': h,
+            'right': abs_x + w,
+            'bottom': abs_y + h
+        })
+
+    # Check for overlaps (any two icons)
+    min_gap = 20  # Minimum gap between icons
+    for i, icon1 in enumerate(icons):
+        for icon2 in icons[i+1:]:
+            # Check if bounding boxes overlap (with minimum gap)
+            x_overlap = not (icon1['right'] + min_gap <= icon2['x'] or
+                            icon2['right'] + min_gap <= icon1['x'])
+            y_overlap = not (icon1['bottom'] + min_gap <= icon2['y'] or
+                            icon2['bottom'] + min_gap <= icon1['y'])
+
+            if x_overlap and y_overlap:
+                issues.append(
+                    f"[{page_name}] Icon overlap: '{icon1['id']}' (x={icon1['x']:.0f}) and "
+                    f"'{icon2['id']}' (x={icon2['x']:.0f}) are too close or overlapping"
+                )
+
+
+def check_multiaz_db_placement(model, issues, page_name="Architecture"):
+    """Check that Multi-AZ databases are placed across different AZs."""
+    if model is None:
+        return
+
+    cells = {c.get('id'): c for c in model.iter('mxCell')}
+
+    # Find all RDS/Aurora icons
+    db_icons = []
+    for cell in model.iter('mxCell'):
+        style = cell.get('style', '')
+        cell_id = cell.get('id', '')
+        value = cell.get('value', '').lower()
+
+        if any(s in style for s in ['mxgraph.aws4.rds', 'mxgraph.aws4.aurora']):
+            parent = cell.get('parent', '')
+            db_icons.append({
+                'id': cell_id,
+                'parent': parent,
+                'value': value,
+                'is_multiaz': 'multi-az' in value or 'multiaz' in value,
+                'is_writer': 'writer' in value or 'primary' in value,
+                'is_standby': 'standby' in value,
+                'is_replica': 'replica' in value or 'reader' in value
+            })
+
+    if len(db_icons) < 2:
+        return  # Single DB or no DBs, skip check
+
+    # Check if any are marked as Multi-AZ
+    has_multiaz = any(db['is_multiaz'] or db['is_standby'] for db in db_icons)
+    if not has_multiaz:
+        return  # Not a Multi-AZ setup, skip
+
+    # Get parents of all DB icons
+    parents = set(db['parent'] for db in db_icons)
+
+    # For Multi-AZ, we expect DBs in different parent containers (different AZs)
+    if len(parents) == 1:
+        parent_id = list(parents)[0]
+        parent_cell = cells.get(parent_id)
+        parent_value = parent_cell.get('value', '') if parent_cell is not None else ''
+
+        # Check if parent is an AZ-specific container (db1, db2, db3, etc.)
+        if 'db' in parent_id.lower() or 'subnet' in parent_id.lower():
+            issues.append(
+                f"[{page_name}] Multi-AZ database placement issue: all DB icons ({[d['id'] for d in db_icons]}) "
+                f"are in the same container '{parent_id}'. For Multi-AZ, Writer and Standby should be in "
+                f"different AZ db-subnets (e.g., db1 and db2)."
+            )
+
+
+def check_waf_placement(model, issues, page_name="Architecture"):
+    """Check that WAF is placed in cloud band, not as parent=1."""
+    if model is None:
+        return
+
+    for cell in model.iter('mxCell'):
+        style = cell.get('style', '')
+        if 'mxgraph.aws4.waf' in style.lower():
+            parent = cell.get('parent', '')
+            cell_id = cell.get('id', '')
+
+            if parent == '1':
+                issues.append(
+                    f"[{page_name}] WAF '{cell_id}' has parent='1' (root). "
+                    f"WAF is a global service and should have parent='cloud'."
+                )
+
+
 def check_icon_dimensions_and_stencils(model, valid_stencils, issues, page_name):
     """Check icon sizes (120x120) and stencil validity."""
     if model is None:
@@ -383,6 +528,9 @@ def main():
         check_az_count_consistency(arch_model, issues, "Architecture")
         check_icon_dimensions_and_stencils(arch_model, valid, issues, "Architecture")
         check_unique_ids_and_parents(arch_model, issues, "Architecture")
+        check_icon_overlaps(arch_model, issues, "Architecture")
+        check_multiaz_db_placement(arch_model, issues, "Architecture")
+        check_waf_placement(arch_model, issues, "Architecture")
     elif "Architecture" in page_names:
         issues.append("[Architecture] Could not parse mxGraphModel from Architecture page")
 

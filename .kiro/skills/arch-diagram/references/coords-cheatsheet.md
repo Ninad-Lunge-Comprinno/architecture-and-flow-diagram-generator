@@ -150,48 +150,58 @@ users_x = 60  (left of cloud boundary)
 > If CloudFront is not in the request, skip this section entirely —
 > do not add the icon or reserve its position.
 
-### Inbound path positioning — three cases
+### Geometry constraint — CRITICAL
 
-The inline row contains icons that sit at the same y-level as IGW/ALB to form a
-straight horizontal inbound path. Position depends on which services are present:
+Available space between cloud-left (abs x=260) and IGW (abs x=532) is **272px**.
+- One icon inline: 120px → ✓ fits with 40px gaps on each side
+- Two icons inline: 280px (120+40+120) → ✗ **does not fit** — will overlap IGW
 
-**Case 1: Route 53 only** (`Users → R53 → IGW → ALB`):
+**Therefore: Never place R53 and CF side-by-side inline.**
+
+### Inbound path positioning — four cases
+
+**Case 1: Neither R53 nor CF** (`Users → IGW → ALB`):
 ```
-r53_cloud_rel_x = 63
-r53_cloud_rel_y = 1195  (same y as IGW row)
+# No icons in the inline gutter. Users connects directly to IGW.
+# Users at abs_x=100, IGW at abs_x=532. Clear path.
 ```
 
-**Case 2: CloudFront only** (`Users → CF → IGW → ALB`):
+**Case 2: Route 53 only** (`Users → R53 → IGW → ALB`):
 ```
-cf_cloud_rel_x = 112
-cf_cloud_rel_y = 1195
-```
-
-**Case 3: Route 53 + CloudFront** (`Users → R53 → CF → IGW → ALB`):
-```
-# Route 53 goes first (leftmost), CloudFront second
-# Both at same y-level for horizontal path
-
-r53_abs_right = users_abs_right + 40 + 120 = 220 + 40 + 120 = 380
-r53_cloud_rel_x = r53_abs_right - 120 - cloud_abs_x = 380 - 120 - 260 = 0
-# BUT x=0 overlaps cloud label. Use x=63 minimum.
-r53_cloud_rel_x = 63
-
-cf_abs_left = r53_abs_right + 40 = 380 + 40 = 420
-cf_cloud_rel_x = cf_abs_left - cloud_abs_x = 420 - 260 = 160
-
-# Both at inline y
+r53_cloud_rel_x = 72   # centred in the 272px space: (272-120)/2 ≈ 76, use 72
 r53_cloud_rel_y = 1195
+# R53 abs: x=332, right=452. Gap to IGW(532): 80px ✓
+```
+
+**Case 3: CloudFront only** (`Users → CF → IGW → ALB`):
+```
+cf_cloud_rel_x = 72   # same position as R53-only case
 cf_cloud_rel_y = 1195
 ```
 
-**Summary table — inline row x positions (cloud-relative):**
+**Case 4: Route 53 + CloudFront** (`Users → R53 → CF → IGW → ALB`):
+```
+# ⚠️ Cannot fit both inline — use vertical stacking:
+# R53 goes to GLOBAL BAND (top), CF takes the inline position
 
-| Present | R53 x | CF x |
-|---------|-------|------|
-| R53 only | 63 | — |
-| CF only | — | 112 |
-| R53 + CF | 63 | 160 |
+r53_cloud_rel_x = 72
+r53_cloud_rel_y = 70   # global band, NOT inline
+
+cf_cloud_rel_x = 72
+cf_cloud_rel_y = 1195  # inline position
+
+# Edge path: Users→R53(top, vertical)→CF(inline)→IGW→ALB
+# The Users→R53 segment is vertical; R53→CF is vertical; CF→IGW→ALB is horizontal.
+```
+
+**Summary table — icon positions (cloud-relative):**
+
+| Present | R53 x | R53 y | CF x | CF y | Notes |
+|---------|-------|-------|------|------|-------|
+| Neither | — | — | — | — | Users→IGW direct |
+| R53 only | 72 | 1195 | — | — | R53 inline |
+| CF only | — | — | 72 | 1195 | CF inline |
+| R53 + CF | 72 | **70** | 72 | 1195 | R53 in global band, CF inline |
 
 **S3 (CF static-site origin) and IAM** — top global band, **centre-aligned**:
 ```

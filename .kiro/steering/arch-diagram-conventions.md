@@ -138,21 +138,18 @@ never assume an MCP is available.
   WAF cloud-relative y must be < region_cloud_y (285): place at y≈85 (80px above region top).
   Connected vertically to ALB: WAF bottom → ALB top (`exitY=1`, `entryY=0`).
   The WAF→ALB edge crossing the region/VPC is intentional — it shows a global rule applying.
-- **Route53** — global service, `parent=cloud`. Placement depends on the inbound path:
-  - **When Route 53 is the explicit first hop** (`Users → Route 53 → IGW → ALB`): place it
-    inline with the IGW/ALB row, equidistant between the cloud left border and the region left
-    border. Formula: `cloud_rel_x = (region_cloud_x - 120) / 2` (≈63 for default scale).
-    Route53 abs left=323, gaps to cloud(63px) and region(64px) are equal.
-    y = same inline row as IGW/ALB. Do NOT set parent=1 — overlap risk.
-    Users must also clear the cloud left border: `users_abs_right + 40 ≤ cloud_abs_x`
-    → `users_x ≤ cloud_abs_x - 40 - 120 = 260-40-120 = 100`. Default: Users x=100 ✓
-    (users abs_right=220, 40px gap to cloud left=260, 103px gap to Route53 abs_left=323)
-  - **When Route 53 is NOT on the drawn inbound path** (`Users → IGW → ALB`): place Route 53
-    in the **top global band** (`cloud_rel_y=70`) alongside IAM, S3, etc., using the
-    global-band centre formula. An inline Route 53 would sit on the Users→IGW horizontal
-    segment and overlap it — this is the source of the Route 53 misplacement bug.
-  - **Boundary invariant (both cases):** Route 53 abs-left ≥ cloud_abs_x. Never shift
-    Route 53 left to make room for another service; remove the conflicting service instead.
+- **Route53 and CloudFront** — both are `parent=cloud`. **Critical geometry constraint:**
+  The space between cloud-left (260) and IGW (532) is only **272px**. Two icons need 280px.
+  **Never place R53 and CF side-by-side inline — they will overlap IGW.**
+  
+  Placement by case:
+  - **R53 only** (no CF): inline at `cloud_rel x=72, y=1195`. Path: Users→R53→IGW→ALB.
+  - **CF only** (no R53): inline at `cloud_rel x=72, y=1195`. Path: Users→CF→IGW→ALB.
+  - **R53 + CF together**: R53 in **global band** at `x=72, y=70`; CF inline at `x=72, y=1195`.
+    Path has vertical segments: Users→R53(top)→CF(inline)→IGW→ALB.
+  - **Neither R53 nor CF**: Users connects directly to IGW. Clear horizontal path.
+  
+  Users must clear cloud left border: `users_x ≤ 100` (abs_right=220, 40px gap to cloud).
 
 - **No orphan compute icons** — every EC2/ECS/EKS icon must be inside a subnet or lane,
   not floating directly as a VPC child with no container parent.
