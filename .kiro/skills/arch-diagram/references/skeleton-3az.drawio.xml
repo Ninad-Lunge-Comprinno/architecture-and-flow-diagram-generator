@@ -24,19 +24,28 @@
     az1:     x=520  y=80   w=1640 h=340   (child of vpc)
     az2:     x=520  y=540  w=1640 h=340   (child of vpc)
     az3:     x=520  y=1000 w=1640 h=340   (child of vpc)
-    public subnets: x=35  y=50 w=380 h=250 (child of AZ)  ← default 2-icon; scale per content
-    app subnets:    x=455 y=50 w=650 h=250 (child of AZ)  ← MUST RESIZE: see below
-    db subnets:     x=1145 y=50 w=300 h=250 (child of AZ)  ← app_right+40, w=300 (1 icon)
     icons in subnets: w=120 h=120, y=65, x=centred
     igw: x=-60 y=650 (child of vpc)
     alb: x=160 y=650 (child of vpc)
 
-  ⚠️  APP SUBNET WIDTH — MUST RESIZE TO CONTENT:
-    - With single lane (w=300): app_w = 300+55 = 355, db_x = 455+355+40 = 850
-    - With single lane (w=480): app_w = 480+55 = 535, db_x = 455+535+40 = 1030
-    - With dual lanes (2×240+20): app_w = 500+55 = 555, db_x = 455+555+40 = 1050
-    - With direct icons: app_w = n×120 + (n-1)×40 + 80
-    The default w=650 is for 4 direct icons — NOT for lanes. Always resize.
+  ⚠️  SUBNET WIDTH — MUST BE CONSISTENT:
+    Width by icon count (applies to ALL subnet types equally):
+      - 1 icon:  w=300  (public, app, OR db — all same)
+      - 2 icons: w=380
+      - 3 icons: w=520
+    
+    LANE EXCEPTION ONLY: When app contains a cluster lane (not direct icons):
+      - app_w = lane_w + 55 (e.g., lane_w=300 → app_w=355)
+    
+    Subnet x positions (relative to AZ):
+      - public: x=35
+      - app:    x = 35 + public_w + 40
+      - db:     x = app_x + app_w + 40
+
+    EXAMPLE — all subnets with 1 icon each:
+      public: x=35,  w=300
+      app:    x=375, w=300  (35+300+40)
+      db:     x=715, w=300  (375+300+40)
 
   LANE GEOMETRY (relative to vpc, only add when compute spans AZs):
     Single lane:  x=1030 y=80 w=480 h=1260 (single lane; dual: w=240 each, gap=100px)

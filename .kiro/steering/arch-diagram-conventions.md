@@ -30,11 +30,14 @@ and connections as non-defaults. Use only its visual structure.
 - Region: `x=247 y=285 w=2395 h=1745` (relative to cloud)
 - VPC: `x=85 y=260 w=2225 h=1405` (relative to region)
 - AZ rows (relative to VPC): `y=80 / 540 / 1000; h=340; spacing=460px`
-- Subnets (relative to AZ): `public x=35 w=380 h=250` (default 2-icon; scale per content), `app x=pub_right+40 w=lane_w+55 h=250` when the lane is the only content;
-  `app x=pub_right+40 w=(n×120+(n-1)×40+2×40) h=250` when icons are placed directly in the subnet.
-  **Never use w=650 as a fixed default** — size the app subnet to its actual content.
-  The 650 constant was derived for a wide multi-icon layout and is wrong for a single lane.
-  `w=650` (default): use only when the app subnet holds 2+ direct-child icons., `db x=app_right+40 w=300 h=250` (1 icon default)
+- Subnets (relative to AZ): all `h=250`, width by icon count:
+  - **1 icon**: `w=300` (public, app, or db — all same for consistency)
+  - **2 icons**: `w=380`
+  - **With lane**: `app_w = lane_w + 55` (lane exception only)
+  - `x` positions: public=35, app=pub_x+pub_w+40, db=app_x+app_w+40
+  **Consistency rule:** If all subnets have 1 icon each, they MUST all be w=300.
+  Never make app subnet wider "just because it's compute". The old w=650 default
+  was wrong — it was for 4+ icons and should never be used for single icons.
 - IGW: `x=-60 y=650` (relative to VPC)
 - Icon size: always 120×120. Icon y in 250-high subnet: always 65.
 

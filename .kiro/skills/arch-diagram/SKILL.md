@@ -210,15 +210,28 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 13. **AZ count and spacing** — AZ count matches the user's request. AZ height=340,
     y-spacing=460px (constants). For N≠3, recalculate `igw_y = 190 + 230*(N−1)`.
     Never hardcode 3-AZ y-values for a 2-AZ or 4-AZ diagram.
-14. **Subnet dimensions** — `public w=380 h=250` (default 2 icons; scale per content),
-    `db w=460 h=250` (2 icons) or `w=300` (1 icon). Icons y=65.
-    **App subnet width depends on content:**
-    - Lane only: `app_w = lane_w + 55` (e.g. lane_w=300 → app_w=355, lane_w=480 → app_w=535).
-    - Direct icons: `app_w = n×120 + (n-1)×40 + 80`.
-    - `w=650` is NOT a fixed default — it was derived for a wide multi-icon layout.
+14. **Subnet dimensions** — all subnets `h=250`. Width depends on icon count:
+    - **1 icon**: `w=300` (public, app, or db — all same width for visual consistency)
+    - **2 icons**: `w=380` (120+40+120 + 100px padding)
+    - **3+ icons**: `w = n×120 + (n-1)×40 + 80`
+    
+    **Consistency rule:** If all subnets in a row have the same number of icons,
+    they MUST have the same width. Never make one subnet wider "just because".
+    
+    **Lane exception:** When app subnet contains a cluster lane (not direct icons):
+    - `app_w = lane_w + 55` (35px left + 20px right padding)
+    - Single-icon lane: `lane_w=300` → `app_w=355`
+    
+    Icons within subnets: `y=65`, x centered using `x = (w - n×120 - (n-1)×40) / 2`.
     Subnets identical across all AZ rows so columns align.
-    **Lane width:** size to content. `lane_w = 120 + 2×pad` (pad≥60).
-    Single icon with short label: lane_w=300. Long label: lane_w=480.
+    
+    **Subnet centering within AZ:** Subnets should be positioned to create balanced
+    whitespace within the AZ container. Use the standard AZ layout:
+    - public: `x=35`
+    - app: `x = public_x + public_w + 40`
+    - db: `x = app_x + app_w + 40`
+    AZ width should accommodate all three subnets with ~40px right margin.
+    
 15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
     3-AZ defaults: x=1010, y=170, w=300, h=1110. Task icons centred in each AZ's app subnet
     region: task_y = 25/485/945 (single lane) or 85/545/1005 (dual lanes with +60 label clearance).

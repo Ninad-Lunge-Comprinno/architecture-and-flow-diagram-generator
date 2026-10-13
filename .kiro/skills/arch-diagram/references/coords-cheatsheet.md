@@ -83,15 +83,36 @@ AZ height = **340**. AZ y-spacing = **460px**. All constants.
 
 ## Subnets inside each AZ (constants — same across all AZ rows)
 
-| Subnet | parent | x | y | w | h | fill |
-|--------|--------|---|---|---|---|------|
-| public | azN | 35 | 50 | **380** | 250 | ← default for 2 icons; use formula for n icons | `#E9F3E6` stroke `#248814` |
-| app | azN | 455 | 50 | **lane_w+55** | 250 | `#E6F2F8` stroke `#147EBA` |
-| | | | | *(w=650 only when subnet holds 2+ direct icons, not a lane)* | | |
-| db | azN | 1145 | 50 | 300 | 250 | `#CCE5FF` stroke `#147EBA` |
+**Subnet width by icon count (MUST be consistent across subnet types):**
 
-Keep gaps between subnets at **40px**. DB default width=300 (1 icon, 90px padding each side).
-Widen any subnet proportionally for more icons: `w = n×120 + (n-1)×40 + 2×padding`.
+| Icons | Width | Formula | Use case |
+|-------|-------|---------|----------|
+| 1 | **300** | 120 + 180 padding | NAT, single compute, single DB |
+| 2 | **380** | 120+40+120 + 100 padding | NAT+Bastion, Writer+Replica |
+| 3 | **520** | 120+40+120+40+120 + 80 | Three services |
+
+**Critical rule:** If public has 1 icon (w=300), app has 1 icon (w=300), and db has 1 icon (w=300),
+ALL THREE must be w=300. Never make app wider "just because it's compute".
+
+**Lane exception:** When app contains a cluster lane (vertical bar spanning AZs):
+- `app_w = lane_w + 55` (lane + 35px left + 20px right)
+- This is the ONLY case where app width differs from the icon-count formula
+
+| Subnet | parent | x | y | w | h | notes |
+|--------|--------|---|---|---|---|-------|
+| public | azN | 35 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#E9F3E6` stroke `#248814` |
+| app | azN | pub_x + pub_w + 40 | 50 | **300** (1 icon) or **lane_w+55** (with lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
+| db | azN | app_x + app_w + 40 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#CCE5FF` stroke `#147EBA` |
+
+**Example layouts:**
+
+| Layout | public_w | app_w | db_w | Notes |
+|--------|----------|-------|------|-------|
+| All single icons | 300 | 300 | 300 | Consistent, balanced |
+| NAT+Bastion, single compute, Writer+Standby | 380 | 300 | 380 | Width matches content |
+| Single NAT, EKS lane (w=300), single DB | 300 | 355 | 300 | Lane adds 55px |
+
+Keep gaps between subnets at **40px**.
 
 ---
 
@@ -107,7 +128,7 @@ gap = 40px recommended
 
 | Subnet w | n icons | gap | x (first) | x (second) |
 |----------|---------|-----|-----------|------------|
-| 300 | 1 | — | 90 | — | (db default) |
+| 300 | 1 | — | 90 | — |
 | 380 | 2 | 40 | 40 | 200 |
 
 
