@@ -45,7 +45,10 @@ and connections as non-defaults. Use only its visual structure.
 The specific values below (e.g. CloudFront y=1195, Users y=1445) are **N=3
 examples**. For any other AZ count, recompute using the formulas in
 `references/coords-cheatsheet.md` — do not reuse these numbers.
-- **Users y**: `cloud_y + region_y + vpc_y + igw_vpc_y = 250+285+260+650 = 1445`
+- **Users y**: `cloud_y + vpc_cloud_y + igw_vpc_y = 250+545+650 = 1445`
+  (With region=container=0, vpc is cloud-relative at y=545, not region-relative.
+  Old formula `cloud_y+region_y+vpc_y+igw_y = 250+285+260+650` gives the same result
+  for the untrimmed layout only — use the vpc_cloud_y form for trimmed diagrams.)
 - **CloudFront y** (inline with IGW row): `region_y + vpc_y + igw_y = 285+260+650 = 1195` (cloud-relative)
 - **Regional icons x**: `start_x = (2395 - n×120 - (n-1)×60) / 2`, then `x_i = start_x + i×180`
 - **Global band icons x** (S3, IAM): `start_x = (2727 - n×120 - (n-1)×60) / 2`, then `x_i = start_x + i×180`
@@ -60,6 +63,14 @@ examples**. For any other AZ count, recompute using the formulas in
 - Use `fontSize=14; spacingLeft=55; align=left; strokeWidth=2` on lane label.
 - Badge: 45×45, parented to `vpc`, at `x=lane_x+8, y=88`.
 - Two lanes of w=480 each overflow the app column — use w=240 each for dual lanes.
+- **Dual-lane task_y — label-clearance offset is conditional:** The precomputed dual
+  values (AZ-1=85, AZ-2=545, AZ-3=1005) include a +60 px top offset to prevent the
+  lane label from overlapping the first task icon. Apply this offset **only when the
+  lane label wraps to two lines** (i.e. label text > ~20 characters at fontSize=14).
+  For short labels (≤20 chars, single line), use the standard single-lane values
+  (AZ-1=25, AZ-2=485, AZ-3=945) even inside dual lanes. Check: if `lane_w=240` and
+  label is "Amazon EKS" (9 chars) — use 25/485/945. If label is "ECS Fargate (App Tier)"
+  — use 85/545/1005.
 
 **Edge routing rules:**
 - **Inbound path Users→CF→IGW→ALB**: all at same abs y-centre (1505). Use `exitX=1 exitY=0.5, entryX=0 entryY=0.5`, no waypoints.
@@ -87,10 +98,38 @@ examples**. For any other AZ count, recompute using the formulas in
   KMS (regional row) and IAM (global band) even if user doesn't ask. These are
   essential operational hygiene. Other security services (WAF, Secrets Manager,
   GuardDuty) are optional — only if user requests or architecture requires.
-- **Container widths are fixed constants** — Cloud, Region, VPC, and AZ containers use
-  skeleton default widths. Do not shrink them to fit content. Whitespace at the right
-  edge is expected and acceptable. This ensures consistent framing across diagrams.
-  Only subnets and lanes should be sized to their content.
+- **Container widths — always check and trim to content:**
+  Cloud, Region, VPC, and AZ containers start from the skeleton defaults (AZ w=1640,
+  VPC w=2225, Region w=2395, Cloud w=2727). **Always run the right-margin check before
+  finalising — do not skip it even when the gap looks acceptable:**
+  1. Compute `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative).
+     For a layout with public x=35 w=300, app x=375 w=555, db x=970 w=300: content_right = 1270.
+  2. If `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce containers:
+     `new_AZ_w = content_right + 40` (40 px right margin), then scale VPC/Region/Cloud
+     widths proportionally: multiply each by `new_AZ_w / 1640`. Round to nearest 10.
+  3. Example: content_right=1270, new_AZ_w=1310, scale=0.799.
+     **Use the validated values below — do NOT recompute with a raw ×0.8 multiplier:**
+     AZ: 1310. VPC: 1965. Region: 2310. Cloud: 2620.
+     (A raw ×0.8 gives VPC=1780 which is wrong; use the table in coords-cheatsheet.md.)
+  The 20% threshold means BizAmica-style layouts (dual lanes, db right-edge at 1270)
+  will always be trimmed. The old 40% threshold was too permissive and produced
+  visible dead space even when the gap was technically below the limit.
+- **Region container — use `container=0` (decorative box) on architecture pages:**
+  Three-level nesting (`cloud→region→vpc`) with all containers set to `container=1`
+  causes coordinate drift: children of region are relative to region, children of vpc
+  are relative to region-relative-vpc, and regional services must be placed with
+  compound offsets that are easy to miscalculate. The stable pattern is:
+  - `region`: set **`container=0`** — draws the dashed blue Region boundary as a
+    non-parent reference box. All children that visually appear inside it are parented
+    directly to **`cloud`** instead.
+  - `vpc`: parented directly to **`cloud`** (not to region), with absolute cloud-relative
+    coordinates. Compute `vpc_cloud_x = region_cloud_x + vpc_region_x` and
+    `vpc_cloud_y = region_cloud_y + vpc_region_y`.
+  - Regional service icons (CloudWatch, KMS, ECR, etc.): parented to **`cloud`**, placed
+    at the visual position inside the region box using cloud-relative coordinates.
+  - VPC children (IGW, ALB, subnets, lanes): still parented to **`vpc`** as normal.
+  This flattens the hierarchy from three levels to two and eliminates region-relative
+  coordinate math entirely. The region box remains visible as a drawn boundary.
 - Embed the real Comprinno logo as a fresh base64 blob from
   `Downloads/comprinno-logo.png`; never reuse a stale/truncated blob.
   Always add `strokeColor=none` to the logo image cell style to prevent a border/underline appearing.
@@ -118,6 +157,12 @@ examples**. For any other AZ count, recompute using the formulas in
   The Architecture page shows *where services are deployed*, not *how they communicate*.
 - Connect the load balancer to the **cluster lane border** (not each task).
   Connect the cluster to the **primary database only** (replicas get dashed edges).
+- **Inbound LB-to-tier wiring — state as assumption, never infer as fact:** A cost
+  estimate or service inventory lists what LBs exist but does NOT specify which tier
+  each fronts. If the source is ambiguous (e.g. both ALB and NLB present but no routing
+  description), explicitly state an assumption ("Assumed ALB → app tier, NLB → data tier")
+  and ask the user to confirm before drawing the edges. Never pick a wiring silently and
+  present it as a fact.
 - **CloudFront** must be explicitly requested by the user. Never infer CloudFront
   from the presence of S3 or a load balancer. If CloudFront is not in the user's
   spec, do not add it. The phrase "include CF when relevant" has been removed.
@@ -135,12 +180,12 @@ topology source, not a required intermediate format. Use MCP tools only when
 already configured and useful for AWS fact checks or native Draw.io editing;
 never assume an MCP is available.
 
-- **WAF is a global service** — place it in the **cloud band above the region**
-  (`parent=cloud`), not in the regional services row and not inside the VPC.
-  Same x-column as ALB: `waf_cloud_rel_x = alb_abs_x - cloud_abs_x`.
-  WAF cloud-relative y must be < region_cloud_y (285): place at y≈85 (80px above region top).
-  Connected vertically to ALB: WAF bottom → ALB top (`exitY=1`, `entryY=0`).
-  The WAF→ALB edge crossing the region/VPC is intentional — it shows a global rule applying.
+- **WAF is a global service** — place it in the **cloud band** (`parent=cloud`) in the
+  global icon row at `y=70`, alongside Route53 and IAM. Do NOT place WAF directly above
+  ALB with a vertical drop edge on the Architecture page — that edge crosses the region
+  row, skims adjacent icons, and creates visual clutter. WAF's association with ALB/CF
+  is shown on the **Flow page only** (dashed "inspect" edge from WAF to ALB or CF).
+  On the Architecture page, WAF is an icon showing "WAF is provisioned"; no edge needed.
 - **Route53** — DNS resolution, NOT a network hop. **Always in the global band** at
   `cloud_rel x=72, y=70`, alongside IAM. Route53 edges belong on the **Flow page only** —
   do NOT draw Users→R53 on the Architecture page.
@@ -172,3 +217,15 @@ issues before delivery.
   Compute a single `spine_abs_yc` from the VPC icon y-centre and derive all
   node y-positions from it — mismatched y-centres create edge bends.
   Regional services (S3, RDS etc.) must be placed right of the VPC right border.
+- **Flow page container guidance — flat layout for complex flows:** When the flow
+  involves 6 or more distinct service icons, use a **flat absolute layout**: all nodes
+  `parent="1"` with absolute coordinates; containers (`container=0`) drawn as non-parent
+  reference boxes only. Three-level nested containers (`f-cloud → f-region → f-vpc`)
+  with container-relative child coordinates become brittle at this scale — coordinate
+  drift causes nodes to fall outside their intended containers when edited. Reserve
+  nested containers (`container=1`) only for simple flows with 4 or fewer icons.
+- **Flow page Route53 edge:** When Route53 is shown on the flow page, always draw a
+  dashed edge from Route53 **to CloudFront** (or to IGW if no CF) to complete the DNS
+  resolution story. The edge `Users → R53` shows the DNS query; the edge `R53 → CF`
+  shows the resolved target. Stopping at R53 without connecting it forward leaves the
+  flow incomplete. Label the R53→CF edge "resolves to" or leave it unlabelled.

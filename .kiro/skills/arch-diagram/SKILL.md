@@ -43,6 +43,25 @@ and proceed when it is safe to do so. Never invent a service, traffic path,
 security control, or availability promise and present it as a fact. Metadata
 fields (project, version, date, creator, reviewer) can stay `To be filled`.
 
+**Cost-estimate and migration sources.** AWS Pricing Calculator exports and
+Azure→AWS migration sheets are valid topology sources, but read them carefully:
+- A **cost estimate is an inventory, not a wiring diagram.** It lists services
+  and quantities, not how they connect. Infer the data/request path from the
+  service mix and state it as an assumption.
+- Line-item **descriptions often name the source (Azure) service**, e.g.
+  "Amazon Textract — Azure AI Vision OCR" or an "OpenAI/GPT" line. Model the
+  **AWS target service** (the `Service Name` field), not the Azure/external name
+  in the description.
+- When a line names an **external or non-AWS service** (e.g. "OpenAI/GPT") and
+  the user asks for the AWS-native equivalent, map it to the closest AWS service
+  (generative AI → **Amazon Bedrock**) rather than drawing an external internet
+  icon. If the user's instruction names a service that is NOT literally in the
+  source (e.g. "use Bedrock" when the JSON says "OpenAI/GPT"), interpret intent:
+  they mean the AWS-native stand-in for that component. Note the substitution in
+  the delivery summary.
+- VPC-bound billing lines (NAT Gateway, Public IPv4, VPC Data Transfer, VPC
+  Endpoints) are **proof a VPC is in scope** — include it (see Scenario B-VPC).
+
 Before building, give a brief plan listing the main components, key paths, and
 any assumptions. If the topology is clear, continue directly to generation;
 routine layout choices do not need approval.
@@ -466,6 +485,21 @@ Before saving, verify the generated diagram against the applicable scenario:
 - No VPC, subnets, IGW, NAT, or ALB containers in the diagram.
 - Lambda and S3 are regional services (parent=region or parent=cloud).
 - Do not invent a VPC because Lambda can optionally attach to one.
+
+**Scenario B-VPC — Lambda inside a REQUIRED VPC (not a false positive)**
+A VPC is legitimate — and MUST be shown — when the source explicitly contains
+VPC-bound resources, even if the only compute is Lambda. Treat any of these as
+proof the VPC is real, not invented:
+- a **NAT Gateway** (cannot exist without a VPC),
+- a **Public IPv4 Address** attributed to a VPC,
+- VPC **Data Transfer** line items,
+- VPC Endpoints / PrivateLink, or an explicitly VPC-attached Lambda.
+In this case: keep the VPC, place VPC-attached Lambda inside app subnets
+(`parent=appN`), NAT Gateway in public subnets, and keep db subnets even if
+empty. The validator's "Scenario B" rule is a heuristic that cannot see the
+source; when a NAT Gateway / Public IPv4 / Data Transfer is present, its
+warning is a known false positive — do NOT remove the VPC to silence it.
+Note the false positive in the delivery summary instead.
 
 **Scenario C — CloudFront + private S3 origin**
 - S3 appears as a CloudFront origin in the cloud band (not as a public bucket).

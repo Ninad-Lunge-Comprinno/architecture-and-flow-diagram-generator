@@ -32,8 +32,8 @@
 | regional row start_x (n=7) | **598** | (2395−1200)/2 |
 | global band start_x (n=2) | **1214** | (2727−300)/2 |
 | global band start_x (n=4) | **1034** | (2727−660)/2 |
-| **Dual lanes** x_lane1 (vpc-rel) | **1010** | az1_x+app_x+(app_w−total_w)/2 |
-| **Dual lanes** x_lane2 (vpc-rel) | **1270** | lane1_x+240+20 |
+| **Dual lanes** x_lane1 (vpc-rel) | **1010** | standard layout (app_az_x=455). For trimmed layout with app_az_x=375 → lane1_x=922 |
+| **Dual lanes** x_lane2 (vpc-rel) | **1270** | standard layout. Trimmed: lane2_x=1182 |
 | dual lane task_x | **60** | (240−120)/2 |
 | dual lane task_y AZ-1 | **85** | 25+60 label clearance |
 | dual lane task_y AZ-2 | **545** | 485+60 |
@@ -66,6 +66,29 @@
 | az3 | vpc | 520 | 1000 | 1640 | 340 |
 
 AZ height = **340**. AZ y-spacing = **460px**. All constants.
+
+> **Right-margin check — always run before finalising (20% threshold):**
+> `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative)
+> If `1640 − content_right > 0.2 × 1640` (i.e. > 328px dead space), trim:
+> `new_AZ_w = content_right + 40`, then scale all containers by `new_AZ_w / 1640`.
+>
+> **Dual-lane example** (public 300 + app 555 + db 300, content_right=1270):
+> Dead space = 370 = 22.6% → **must trim**.
+> new_AZ_w = 1310. Validated container values (copy verbatim for dual-lane layouts):
+>
+> | Cell | parent | w | x | y |
+> |------|--------|---|---|---|
+> | cloud | root(1) | **2620** | 260 | 250 |
+> | region | cloud | **2310** | 140 | 285 — `container=0` |
+> | vpc | **cloud** | **1965** | 332 | 545 — parent=cloud, not region |
+> | az1/2/3 | vpc | **1310** | 520 | 80/540/1000 |
+> | IGW | vpc | 120 | -60 | 650 |
+> | ALB | vpc | 120 | **230** | 650 — shifted right for dual lanes |
+> | Global band icons | cloud | 120 | 1034/1214/1394/1574 | 70 |
+> | Regional services | cloud | 120 | 935/1115/1295/1475/1655/1835 | 350 |
+>
+> When region is `container=0`, vpc is parented to **cloud** and regional service icons
+> are also parented to **cloud** at cloud-relative coordinates (not region-relative).
 
 ---
 

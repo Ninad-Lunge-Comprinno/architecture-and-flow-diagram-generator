@@ -87,46 +87,52 @@ parent=1 (root)
 ├── users           (absolute, outside AWS Cloud)
 │
 ├── cloud           (absolute, e.g. x=260 y=250 w=2727 h=2115)
-│   ├── s3          (relative to cloud, global row)
-│   ├── iam         (relative to cloud, global row)
+│   ├── waf         (relative to cloud, global row y=70)
+│   ├── route53     (relative to cloud, global row y=70)
+│   ├── s3          (relative to cloud, global row y=70)
+│   ├── iam         (relative to cloud, global row y=70)
 │   │
-│   └── region      (relative to cloud, e.g. x=247 y=285 w=2395 h=1745)
-│       ├── secrets_manager  (relative to region, services row)
-│       ├── cloudwatch       (relative to region, services row)
-│       ├── cloudtrail       (relative to region, services row)
-│       ├── kms              (relative to region, services row)
-│       ├── acm              (relative to region, services row)
-│       ├── ecr              (relative to region, services row)
+│   ├── region      (relative to cloud — container=0 DECORATIVE BOX ONLY,
+│   │               NOT a parent. Children are parented to cloud directly.)
+│   │
+│   ├── secrets_manager  (relative to cloud, y≈350 — visually inside region)
+│   ├── cloudwatch       (relative to cloud, y≈350)
+│   ├── cloudtrail       (relative to cloud, y≈350)
+│   ├── kms              (relative to cloud, y≈350)
+│   ├── ecr              (relative to cloud, y≈350)
+│   │
+│   └── vpc   (relative to cloud — NOT child of region.
+│             vpc_cloud_x = region_cloud_x + vpc_region_x
+│             vpc_cloud_y = region_cloud_y + vpc_region_y)
+│       ├── igw           (relative to vpc)
+│       ├── alb           (relative to vpc)
 │       │
-│       └── vpc   (relative to region, e.g. x=85 y=260 w=2225 h=1405)
-│           ├── igw           (relative to vpc)
-│           ├── alb           (relative to vpc)
-│           │
-│           ├── az1           (relative to vpc, e.g. x=520 y=80  w=1640 h=340)
-│           │   ├── pub1      (relative to az1, e.g. x=35 y=50 w=380 h=250)
-│           │   │   └── nat1  (relative to pub1)
-│           │   ├── app1      (relative to az1, e.g. x=455 y=50 w=650 h=250)
-│           │   └── data1     (relative to az1, e.g. x=1145 y=50 w=300 h=250)
-│           │       ├── rds1  (relative to data1)
-│           │       └── ...
-│           │
-│           ├── az2           (relative to vpc, e.g. x=520 y=540 w=1640 h=340)
-│           │   └── ...same subnet structure...
-│           │
-│           └── ecs_cluster   (relative to vpc, vertical lane spanning all AZs)
-│               ├── fargate-az1
-│               └── fargate-az2
+│       ├── az1           (relative to vpc, e.g. x=520 y=80  w=1640 h=340)
+│       │   ├── pub1      (relative to az1, e.g. x=35 y=50 w=300 h=250)
+│       │   │   └── nat1  (relative to pub1)
+│       │   ├── app1      (relative to az1, e.g. x=375 y=50 w=555 h=250)
+│       │   └── db1       (relative to az1, e.g. x=970 y=50 w=300 h=250)
+│       │       └── rds1  (relative to db1)
+│       │
+│       ├── az2           (relative to vpc, e.g. x=520 y=540 w=1640 h=340)
+│       │   └── ...same subnet structure...
+│       │
+│       └── lane   (relative to vpc, vertical lane spanning all AZs)
+│           ├── task-az1  (relative to lane)
+│           └── task-az2  (relative to lane)
 │
-└── edges           (all edges: parent=1, use absolute coordinates for waypoints)
+└── edges           (all edges: parent=1 for cross-boundary edges;
+                    parent=vpc permitted for intra-VPC edges)
 ```
 
 **Critical rules:**
-- `cloud`, `region`, `vpc`, `az`, subnets, and compute-group lanes are ALL
-  container cells with `parent` set to their enclosing container.
+- `region` uses **`container=0`** — it is a decorative boundary box, not a parent.
+  All services visually inside the region are actually parented to **`cloud`**.
+- `vpc` is a direct child of **`cloud`**, not of `region`.
 - Compute icons inside subnets have `parent` set to the subnet cell.
 - Compute icons inside cluster lanes have `parent` set to the lane cell.
-- **Edges always have `parent="1"` (root)**, even if they connect nested nodes.
-  Use absolute-coordinate waypoints in `<Array as="points">`.
+- **Cross-boundary edges** (e.g. Users→IGW) have `parent="1"` (root).
+- **Intra-VPC edges** (IGW→ALB, ALB→lane, lane→DB) may use `parent="vpc"` for cleaner routing.
 
 ---
 
@@ -293,7 +299,7 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 | Scope | Container parent | Examples |
 |-------|-----------------|----------|
 | Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), **WAF** |
-| Cloud band above region | `cloud` | WAF — cloud-relative y≈85, x=alb_abs_xc−60−cloud_abs_x; vertical edge to ALB |
+| Cloud band global icon row | `cloud` | WAF — `parent=cloud`, `y=70` alongside Route53/IAM; **no edge to ALB on the Architecture page**. WAF's association with ALB/CF is shown on the Flow page only (dashed "inspect" edge). |
 | Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda |
 | VPC entry column | `vpc` | IGW, ALB |
 | Public subnet | inside AZ public-subnet container | NAT Gateway |
@@ -354,7 +360,10 @@ Flow pages use a simpler coordinate space (typically ~2500×1200):
 
 ## 12. What the architecture page must NOT do
 
-- Do not use a tiny canvas with 60×60 icons — everything will be microscopic. Icons are always 120×120.
+- Do not shrink containers arbitrarily — but **do** apply the right-margin check: if
+  `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce all four containers proportionally
+  (`new_AZ_w = content_right + 40`, then scale VPC/Region/Cloud by `new_AZ_w / 1640`).
+  Dead space exceeding 20% of the AZ width is visually distracting and must be corrected.
 - Do not set `container=0` on subnets or AZ cells.
 - Do not use `fillColor=default` on the outer border; use `fillColor=none` + black stroke, `strokeWidth=3`.
 - Do not reuse a stale/truncated logo blob — copy a fresh base64 blob from `references/skeleton-3az.drawio.xml`.

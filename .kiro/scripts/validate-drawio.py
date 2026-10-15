@@ -170,7 +170,16 @@ def check_alb_connects_to_lane(model, issues, page_name="Architecture"):
 
 
 def check_no_invented_vpc(model, issues, page_name="Architecture"):
-    """Scenario B: Lambda+S3 diagrams must not invent a VPC."""
+    """Scenario B: Lambda+S3 diagrams must not invent a VPC.
+
+    This is a heuristic: Lambda alone does not require a VPC. But a VPC IS
+    legitimately in scope when the diagram contains VPC-bound resources
+    (NAT Gateway, IGW, VPC endpoints) or a VPC-attached Lambda (a Lambda icon
+    whose parent chain is an AZ/subnet). Those cases are NOT invented VPCs, so
+    the check must not flag them — otherwise it produces a false positive for
+    serverless-in-VPC architectures (e.g. a NAT Gateway + VPC-attached Lambda
+    pipeline from a cost estimate).
+    """
     if model is None:
         return
     cells = list(model.iter('mxCell'))
@@ -181,10 +190,37 @@ def check_no_invented_vpc(model, issues, page_name="Architecture"):
     has_ecs = any('mxgraph.aws4.ecs' in c.get('style', '') or
                   'mxgraph.aws4.fargate' in c.get('style', '') for c in cells)
 
-    # Only flag if ONLY Lambda (no ECS/RDS which require VPC)
-    if has_lambda and not has_rds and not has_ecs and has_vpc:
+    # VPC-bound resources that PROVE the VPC is required (not invented).
+    vpc_bound_stencils = (
+        'mxgraph.aws4.nat_gateway',
+        'mxgraph.aws4.internet_gateway',
+        'mxgraph.aws4.endpoints',
+        'mxgraph.aws4.vpc_privatelink',
+        'mxgraph.aws4.application_load_balancer',
+        'mxgraph.aws4.network_load_balancer',
+    )
+    has_vpc_bound = any(
+        any(s in c.get('style', '') for s in vpc_bound_stencils) for c in cells
+    )
+
+    # VPC-attached Lambda: a Lambda icon parented into an AZ/subnet container.
+    subnet_ids = {
+        c.get('id') for c in cells
+        if 'group_security_group' in c.get('style', '')
+        or 'group_availability_zone' in c.get('style', '')
+    }
+    lambda_in_subnet = any(
+        'mxgraph.aws4.lambda' in c.get('style', '') and c.get('parent') in subnet_ids
+        for c in cells
+    )
+
+    # Only flag if ONLY Lambda (no ECS/RDS which require VPC) AND there is no
+    # evidence the VPC is genuinely in scope.
+    if (has_lambda and not has_rds and not has_ecs and has_vpc
+            and not has_vpc_bound and not lambda_in_subnet):
         issues.append(
-            f"[{page_name}] Scenario B: diagram has Lambda+S3 but also contains a VPC container. "
+            f"[{page_name}] Scenario B: diagram has Lambda+S3 but also contains a VPC container "
+            "with no VPC-bound resources (no NAT/IGW/endpoints, Lambda not in a subnet). "
             "Lambda does not require a VPC unless explicitly specified."
         )
 
