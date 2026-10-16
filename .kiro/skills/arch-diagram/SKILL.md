@@ -48,6 +48,15 @@ Azure→AWS migration sheets are valid topology sources, but read them carefully
 - A **cost estimate is an inventory, not a wiring diagram.** It lists services
   and quantities, not how they connect. Infer the data/request path from the
   service mix and state it as an assumption.
+- **Enumerate the union of services across ALL groups before building.** A cost
+  estimate may split one workload across several top-level groups (e.g.
+  `Azure-Mapping`, `GCP-Mapping`, `Best Practices` under `Groups`). The same
+  workload's services are distributed across them — AI/ML and monitoring services
+  (Transcribe, Polly, Managed Prometheus) and networking lines (PrivateLink) often
+  live only in a secondary group. Do NOT treat the first group as complete. Walk
+  every group, collect the full set of distinct services, then build from that
+  union. A service that appears in no group you read will be silently dropped —
+  omission produces no error.
 - Line-item **descriptions often name the source (Azure) service**, e.g.
   "Amazon Textract — Azure AI Vision OCR" or an "OpenAI/GPT" line. Model the
   **AWS target service** (the `Service Name` field), not the Azure/external name
@@ -178,6 +187,17 @@ is not in the cheatsheet.
 
 Work through every applicable section. Mark items N/A only when the topology
 genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+
+---
+
+#### 0. Source coverage (when built from a cost estimate / migration sheet)
+0. **Inventory coverage** — list every distinct service across **all** groups in
+   the source (e.g. `Azure-Mapping`, `GCP-Mapping`, `Best Practices`), then confirm
+   each is either **drawn** in the diagram or **explicitly skipped with a stated
+   reason** in the delivery summary. Services legitimately skipped: attached storage
+   shown via its host (EBS → shown via EC2/EKS), and billing-only lines with no
+   drawable service (Public IPv4, Data Transfer). Everything else must appear.
+   Omission produces no validator error — this manual diff is the only guard.
 
 ---
 

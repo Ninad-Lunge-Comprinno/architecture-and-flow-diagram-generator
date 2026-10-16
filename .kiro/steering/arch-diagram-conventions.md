@@ -103,17 +103,26 @@ examples**. For any other AZ count, recompute using the formulas in
   VPC w=2225, Region w=2395, Cloud w=2727). **Always run the right-margin check before
   finalising — do not skip it even when the gap looks acceptable:**
   1. Compute `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative).
-     For a layout with public x=35 w=300, app x=375 w=555, db x=970 w=300: content_right = 1270.
-  2. If `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce containers:
-     `new_AZ_w = content_right + 40` (40 px right margin), then scale VPC/Region/Cloud
-     widths proportionally: multiply each by `new_AZ_w / 1640`. Round to nearest 10.
-  3. Example: content_right=1270, new_AZ_w=1310, scale=0.799.
-     **Use the validated values below — do NOT recompute with a raw ×0.8 multiplier:**
-     AZ: 1310. VPC: 1965. Region: 2310. Cloud: 2620.
-     (A raw ×0.8 gives VPC=1780 which is wrong; use the table in coords-cheatsheet.md.)
-  The 20% threshold means BizAmica-style layouts (dual lanes, db right-edge at 1270)
-  will always be trimmed. The old 40% threshold was too permissive and produced
-  visible dead space even when the gap was technically below the limit.
+     For a layout with public x=35 w=300, app x=375 w=500, db x=915 w=300: content_right = 1215.
+  2. If `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce containers
+     using the **inset-preserving formula** (do NOT scale proportionally — scaling the
+     fixed AZ x-inset of 520 is geometrically wrong and was the cause of the Cred-O
+     untrimmed bug):
+     ```
+     new_AZ_w     = content_right + 40
+     new_VPC_w    = 520 + new_AZ_w + 65
+     new_Region_w = 85  + new_VPC_w + 85
+     new_Cloud_w  = 247 + new_Region_w + 85   # round each to nearest 10
+     ```
+  3. After resizing, re-centre the regional-services row and global band in the new
+     widths (`start_x = (container_w − group_w)/2`), or the rows sit flush right.
+  4. **Worked examples** (the full tables, including the flattened dual-lane validated
+     values, live in `coords-cheatsheet.md` — that is the single source):
+     - Nested single-lane+icon, content_right=1215 → AZ 1255, VPC 1840, Region 2010, Cloud 2340.
+     - Flattened dual-lane, content_right=1270 → AZ 1310, VPC 1965, Region 2310, Cloud 2620
+       (flattened insets only — use the cheatsheet table verbatim for that layout).
+  The 20% threshold means dual-lane and extra-icon app layouts will always be trimmed.
+  The old 40% threshold was too permissive and produced visible dead space.
 - **Region container — use `container=0` (decorative box) on architecture pages:**
   Three-level nesting (`cloud→region→vpc`) with all containers set to `container=1`
   causes coordinate drift: children of region are relative to region, children of vpc
@@ -163,6 +172,15 @@ examples**. For any other AZ count, recompute using the formulas in
   description), explicitly state an assumption ("Assumed ALB → app tier, NLB → data tier")
   and ask the user to confirm before drawing the edges. Never pick a wiring silently and
   present it as a fact.
+- **Cost-estimate coverage — read every group, diff before finalising:** A cost
+  estimate may split one workload across several top-level groups (e.g.
+  `Azure-Mapping`, `GCP-Mapping`, `Best Practices`). AI/ML, monitoring, and networking
+  lines (Transcribe, Polly, Managed Prometheus, PrivateLink) often live only in a
+  secondary group. Enumerate the **union** of services across all groups, then diff the
+  final diagram's icon set against that union: every service must be drawn or explicitly
+  skipped-with-reason in the delivery summary (EBS via its host; Public IPv4 / Data
+  Transfer as non-drawable billing lines). Do not treat the first group as complete —
+  omission produces no validator error, so this diff is the only guard.
 - **CloudFront** must be explicitly requested by the user. Never infer CloudFront
   from the presence of S3 or a load balancer. If CloudFront is not in the user's
   spec, do not add it. The phrase "include CF when relevant" has been removed.

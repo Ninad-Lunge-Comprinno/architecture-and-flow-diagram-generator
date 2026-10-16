@@ -361,9 +361,14 @@ Flow pages use a simpler coordinate space (typically ~2500×1200):
 ## 12. What the architecture page must NOT do
 
 - Do not shrink containers arbitrarily — but **do** apply the right-margin check: if
-  `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce all four containers proportionally
-  (`new_AZ_w = content_right + 40`, then scale VPC/Region/Cloud by `new_AZ_w / 1640`).
-  Dead space exceeding 20% of the AZ width is visually distracting and must be corrected.
+  `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), trim the four containers
+  with the **inset-preserving formula** (NOT a proportional `×new_AZ_w/1640` scale — that
+  scales the fixed AZ inset and is geometrically wrong):
+  `new_AZ_w = content_right + 40`; `new_VPC_w = 520 + new_AZ_w + 65`;
+  `new_Region_w = 85 + new_VPC_w + 85`; `new_Cloud_w = 247 + new_Region_w + 85`.
+  Then re-centre the regional/global rows in the new widths. The full formula, worked
+  examples, and the flattened dual-lane validated table live in `coords-cheatsheet.md`
+  (single source). Dead space exceeding 20% must be corrected.
 - Do not set `container=0` on subnets or AZ cells.
 - Do not use `fillColor=default` on the outer border; use `fillColor=none` + black stroke, `strokeWidth=3`.
 - Do not reuse a stale/truncated logo blob — copy a fresh base64 blob from `references/skeleton-3az.drawio.xml`.

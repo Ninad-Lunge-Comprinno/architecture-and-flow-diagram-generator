@@ -77,6 +77,10 @@ check that all icons reference valid stencils.
 | codepipeline | devtools | #C925D1 | mxgraph.aws4.codepipeline | AWS CodePipeline |
 | codestar | devtools | #C925D1 | mxgraph.aws4.codestar | AWS CodeStar |
 | cognito | security | #DD344C | mxgraph.aws4.cognito | Amazon Cognito |
+| cost_explorer | management | #E7157B | mxgraph.aws4.cost_explorer | AWS Cost Explorer |
+| cost_and_usage_report | management | #E7157B | mxgraph.aws4.cost_and_usage_report | AWS Cost and Usage Report |
+| well_architected_tool | management | #E7157B | mxgraph.aws4.well_architected_tool | AWS Well-Architected Tool |
+| audit_manager | security | #DD344C | mxgraph.aws4.audit_manager | AWS Audit Manager |
 | comprehend | ml | #01A88D | mxgraph.aws4.comprehend | Amazon Comprehend |
 | config | management | #E7157B | mxgraph.aws4.config | AWS Config |
 | connect | integration | #E7157B | mxgraph.aws4.connect | Amazon Connect |

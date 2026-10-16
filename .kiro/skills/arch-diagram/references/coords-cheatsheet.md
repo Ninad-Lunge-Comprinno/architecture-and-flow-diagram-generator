@@ -69,12 +69,32 @@ AZ height = **340**. AZ y-spacing = **460px**. All constants.
 
 > **Right-margin check — always run before finalising (20% threshold):**
 > `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative)
-> If `1640 − content_right > 0.2 × 1640` (i.e. > 328px dead space), trim:
-> `new_AZ_w = content_right + 40`, then scale all containers by `new_AZ_w / 1640`.
+> If `1640 − content_right > 0.2 × 1640` (i.e. > 328px dead space), trim.
 >
-> **Dual-lane example** (public 300 + app 555 + db 300, content_right=1270):
-> Dead space = 370 = 22.6% → **must trim**.
-> new_AZ_w = 1310. Validated container values (copy verbatim for dual-lane layouts):
+> **Trim formula — inset-preserving (works for BOTH nested and flattened layouts).**
+> Do NOT "scale all containers by new_AZ_w/1640" — that scales the fixed AZ x-inset
+> (520) and the container insets, which is geometrically wrong and does not match the
+> validated table below. Instead keep every inset fixed and only grow each container
+> to wrap its child:
+> ```
+> new_AZ_w     = content_right + 40
+> new_VPC_w    = 520 + new_AZ_w + 65        # 520 = AZ x-inset (constant, NOT scaled)
+> new_Region_w = 85  + new_VPC_w  + 85      # 85  = VPC x-inset inside region
+> new_Cloud_w  = 247 + new_Region_w + 85    # 247 = region x-inset inside cloud
+> ```
+> Round each to the nearest 10. After trimming, **re-centre the regional-services row
+> and global band** inside the new widths (start_x = (container_w − group_w)/2), else
+> the rows sit flush against the right edge.
+>
+> **Worked example — nested single-lane + extra icon** (public 300 + app 500 + db 300,
+> content_right = 1215; the Cred-O layout):
+> Dead space = 425 = 26% → **must trim**.
+> new_AZ_w = 1255, new_VPC_w = 1840, new_Region_w = 2010, new_Cloud_w = 2340.
+>
+> **Validated values — FLATTENED dual-lane layout only** (region `container=0`,
+> vpc `parent=cloud`; public 300 + app 555 + db 300, content_right=1270, new_AZ_w=1310).
+> These use the flattened insets (vpc at cloud-rel x=332), so copy them **only** when you
+> are building the flattened dual-lane layout; for any other case use the formula above.
 >
 > | Cell | parent | w | x | y |
 > |------|--------|---|---|---|
