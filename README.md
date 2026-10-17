@@ -57,7 +57,14 @@ The agent is steered entirely through Markdown files. When you open the
 3. It reasons about the architecture and builds Draw.io XML directly.
 4. The result is saved to `outputs/<project-slug>/<project>.drawio.xml`.
 
-No Python, no intermediate spec, no CLI commands.
+No generator and no intermediate spec. The only code is the structural validator
+`.kiro/scripts/validate-drawio.py` (run by the agent after saving, and by CI) and its regression test
+`.kiro/scripts/test-validator.py`:
+
+```
+python3 .kiro/scripts/validate-drawio.py outputs/<project-slug>/<project>.drawio.xml
+python3 .kiro/scripts/test-validator.py
+```
 
 ---
 

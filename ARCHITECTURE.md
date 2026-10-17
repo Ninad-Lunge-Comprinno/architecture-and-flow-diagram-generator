@@ -67,13 +67,13 @@ sources (most authoritative first):
 
 | Source | Role |
 |---|---|
-| `diagram examples/Comprinno Architecture Template.drawio.xml` | House-style template — geometry, styles, title block, logo |
-| `outputs/<project>/<project>.drawio.xml` | Validated working output — any recent output in the outputs folder |
-| `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules, scaling guidance |
-| `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | Formulas and constants for every position |
-| `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton for the default 3-AZ three-tier layout |
+| `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | **Only source of geometry numbers** — constants, wrap rule, presets, formulas |
+| `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton (preset D1: 3-AZ three-tier, single lane) — copy it |
+| `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules (no numbers) |
 | `.kiro/skills/arch-diagram/references/shapes-*.md` | AWS / Azure / GCP stencil catalogs |
-| `.kiro/steering/arch-diagram-conventions.md` | Always-on rules and common failure corrections |
+| `.kiro/steering/arch-diagram-conventions.md` | Always-on rules (no numbers; points to the cheatsheet) |
+| `diagram examples/Comprinno Architecture Template.drawio.xml` | Visual reference only — never copy its coordinates or topology |
+| `outputs/<project>/<project>.drawio.xml` | Local, untracked prior outputs — optional reference |
 
 Treat the template's example topology, AZ count, service inventory, and
 connections as non-defaults — only its visual structure is reused.
@@ -87,9 +87,9 @@ into the correct container parent:
 
 | Scope | Container | Examples |
 |---|---|---|
-| Global | Cloud band above the Region box | CloudFront, Route 53, WAF, S3, IAM |
+| Global | Cloud band above the Region box | CloudFront, Route 53, IAM, S3 (static origin), WAF fronting CloudFront |
 | Ingress band | Inline IGW/ALB row inside the Cloud | IGW, ALB (Users stay outside the cloud) |
-| Region services | Inside Region, outside any VPC | ECR, Cognito, Lambda, Secrets Manager |
+| Region services | Inside Region, outside any VPC | CloudWatch, CloudTrail, KMS, ECR, Lambda, Secrets Manager, WAF fronting an ALB |
 | Public subnet | Web/DMZ tier in an AZ | NAT Gateway, Bastion |
 | App subnet | App tier band (lanes overlay it) | — |
 | DB subnet | Data tier in an AZ | Aurora, ElastiCache, RDS |
@@ -99,7 +99,8 @@ Key placement rules the agent enforces (from the conventions file):
 
 - **Lambda is regional** — placed in the regional services row, not inside a VPC
   subnet (unless a VPC-attached Lambda with a subnet ENI is explicitly modelled).
-- **WAF and Route 53 are global** — placed in the cloud band above the region.
+- **Route 53 is global** (always the cloud band; DNS, not a hop). **WAF follows what it protects:** global band when it
+  fronts CloudFront, regional row when it fronts an ALB; its association is a Flow-page edge only.
 - **CloudFront** sits inline with the IGW/ALB row so the inbound path
   `Users → CloudFront → IGW → ALB` is a straight horizontal line.
 - Every compute cluster (ECS, EKS) gets a dashed baseline edge to **ECR** for
@@ -109,17 +110,19 @@ Key placement rules the agent enforces (from the conventions file):
 
 ## 4. Geometry — reasoned, not computed by code
 
-The agent applies fixed house-style constants and derives positions with the
-formulas in `coords-cheatsheet.md` and the conventions file. These are applied
-by hand in the XML, not produced by a layout engine. The core constants:
+The agent applies house-style constants and derives positions with the formulas and presets in
+`coords-cheatsheet.md`. They are applied by hand in the XML, not produced by a layout engine, and
+`validate-drawio.py` checks them. The core ideas:
 
-- **Canvas border**: `x=0 y=-40 w=3100 h=2600; strokeWidth=3`
-- **Cloud**: `x=260 y=250 w=2727 h=2115`
-- **Region** (rel. to cloud): `x=247 y=285 w=2395 h=1745`
-- **VPC** (rel. to region): `x=85 y=260 w=2225 h=1405`
-- **AZ rows** (rel. to VPC): `y=80 / 540 / 1000; h=340; spacing=460`
-- **Subnets** (rel. to AZ): public `x=35 w=380 h=250`; app `w=650`; db `w=300`
-- **Icon size**: always 120×120; icon y in a 250-high subnet is always 65
+- **Wrap rule:** containers always wrap their content — `az_w = content_right + 40`, `vpc_w = 520 + az_w + 65`,
+  `region_w = 85 + vpc_w + 85`, `cloud_w = 247 + region_w + 85`, `border_w = 260 + cloud_w + 113` — and the regional
+  row and global band are re-centred after every change. Shipped skeleton (D1): AZ 1110, VPC 1695,
+  Region 1865, Cloud 2197, border 2570.
+- **Fixed:** Cloud `x=260 y=250 h=2115`; Region `x=247 y=285 h=1745`; VPC `x=85 y=260 h=1405`; AZ rows
+  `y=80 / 540 / 1000; h=340; spacing=460`; icons 120×120, y=65 in a 250-high subnet.
+- **Subnet columns:** `public x=35 | 40 | app | 40 | db`; width 300 (1 icon) / 380 (2); app with a lane = `lane_w + 55`.
+- **Hierarchy:** nested `cloud → region → vpc → az → subnet → icon`; scope is the parent chain. The **Flow page is flat**
+  with decorative scope boxes.
 
 Derived positions (users y, CloudFront y, regional icon x spread, lane heights,
 cluster→DB exit fractions) are computed from the documented formulas each time
@@ -141,7 +144,7 @@ The agent emits draw.io's uncompressed format directly:
 
     <!-- containers (Cloud, Region, VPC, AZ, subnet, lane) -->
     <mxCell id="cloud" parent="1" value="AWS Cloud" style="points=...;..." vertex="1">
-      <mxGeometry x="260" y="250" width="2727" height="2115" as="geometry" />
+      <mxGeometry x="260" y="250" width="2197" height="2115" as="geometry" />
     </mxCell>
 
     <!-- resource icons -->
@@ -196,14 +199,15 @@ To add a service, add a row to the relevant `shapes-*.md` catalog.
 
 ## 7. Self-checks before delivery
 
-There is no automated test suite. The agent validates its own output against the
-house-style rules before delivering:
+There is no generator. Structure is checked by `.kiro/scripts/validate-drawio.py` (run by the agent through a
+restricted `shell` permission and by CI, with `test-validator.py` as its regression test). The agent additionally
+reviews against the house-style rules before delivering:
 
 | Check | What it confirms |
 |---|---|
 | Boundary containment | Every icon sits fully inside its declared container |
-| Column alignment | Subnet widths are identical across AZ rows so columns line up |
-| Scope correctness | Lambda regional, WAF/Route 53 global, CloudFront inline with IGW/ALB |
+| Column alignment | Subnet widths and the wrap rule hold; rows are centred; columns identical across AZ rows |
+| Scope correctness | Lambda regional, Route 53 global, WAF scoped to its target, CloudFront inline with IGW/ALB (checked by position) |
 | Edge geometry | Inbound path is a straight horizontal line; no arrows run along borders |
 | Stencil validity | Every `shape=` key exists in the shape catalog |
 | Visual review | A rendered preview is inspected and corrected when one is available |

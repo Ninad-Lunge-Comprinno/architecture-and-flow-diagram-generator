@@ -17,40 +17,31 @@
   COORDINATE REFERENCE: .kiro/skills/arch-diagram/references/coords-cheatsheet.md
   FULL RULES:           .kiro/skills/arch-diagram/references/house-style.md
 
-  GEOMETRY SUMMARY (do not change these container values):
-    cloud:   x=260  y=250  w=2727 h=2115  (child of root)
-    region:  x=247  y=285  w=2395 h=1745  (child of cloud)
-    vpc:     x=85   y=260  w=2225 h=1405  (child of region)
-    az1:     x=520  y=80   w=1640 h=340   (child of vpc)
-    az2:     x=520  y=540  w=1640 h=340   (child of vpc)
-    az3:     x=520  y=1000 w=1640 h=340   (child of vpc)
+  GEOMETRY SUMMARY — container sizes follow the WRAP RULE (cheatsheet). Values below are for the
+  shipped layout (single lane, public 1 icon):
+    border:  x=0    y=-40 w=2570 h=2600  (w = cloud_x + cloud_w + 113)
+    cloud:   x=260  y=250 w=2197 h=2115  (child of root; w = 247 + region_w + 85)
+    region:  x=247  y=285 w=1865 h=1745  (child of cloud; w = 85 + vpc_w + 85)
+    vpc:     x=85   y=260 w=1695 h=1405  (child of region; w = 520 + az_w + 65)
+    az1:     x=520  y=80   w=1110 h=340   (child of vpc; w = content_right + 40)
+    az2:     x=520  y=540  w=1110 h=340
+    az3:     x=520  y=1000 w=1110 h=340
     icons in subnets: w=120 h=120, y=65, x=centred
-    igw: x=-60 y=650 (child of vpc)
-    alb: x=160 y=650 (child of vpc)
+    igw: x=-60 y=650 (child of vpc)      alb: x=160 y=650 (child of vpc)
+  If the subnet columns change (2-icon subnet, dual lanes, ...) recompute the five container widths with the
+  wrap rule and RE-CENTRE the regional row and global band (validate-drawio.py enforces both).
 
-  ⚠️  SUBNET WIDTH — MUST BE CONSISTENT:
-    Width by icon count (applies to ALL subnet types equally):
-      - 1 icon:  w=300  (public, app, OR db — all same)
-      - 2 icons: w=380
-      - 3 icons: w=520
-    
-    LANE EXCEPTION ONLY: When app contains a cluster lane (not direct icons):
-      - app_w = lane_w + 55 (e.g., lane_w=300 → app_w=355)
-    
-    Subnet x positions (relative to AZ):
-      - public: x=35
-      - app:    x = 35 + public_w + 40
-      - db:     x = app_x + app_w + 40
-
-    EXAMPLE — all subnets with 1 icon each:
-      public: x=35,  w=300
-      app:    x=375, w=300  (35+300+40)
-      db:     x=715, w=300  (375+300+40)
+  SUBNET COLUMNS (relative to AZ): public x=35 | 40 | app | 40 | db   (x = previous right edge + 40)
+    Width by icon count: 1 icon w=300, 2 icons w=380, 3 icons w=520.
+    Lane exception: app_w = lane_w + 55 (35px left / 20px right gap).
+    SHIPPED (lane-ready): public x=35 w=300 | app x=375 w=355 | db x=770 w=300  -> content_right=1070.
+    No lane and 1 direct app icon: app w=300 -> db x=715 -> re-run the wrap rule.
 
   LANE GEOMETRY (relative to vpc, only add when compute spans AZs):
-    Single lane:  x=1030 y=80 w=480 h=1260 (single lane; dual: w=240 each, gap=100px)
-    Task icons:   x=180  y=110 / y=570 / y=1030  (AZ-1/2/3)
-    Badge:        x=1008 y=88  w=45 h=45 (child of vpc)
+    lane_x = az_x + app_x + 35 = 520 + 375 + 35 = 930      (35px left / 20px right gap)
+    Single lane:  x=930 y=170 w=300 h=1110   (dual: w=240 each, x=930 and 1190, app_w=555)
+    Task icons:   x=90  y=25 / 485 / 945     (AZ-1/2/3, children of the lane)
+    Badge:        x=938 y=178 w=45 h=45      (child of vpc)
 -->
 <mxfile host="app.diagrams.net" pages="2">
 
@@ -69,7 +60,7 @@
         <mxCell id="border" parent="1"
           style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
           vertex="1">
-          <mxGeometry x="0" y="-40" width="3100" height="2600" as="geometry" />
+          <mxGeometry x="0" y="-40" width="2570" height="2600" as="geometry" />
         </mxCell>
 
         <!-- COMPRINNO LOGO — real PNG base64 (do not reuse stale blobs) -->
@@ -103,7 +94,7 @@
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;AWS Cloud&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="260" y="250" width="2727" height="2115" as="geometry" />
+          <mxGeometry x="260" y="250" width="2197" height="2115" as="geometry" />
         </mxCell>
 
         <!-- ── GLOBAL ROW: S3-origin + IAM in top band; CloudFront INLINE with IGW ── -->
@@ -118,22 +109,16 @@
           <mxGeometry x="72" y="1195" width="120" height="120" as="geometry" />
         </mxCell> -->
 
-        <!-- SLOT: S3 static-site origin (top global band) — x=452 y=70 -->
-        <!-- <mxCell id="s3_origin" parent="cloud" ... x=452 y=70 /> -->
+        <!-- SLOT: S3 static-site origin (global band, parent=cloud, y=70; x from the band formula) -->
+        <!-- <mxCell id="s3_origin" parent="cloud" ... y=70 /> -->
 
-        <!-- SLOT: IAM (top global band, grouped with S3) — x=632 y=70 -->
-
-        <!-- SLOT: Route53 (global service, parent=cloud, equidistant cloud↔region)
-             Formula: cloud_rel_x = (region_cloud_x - 120) / 2 = (247-120)/2 = 63
-             cloud_rel_y = spine_abs_yc - 60 - cloud_abs_y (= 1135 for 3-AZ default)
-             y = same inline row as IGW/ALB so inbound path is horizontal.
-             Users x = cloud_abs_x - 40 - 120 = 100 (outside cloud, 40px gap)
-        <mxCell id="route53" parent="cloud"
-          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Route 53&lt;/b&gt;&lt;/font&gt;"
-          style="...fillColor=#8C4FFF...resIcon=mxgraph.aws4.route_53;" vertex="1">
-          <mxGeometry x="63" y="1135" width="120" height="120" as="geometry" />
-        </mxCell> -->
-        <!-- <mxCell id="iam" parent="cloud" ... x=632 y=70 /> -->
+        <!-- IAM (baseline, always included) — global band, parent=cloud, y=70. n global icons: start_x = round_half_up((cloud_w - (n*120 + (n-1)*60))/2), pitch 180 (n=1: x=1039; n=2: 949/1129); order left to right: Route 53, IAM, S3 origin -->
+        <mxCell id="iam" parent="cloud"
+          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;KMS&lt;/b&gt;&lt;/font&gt;"
+          style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;"
+          vertex="1">
+          <mxGeometry x="1039" y="70" width="120" height="120" as="geometry" />
+        </mxCell>
 
         <!-- ══════════════════════════════════════════════════════════════ -->
         <!--  REGION                                                        -->
@@ -142,59 +127,65 @@
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;REGION_NAME&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="247" y="285" width="2395" height="1745" as="geometry" />
+          <mxGeometry x="247" y="285" width="1865" height="1745" as="geometry" />
         </mxCell>
 
         <!-- ── REGIONAL SERVICES ROW (children of region, all y=65) ───── -->
-        <!-- Space 165px apart from x=140. Add/remove as needed.          -->
+        <!-- Baseline row = CloudWatch, CloudTrail, KMS (n=3: x=693/873/1053, pitch 180). Re-centre after any add/delete: start_x = round_half_up((region_w - (n*120 + (n-1)*60))/2) -->
 
-        <!-- SLOT: Secrets Manager — x=140 y=65 -->
+        <!-- SLOT: Secrets Manager (optional) — re-centre the row after adding -->
+        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
         <mxCell id="secrets" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Secrets Manager&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;"
           vertex="1">
           <mxGeometry x="688" y="65" width="120" height="120" as="geometry" />
         </mxCell>
+        -->
 
-        <!-- SLOT: CloudWatch — x=305 y=65 -->
+        <!-- CloudWatch (baseline, always included) -->
         <mxCell id="cloudwatch" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;CloudWatch&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;"
           vertex="1">
-          <mxGeometry x="868" y="65" width="120" height="120" as="geometry" />
+          <mxGeometry x="693" y="65" width="120" height="120" as="geometry" />
         </mxCell>
 
-        <!-- SLOT: CloudTrail — x=470 y=65 -->
+        <!-- CloudTrail (baseline, always included) -->
         <mxCell id="cloudtrail" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;CloudTrail&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudtrail;"
           vertex="1">
-          <mxGeometry x="1048" y="65" width="120" height="120" as="geometry" />
+          <mxGeometry x="873" y="65" width="120" height="120" as="geometry" />
         </mxCell>
 
-        <!-- SLOT: KMS — x=635 y=65 -->
+        <!-- KMS (baseline, always included) -->
         <mxCell id="kms" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;KMS&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.key_management_service;"
           vertex="1">
-          <mxGeometry x="1228" y="65" width="120" height="120" as="geometry" />
+          <mxGeometry x="1053" y="65" width="120" height="120" as="geometry" />
         </mxCell>
 
-        <!-- SLOT: ACM — x=800 y=65 -->
+        <!-- SLOT: ACM (optional) — re-centre the row after adding -->
+        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
         <mxCell id="acm" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;ACM&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.certificate_manager_3;"
           vertex="1">
           <mxGeometry x="1408" y="65" width="120" height="120" as="geometry" />
         </mxCell>
+        -->
 
-        <!-- SLOT: ECR — x=965 y=65 -->
+        <!-- SLOT: ECR (optional) — re-centre the row after adding -->
+        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
         <mxCell id="ecr" parent="region"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;ECR&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecr;"
           vertex="1">
           <mxGeometry x="1588" y="65" width="120" height="120" as="geometry" />
         </mxCell>
+        -->
 
         <!-- ══════════════════════════════════════════════════════════════ -->
         <!--  VPC                                                           -->
@@ -203,17 +194,14 @@
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;VPC&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="85" y="260" width="2225" height="1405" as="geometry" />
+          <mxGeometry x="85" y="260" width="1695" height="1405" as="geometry" />
         </mxCell>
 
 
-        <!-- ── WAF (optional, global service) — place ABOVE ALB if WAF is in scope ──────── -->
-        <!-- WAF is NOT in the regional services row and NOT inline with the inbound path.    -->
-        <!-- parent=1 (root). x = ALB_abs_x_left. y = ALB_abs_y_top - 200.                  -->
-        <!-- Edge: WAF→ALB. exitX=0.5 exitY=1, entryX=0.5 entryY=0. Vertical drop.          -->
-        <!-- <mxCell id="waf" parent="1" value="..." style="...resIcon=mxgraph.aws4.waf;" vertex="1">
-          <mxGeometry x="ALB_abs_x_left" y="ALB_abs_y_top_minus_200" width="120" height="120" />
-        </mxCell> -->
+        <!-- ── WAF (optional) — placement follows what it protects; NO edge on this page ────────── -->
+        <!-- Fronting CloudFront (global web ACL): global band, parent=cloud, y=70 (band formula).    -->
+        <!-- Fronting an ALB (regional web ACL):   regional row, parent=region, y=65 (row formula).   -->
+        <!-- Never parent=1, never inside the VPC. The WAF->target association is a Flow-page edge.  -->
 
         <!-- ── ENTRY COLUMN (children of vpc) ───────────────────────── -->
 
@@ -234,13 +222,13 @@
         </mxCell>
 
         <!-- ══════════════════════════════════════════════════════════════ -->
-        <!--  AVAILABILITY ZONE 1  (vpc-relative: x=520 y=80 w=1640 h=340) -->
+        <!--  AVAILABILITY ZONE 1  (vpc-relative: x=520 y=80 w=1110 h=340 — w = content_right + 40) -->
         <!-- ══════════════════════════════════════════════════════════════ -->
         <mxCell id="az1" parent="vpc"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="520" y="80" width="1640" height="340" as="geometry" />
+          <mxGeometry x="520" y="80" width="1110" height="340" as="geometry" />
         </mxCell>
 
         <!-- Public subnet 1 (az1-relative: x=35 y=50 w=300 h=250) -->
@@ -248,110 +236,110 @@
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-1&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
+          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
         </mxCell>
-        <!-- SLOT: 1 icon in pub — x=130 y=65 w=120 h=120 (centred: (380-120)/2=130)
-        2 icons in pub — x=50 y=65 and x=210 y=65 (formula: (380-280)/2=50) -->
+        <!-- SLOT: 1 icon in pub — x=90 y=65 w=120 h=120 (centred: (300-120)/2=90)
+        2 icons in pub — widen pub1-3 to 380, shift app/db right by 80, re-run the wrap rule; x=50 and x=210 -->
         <!-- <mxCell id="nat1" parent="pub1" ... x=90 y=65 w=120 h=120 /> -->
 
-        <!-- App subnet 1 (az1-relative: x=415 y=50 w=650 h=250) -->
+        <!-- App subnet 1 (az1-relative: x=375 y=50 w=355 h=250 — lane-ready; 1 direct icon: w=300) -->
         <mxCell id="app1" parent="az1"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-1&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
+          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
         </mxCell>
-        <!-- SLOT: icon in app1 — x=265 y=65 (if compute lane not used) -->
+        <!-- SLOT: icon in app1 — without a lane use w=300 and x=90 y=65; with a lane see CLUSTER LANE below -->
 
-        <!-- DB subnet 1 (az1-relative: x=1145 y=50 w=460 h=250) -->
+        <!-- DB subnet 1 (az1-relative: x=770 y=50 w=300 h=250 = app_right+40) -->
         <mxCell id="db1" parent="az1"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-1&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
+          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
         </mxCell>
         <!-- SLOT: single db icon in db1 — x=90 y=65 w=120 h=120 (centred in w=300) -->
         <!-- SLOT: two db icons  in db1 — left x=20, right x=160 (for w=300: (300-280)/2=10≈20), y=65 -->
 
         <!-- ══════════════════════════════════════════════════════════════ -->
-        <!--  AVAILABILITY ZONE 2  (vpc-relative: x=520 y=540 w=1640 h=340) -->
+        <!--  AVAILABILITY ZONE 2  (vpc-relative: x=520 y=540 w=1110 h=340 — w = content_right + 40) -->
         <!-- ══════════════════════════════════════════════════════════════ -->
         <mxCell id="az2" parent="vpc"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="520" y="540" width="1640" height="340" as="geometry" />
+          <mxGeometry x="520" y="540" width="1110" height="340" as="geometry" />
         </mxCell>
 
         <mxCell id="pub2" parent="az2"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-2&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
+          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
         </mxCell>
 
         <mxCell id="app2" parent="az2"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-2&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
+          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
         </mxCell>
 
         <mxCell id="db2" parent="az2"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-2&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
+          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
         </mxCell>
 
         <!-- ══════════════════════════════════════════════════════════════ -->
-        <!--  AVAILABILITY ZONE 3  (vpc-relative: x=520 y=1000 w=1640 h=340) -->
+        <!--  AVAILABILITY ZONE 3  (vpc-relative: x=520 y=1000 w=1110 h=340 — w = content_right + 40) -->
         <!-- ══════════════════════════════════════════════════════════════ -->
         <mxCell id="az3" parent="vpc"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="520" y="1000" width="1640" height="340" as="geometry" />
+          <mxGeometry x="520" y="1000" width="1110" height="340" as="geometry" />
         </mxCell>
 
         <mxCell id="pub3" parent="az3"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-3&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
+          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
         </mxCell>
 
         <mxCell id="app3" parent="az3"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-3&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
+          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
         </mxCell>
 
         <mxCell id="db3" parent="az3"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-3&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
+          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
         </mxCell>
 
         <!-- ══════════════════════════════════════════════════════════════ -->
         <!--  CLUSTER LANE (optional — add when compute spans AZ rows)     -->
         <!--  Lane must fit INSIDE the app subnet column borders.          -->
-        <!--  Single lane: x=1010 y=170 w=300 h=1110 (vpc-relative)        -->
+        <!--  Single lane: x=930 y=170 w=300 h=1110 (vpc-relative)         -->
         <!--  Task icons (child of lane): x=90, y=25/485/945               -->
-        <!--  Badge (child of vpc): x=1018 y=178 w=45 h=45                 -->
+        <!--  Badge (child of vpc): x=938 y=178 w=45 h=45                  -->
         <!-- ══════════════════════════════════════════════════════════════ -->
         <!--
         <mxCell id="ecslane" parent="vpc"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Amazon ECS (Fargate)&lt;/b&gt;&lt;/font&gt;"
           style="fillColor=none;strokeColor=#ED7100;verticalAlign=top;fontStyle=1;fontColor=#ED7100;whiteSpace=wrap;html=1;strokeWidth=3;align=left;spacingTop=8;spacingLeft=55;fontSize=14;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;"
           vertex="1">
-          <mxGeometry x="1010" y="170" width="300" height="1110" as="geometry" />
+          <mxGeometry x="930" y="170" width="300" height="1110" as="geometry" />
         </mxCell>
         <mxCell id="ecsbadge" parent="vpc" value=""
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;" vertex="1">
-          <mxGeometry x="1018" y="178" width="45" height="45" as="geometry" />
+          <mxGeometry x="938" y="178" width="45" height="45" as="geometry" />
         </mxCell>
         <mxCell id="ecs1" parent="ecslane" value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Fargate Task&lt;/b&gt;&lt;/font&gt;"
           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;" vertex="1">
@@ -406,69 +394,47 @@
 
         <!-- TITLE BLOCK — replace PROJECT_NAME -->
         <mxCell id="f-title" parent="1"
-          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;"
+          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
           style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
           vertex="1">
-          <mxGeometry x="300.9" y="0" width="440" height="120" as="geometry" />
+          <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry" />
         </mxCell>
 
-        <!-- ══════════════════════════════════════════════════════════════ -->
-        <!--  FLOW CONTAINERS (optional — uncomment for VPC-scoped flows)  -->
-        <!--  Provides scope context: which services run where.            -->
-        <!-- ══════════════════════════════════════════════════════════════ -->
-
-        <!-- AWS CLOUD boundary — uncomment to show global/regional scope -->
-        <!--
+        
+        <!-- ── SCOPE BOXES — decorative (container=0), ABSOLUTE coordinates, never parents. -->
+        <!--    Every flow node is parent="1" with absolute coordinates (flat layout).      -->
         <mxCell id="f-cloud" parent="1"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;AWS Cloud&lt;/b&gt;&lt;/font&gt;"
-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="300" y="120" width="2100" height="1000" as="geometry" />
+          <mxGeometry x="380" y="220" width="2040" height="920" as="geometry" />
         </mxCell>
-        -->
-
-        <!-- REGION boundary — child of f-cloud, uncomment for regional services -->
-        <!--
-        <mxCell id="f-region" parent="f-cloud"
-          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;eu-west-1&lt;/b&gt;&lt;/font&gt;"
-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
+        <mxCell id="f-region" parent="1"
+          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;REGION_NAME&lt;/b&gt;&lt;/font&gt;"
+          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="100" y="80" width="1900" height="840" as="geometry" />
+          <mxGeometry x="680" y="390" width="1700" height="680" as="geometry" />
         </mxCell>
-        -->
-
-        <!-- VPC boundary — child of f-region, uncomment for VPC-internal flows -->
-        <!--
-        <mxCell id="f-vpc" parent="f-region"
+        <mxCell id="f-vpc" parent="1"
           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;VPC&lt;/b&gt;&lt;/font&gt;"
-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
           vertex="1">
-          <mxGeometry x="100" y="280" width="1000" height="480" as="geometry" />
+          <mxGeometry x="740" y="450" width="1000" height="560" as="geometry" />
         </mxCell>
-        -->
 
-        <!-- ── FLOW NODES ─────────────────────────────────────────────── -->
-        <!--  Layout: left-to-right spine at y≈500, nodes spaced 320px    -->
-        <!--  Branch nodes (e.g. S3 static): y≈260 (240px above spine)    -->
-        <!--  All nodes: parent="1", w=120 h=120                          -->
-        <!--                                                               -->
-        <!--  Node 1  x=80   (Users)                                      -->
-        <!--  Node 2  x=400  (+320)                                       -->
-        <!--  Node 3  x=720  (+320)                                       -->
-        <!--  Node 4  x=1040 (+320)                                       -->
-        <!--  Node 5  x=1360 (+320)                                       -->
-        <!--  Node 6  x=1680 (+320)                                       -->
-        <!--  Branch  same x as anchor, y=260                             -->
+        <!-- ── FLOW NODES (all parent="1", absolute coordinates, w=h=120) ─────────────── -->
+        <!--  Spine: node top y=670 (centre 730); pitch 320; node x = 220 + 320*k            -->
+        <!--  k=0 Users                 x=220  y=670   (outside the cloud box)               -->
+        <!--  k=1 CloudFront            x=540  y=670   (cloud scope, left of the region box) -->
+        <!--  k=2..4 VPC nodes          x=860 / 1180 / 1500, y=670   (inside the VPC box)    -->
+        <!--  k=5..6 regional nodes     x=1820 / 2140, y=670         (region, right of VPC)  -->
+        <!--  Branch nodes (240px above y=430 / below y=910): REGION-scope services only,    -->
+        <!--  anchored to k=5/6. Never branch off a VPC node (it would leave the VPC box).   -->
+        <!--  Cloud scope: WAF fronting CloudFront x=540 y=250; Route 53 x=470 y=910.        -->
+        <!--  WAF fronting an ALB is region scope: first free region slot, dashed inspect    -->
+        <!--  edge to the ALB. Route 53 edges: Users -> R53 -> the public endpoint it        -->
+        <!--  resolves to (CloudFront, else the ALB) — never the IGW.                        -->
         <!-- ─────────────────────────────────────────────────────────── -->
-
-        <!-- SLOT: User node — x=80 y=500 -->
-        <!-- <mxCell id="f-user" parent="1" ... x=80 y=500 w=120 h=120 /> -->
-
-        <!-- SLOT: Node 2 — x=400 y=500 -->
-        <!-- SLOT: Node 3 — x=720 y=500 -->
-        <!-- SLOT: Node 4 — x=1040 y=500 -->
-        <!-- SLOT: Node 5 — x=1360 y=500 -->
-        <!-- SLOT: Node 6 — x=1680 y=500 -->
 
         <!-- ── FLOW EDGES — all parent="1" ──────────────────────────── -->
         <!-- <mxCell id="f-e1" edge="1" source="f-user" target="..." parent="1" ...> -->

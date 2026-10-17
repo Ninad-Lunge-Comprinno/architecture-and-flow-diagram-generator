@@ -219,7 +219,7 @@ def check_no_invented_vpc(model, issues, page_name="Architecture"):
     if (has_lambda and not has_rds and not has_ecs and has_vpc
             and not has_vpc_bound and not lambda_in_subnet):
         issues.append(
-            f"[{page_name}] Scenario B: diagram has Lambda+S3 but also contains a VPC container "
+            f"[{page_name}] Scenario B (scenario-b): diagram has Lambda+S3 but also contains a VPC container "
             "with no VPC-bound resources (no NAT/IGW/endpoints, Lambda not in a subnet). "
             "Lambda does not require a VPC unless explicitly specified."
         )
@@ -262,15 +262,14 @@ def check_flow_page(model, issues, page_name="Flow"):
         issues.append(f"[{page_name}] Page has zero mxCell elements — empty or incorrectly parsed")
         return
 
-    # Check title block has metadata fields
+    # Title block must carry the metadata fields (same as the Architecture page)
     title_cells = [c for c in cells
                    if c.get('id', '').endswith('title') or c.get('id', '') == 'f-title']
     for tc in title_cells:
         val = tc.get('value', '')
         for field in ['Version', 'Date', 'Creator', 'Reviewer']:
-            # Only warn for the Architecture title which should have all metadata
-            # Flow title typically just has project name and flow description
-            pass  # Relaxed check - flow title just needs project name
+            if field not in val:
+                issues.append(f"[{page_name}] title block '{tc.get('id')}' missing '{field}' metadata")
 
     # Check brand/logo cell has strokeColor=none
     brand_cells = [c for c in cells if 'brand' in c.get('id', '')]
@@ -279,9 +278,42 @@ def check_flow_page(model, issues, page_name="Flow"):
         if 'shape=image' in style and 'strokeColor=none' not in style:
             issues.append(f"[{page_name}] Logo cell '{bc.get('id')}' missing strokeColor=none (will show underline)")
 
-    # Check cloud/region/vpc containers exist (optional for flow - just a note)
-    containers = {c.get('id') for c in cells if 'container=1' in c.get('style', '')}
-    # Note: f-cloud, f-region, f-vpc are recommended but not strictly required for all flows
+    # FLAT layout: f-cloud / f-region / f-vpc are REQUIRED decorative scope boxes (container=0), absolute
+    # coordinates, parent '1'; every node is parent '1' too. Nodes are checked against the boxes by position
+    # (see check_scope_boxes), so editing in draw.io can never re-parent or drift them.
+    by_id = {c.get('id'): c for c in cells}
+
+    def _g(c):
+        g = c.find('mxGeometry')
+        return None if g is None else {k: float(g.get(k) or 0) for k in ('x', 'y', 'width', 'height')}
+
+    boxes = {}
+    for cid in ('f-cloud', 'f-region', 'f-vpc'):
+        c = by_id.get(cid)
+        if c is None:
+            issues.append(f"[{page_name}] missing scope box '{cid}'")
+            continue
+        if 'container=1' in (c.get('style') or ''):
+            issues.append(f"[{page_name}] scope box '{cid}' must be decorative (container=0), not a parent")
+        if c.get('parent') != '1':
+            issues.append(f"[{page_name}] scope box '{cid}' must have parent '1' (flat layout)")
+        boxes[cid] = _g(c)
+
+    def _inside(i, o):
+        return i and o and i['x'] >= o['x'] and i['y'] >= o['y'] \
+            and i['x'] + i['width'] <= o['x'] + o['width'] and i['y'] + i['height'] <= o['y'] + o['height']
+    if all(boxes.get(k) for k in boxes) and len(boxes) == 3:
+        if not _inside(boxes['f-region'], boxes['f-cloud']):
+            issues.append(f"[{page_name}] 'f-region' is not inside 'f-cloud'")
+        if not _inside(boxes['f-vpc'], boxes['f-region']):
+            issues.append(f"[{page_name}] 'f-vpc' is not inside 'f-region'")
+    t = _g(by_id['f-title']) if 'f-title' in by_id else None
+    if t and boxes.get('f-cloud') and t['y'] + t['height'] > boxes['f-cloud']['y']:
+        issues.append(f"[{page_name}] title block overlaps 'f-cloud'")
+    for c in cells:
+        if c.get('vertex') == '1' and c.get('parent') not in ('1', None) and c.get('id') != 'f-border':
+            issues.append(f"[{page_name}] '{c.get('id')}' has parent '{c.get('parent')}': the Flow page is flat, "
+                          f"every node must be parent '1' with absolute coordinates")
 
 
 def check_page_name_consistency(diagrams, issues):
@@ -454,21 +486,20 @@ def check_multiaz_db_placement(model, issues, page_name="Architecture"):
 
 
 def check_waf_placement(model, issues, page_name="Architecture"):
-    """Check that WAF is placed in cloud band, not as parent=1."""
+    """WAF follows what it protects: CloudFront web ACL -> global band (parent cloud); ALB web ACL ->
+    regional row (parent region). Never root / inside the VPC. No WAF edges on the Architecture page."""
     if model is None:
         return
-
-    for cell in model.iter('mxCell'):
-        style = cell.get('style', '')
-        if 'mxgraph.aws4.waf' in style.lower():
-            parent = cell.get('parent', '')
-            cell_id = cell.get('id', '')
-
-            if parent == '1':
-                issues.append(
-                    f"[{page_name}] WAF '{cell_id}' has parent='1' (root). "
-                    f"WAF is a global service and should have parent='cloud'."
-                )
+    cells = {c.get('id'): c for c in model.iter('mxCell')}
+    for w in [c for c in cells.values() if 'mxgraph.aws4.waf' in (c.get('style') or '').lower()]:
+        if w.get('parent') not in ('cloud', 'region'):
+            issues.append(f"[{page_name}] WAF '{w.get('id')}' has parent '{w.get('parent')}'. Use parent='cloud' "
+                          f"(global band, fronting CloudFront) or parent='region' (regional row, fronting an ALB); "
+                          f"never root or inside the VPC.")
+        for e in cells.values():
+            if e.get('edge') == '1' and w.get('id') in (e.get('source'), e.get('target')):
+                issues.append(f"[{page_name}] edge '{e.get('id')}' touches WAF '{w.get('id')}': WAF associations "
+                              f"are drawn on the Flow page only")
 
 
 def check_icon_dimensions_and_stencils(model, valid_stencils, issues, page_name):
@@ -518,11 +549,214 @@ def check_unique_ids_and_parents(model, issues, page_name):
             issues.append(f"[{page_name}] Cell '{c.get('id')}' has dangling parent '{p}'")
 
 
+def _abs_xy(cells, c):
+    x = y = 0.0
+    while c is not None and c.get("id") not in ("0", "1"):
+        g = c.find("mxGeometry")
+        if g is not None:
+            x += float(g.get("x") or 0); y += float(g.get("y") or 0)
+        c = cells.get(c.get("parent"))
+    return x, y
+
+
+def _geo(c):
+    g = c.find("mxGeometry")
+    return None if g is None else {k: float(g.get(k) or 0) for k in ("x", "y", "width", "height")}
+
+
+def check_container_wrap(model, issues, page_name="Architecture"):
+    """WRAP RULE: containers always wrap their content with fixed insets, and rows stay centred.
+    az_w = content_right + 40; vpc_w = az_x + az_w + 65; region_w = vpc_x + vpc_w + 85;
+    cloud_w = region_x + region_w + 85; border_w = cloud_x + cloud_w + 113 (insets 520/85/247 fixed)."""
+    cells = {c.get("id"): c for c in model.iter("mxCell")}
+    need = ("cloud", "region", "vpc", "az1")
+    if any(n not in cells for n in need):
+        return
+    g = {n: _geo(cells[n]) for n in need}
+    azs = [c for c in cells.values() if (c.get("id") or "").startswith("az") and _geo(c)
+           and "group_availability_zone" in (c.get("style") or "")]
+    right = 0.0
+    for c in cells.values():
+        par = cells.get(c.get("parent"))
+        if par is not None and par in azs and _geo(c) and (c.get("id") or "").startswith(("pub", "app", "db")):
+            right = max(right, _geo(c)["x"] + _geo(c)["width"])
+    if right == 0:
+        return
+
+    def expect(label, got, want):
+        if abs(got - want) > 1:
+            issues.append(f"[{page_name}] {label} is {got:.0f}, wrap rule says {want:.0f}")
+    for fixed, cid, val in (("AZ x-inset", "az1", 520), ("VPC x-inset", "vpc", 85), ("Region x-inset", "region", 247)):
+        expect(fixed, g[cid]["x"], val)
+    for az in azs:
+        expect(f"{az.get('id')} width (content_right {right:.0f} + 40)", _geo(az)["width"], right + 40)
+    expect("vpc width (az_x + az_w + 65)", g["vpc"]["width"], g["az1"]["x"] + g["az1"]["width"] + 65)
+    expect("region width (vpc_x + vpc_w + 85)", g["region"]["width"], g["vpc"]["x"] + g["vpc"]["width"] + 85)
+    expect("cloud width (region_x + region_w + 85)", g["cloud"]["width"], g["region"]["x"] + g["region"]["width"] + 85)
+    if "border" in cells and _geo(cells["border"]):
+        b = _geo(cells["border"])
+        expect("border width (cloud_x + cloud_w + 113)", b["width"], g["cloud"]["x"] + g["cloud"]["width"] + 113)
+
+    def row(parent, y):
+        return [_geo(c) for c in cells.values() if c.get("parent") == parent and _geo(c)
+                and abs(_geo(c)["y"] - y) < 0.5 and _geo(c)["width"] == 120 and c.get("vertex") == "1"]
+    for parent, y, cw, label in (("region", 65, g["region"]["width"], "regional services row"),
+                                 ("cloud", 70, g["cloud"]["width"], "global band")):
+        icons = row(parent, y)
+        if icons:
+            mid = (min(i["x"] for i in icons) + max(i["x"] + 120 for i in icons)) / 2
+            if abs(mid - cw / 2) > 1.5:
+                issues.append(f"[{page_name}] {label} is not centred: group centre {mid:.1f} vs container centre "
+                              f"{cw / 2:.1f}; start_x must be round_half_up((width - (n*120 + (n-1)*60))/2)")
+
+
+def check_lane_geometry(model, issues, page_name="Architecture"):
+    """Cluster lanes sit INSIDE the app-subnet column with a 35px left / 20px right gap
+    (app_w = lane_w + 55; dual lanes: 2*240 + 20 + 55) and own their Fargate/EKS task icons."""
+    cells = {c.get("id"): c for c in model.iter("mxCell")}
+    lanes = [c for c in cells.values()
+             if (c.get("id") or "").endswith("lane") and "ED7100" in (c.get("style") or "")]
+    if not lanes:
+        return
+    apps = []
+    for c in cells.values():
+        par = cells.get(c.get("parent"))
+        if (c.get("id") or "").startswith("app") and par is not None and "group_availability_zone" in (par.get("style") or ""):
+            x, y = _abs_xy(cells, c); g = _geo(c)
+            apps.append((x, x + g["width"], y, y + g["height"]))
+    if apps:
+        left, right = min(a[0] for a in apps), max(a[1] for a in apps)
+        top, bottom = min(a[2] for a in apps), max(a[3] for a in apps)
+        lx = [(_abs_xy(cells, l)[0], _geo(l)["width"]) for l in lanes]
+        ly = [(_abs_xy(cells, l)[1], _geo(l)["height"]) for l in lanes]
+        if min(x for x, _ in lx) < left or max(x + w for x, w in lx) > right \
+                or min(y for y, _ in ly) < top or max(y + h for y, h in ly) > bottom:
+            issues.append(f"[{page_name}] lane is not inside the app-subnet column "
+                          f"(x {left:.0f}-{right:.0f}, y {top:.0f}-{bottom:.0f})")
+        else:
+            gl = min(x for x, _ in lx) - left
+            gr = right - max(x + w for x, w in lx)
+            if abs(gl - 35) > 1 or abs(gr - 20) > 1:
+                issues.append(f"[{page_name}] lane gaps inside the app subnet are {gl:.0f}px left / {gr:.0f}px right; "
+                              f"rule is 35 / 20 (app_w = lane_w + 55; dual lanes: 2*240 + 20 + 55)")
+    lane_ids = {l.get("id") for l in lanes}
+    for c in cells.values():
+        if "mxgraph.aws4.fargate" in (c.get("style") or "") and c.get("parent") not in lane_ids:
+            issues.append(f"[{page_name}] task icon '{c.get('id')}' has parent '{c.get('parent')}'; "
+                          f"tasks must be children of the lane ({sorted(lane_ids)})")
+
+
+def check_subnet_columns(model, issues, page_name="Architecture"):
+    """pub | 40 | app | 40 | db columns, identical in every AZ row."""
+    cells = {c.get("id"): c for c in model.iter("mxCell")}
+    rows = {}
+    for c in cells.values():
+        par = cells.get(c.get("parent"))
+        if par is None or "group_availability_zone" not in (par.get("style") or ""):
+            continue
+        kind = next((k for k in ("pub", "app", "db") if (c.get("id") or "").startswith(k)), None)
+        if kind and _geo(c):
+            rows.setdefault(par.get("id"), {})[kind] = (_geo(c)["x"], _geo(c)["width"])
+    first = None
+    for az, r in sorted(rows.items()):
+        if {"pub", "app", "db"} <= set(r):
+            if abs(r["app"][0] - (r["pub"][0] + r["pub"][1] + 40)) > 1:
+                issues.append(f"[{page_name}] {az}: app subnet x must be pub_right+40")
+            if abs(r["db"][0] - (r["app"][0] + r["app"][1] + 40)) > 1:
+                issues.append(f"[{page_name}] {az}: db subnet x must be app_right+40 "
+                              f"(found {r['db'][0]:.0f}, expected {r['app'][0] + r['app'][1] + 40:.0f})")
+            if first is None:
+                first = r
+            elif r != first:
+                issues.append(f"[{page_name}] {az}: subnet columns differ from the first AZ row")
+
+
+def check_straight_edges(model, issues, page_name="Architecture"):
+    """A right->left edge without waypoints must be horizontal (|dy| <= 2px): exitY/entryY need 3 decimals."""
+    cells = {c.get("id"): c for c in model.iter("mxCell")}
+    for e in cells.values():
+        if e.get("edge") != "1" or e.find(".//Array") is not None:
+            continue
+        st = e.get("style") or ""
+
+        def v(name):
+            m = re.search(name + r"=([0-9.]+)", st)
+            return float(m.group(1)) if m else None
+        src, tgt = cells.get(e.get("source")), cells.get(e.get("target"))
+        ex, ey, nx, ny = v("exitX"), v("exitY"), v("entryX"), v("entryY")
+        if src is None or tgt is None or ex != 1 or nx != 0 or not _geo(src) or not _geo(tgt):
+            continue
+        sx, sy = _abs_xy(cells, src); tx, ty = _abs_xy(cells, tgt)
+        sh, th = _geo(src)["height"], _geo(tgt)["height"]
+        y1 = sy + (0.5 if ey is None else ey) * sh
+        y2 = ty + (0.5 if ny is None else ny) * th
+        if abs(y1 - y2) > 2:
+            issues.append(f"[{page_name}] edge '{e.get('id')}' is not straight: exit y {y1:.1f} vs entry y {y2:.1f} "
+                          f"(dy {y1 - y2:+.1f}px). Use exitY={(y2 - sy) / sh:.3f} (3 decimals).")
+
+
+VPC_BOUND_SCOPE = ("nat_gateway", "application_load_balancer", "network_load_balancer", "ecs", "fargate", "eks",
+                   "rds", "aurora", "documentdb", "elasticache", "msk", "endpoints")   # IGW straddles the border: exempt
+REGION_ONLY_SCOPE = ("cloudwatch_2", "cloudtrail", "key_management_service", "secrets_manager",
+                     "elastic_container_registry", "certificate_manager_3")
+FLOW_REGION_EXTRA = ("s3", "bedrock", "transcribe", "sqs", "sns", "dynamodb")
+GLOBAL_SCOPE = ("identity_and_access_management", "route_53", "cloudfront")
+
+
+def check_scope_boxes(model, issues, page_name="Architecture", ids=("region", "vpc"), cloud_id=None, flow=False):
+    """Hierarchy-agnostic scope check on ABSOLUTE positions: VPC box inside Region box; VPC-bound icons inside
+    the VPC; Region-only services inside the Region but outside the VPC; global services outside the Region
+    (and, when a cloud box is given, inside it)."""
+    cells = {c.get("id"): c for c in model.iter("mxCell")}
+    rid, vid = ids
+    if rid not in cells or vid not in cells:
+        return
+
+    def box(c):
+        x, y = _abs_xy(cells, c); g = _geo(c)
+        return x, y, x + g["width"], y + g["height"]
+
+    def inside(b, o, tol=1):
+        return b[0] >= o[0] - tol and b[1] >= o[1] - tol and b[2] <= o[2] + tol and b[3] <= o[3] + tol
+
+    def centre_in(b, o):
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        return o[0] <= cx <= o[2] and o[1] <= cy <= o[3]
+    R, V = box(cells[rid]), box(cells[vid])
+    C = box(cells[cloud_id]) if cloud_id in cells else None
+    if not inside(V, R):
+        issues.append(f"[{page_name}] '{vid}' is not visually inside '{rid}' (vpc x {V[0]:.0f}-{V[2]:.0f}, "
+                      f"y {V[1]:.0f}-{V[3]:.0f} vs region x {R[0]:.0f}-{R[2]:.0f}, y {R[1]:.0f}-{R[3]:.0f}) "
+                      f"- check parent and coordinate frame")
+    region_only = REGION_ONLY_SCOPE + (FLOW_REGION_EXTRA if flow else ())
+    for c in cells.values():
+        m = re.search(r"resIcon=mxgraph\.aws4\.(\w+)", c.get("style") or "")
+        if not m or _geo(c) is None:
+            continue
+        res, b = m.group(1), box(c)
+        if res in VPC_BOUND_SCOPE and not centre_in(b, V):
+            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is VPC-bound but sits outside the VPC box")
+        if res in region_only and (not centre_in(b, R) or centre_in(b, V)):
+            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is a regional service: it must be inside the "
+                          f"Region box and outside the VPC box")
+        if res in GLOBAL_SCOPE and (centre_in(b, R) or (C is not None and not centre_in(b, C))):
+            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is a global service: it must sit inside the "
+                          f"cloud and outside the Region box")
+
+
 def main():
-    if len(sys.argv) != 2:
-        print("usage: validate-drawio.py <file.drawio.xml>")
+    args = sys.argv[1:]
+    allow = []
+    while "--allow" in args:                      # --allow <substring>: report matching issues as WARN, do not fail
+        i = args.index("--allow")
+        if i + 1 >= len(args):
+            print("usage: validate-drawio.py <file.drawio.xml> [--allow <issue-substring> ...]")
+            return 1
+        allow.append(args[i + 1].lower()); del args[i:i + 2]
+    if len(args) != 1:
+        print("usage: validate-drawio.py <file.drawio.xml> [--allow <issue-substring> ...]")
         return 1
-    path = Path(sys.argv[1])
+    path = Path(args[0])
     issues = []
 
     # Detect if this is a reference/template file (not a final output)
@@ -585,6 +819,11 @@ def main():
         check_icon_overlaps(arch_model, issues, "Architecture")
         check_multiaz_db_placement(arch_model, issues, "Architecture")
         check_waf_placement(arch_model, issues, "Architecture")
+        check_container_wrap(arch_model, issues, "Architecture")
+        check_lane_geometry(arch_model, issues, "Architecture")
+        check_subnet_columns(arch_model, issues, "Architecture")
+        check_straight_edges(arch_model, issues, "Architecture")
+        check_scope_boxes(arch_model, issues, "Architecture")
     elif "Architecture" in page_names:
         issues.append("[Architecture] Could not parse mxGraphModel from Architecture page")
 
@@ -595,6 +834,7 @@ def main():
         check_canvas_and_frame(flow_model, issues, "Flow")
         check_icon_dimensions_and_stencils(flow_model, valid, issues, "Flow")
         check_unique_ids_and_parents(flow_model, issues, "Flow")
+        check_scope_boxes(flow_model, issues, "Flow", ids=("f-region", "f-vpc"), cloud_id="f-cloud", flow=True)
     elif "Flow" in page_names:
         issues.append("[Flow] Could not parse mxGraphModel from Flow page")
 
@@ -602,13 +842,19 @@ def main():
     check_page_name_consistency(page_models, issues)
 
     # 6. Report results
+    warned = [f for f in issues if any(a in f.lower() for a in allow)]
+    issues = [f for f in issues if f not in warned]
     if issues:
         print(f"FAIL ({len(issues)} issue(s)):")
         for f in issues:
             print(f"  - {f}")
+        for f in warned:
+            print(f"  ~ WARN (allowed): {f}")
         return 1
 
-    print("PASS")
+    print("PASS" if not warned else f"PASS ({len(warned)} allowed warning(s))")
+    for f in warned:
+        print(f"  ~ WARN (allowed): {f}")
     return 0
 
 

@@ -6,12 +6,14 @@ on:
     paths:
       - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
       - '.kiro/scripts/validate-drawio.py'
+      - '.kiro/scripts/test-validator.py'
       - '.github/workflows/validate.yml'
   pull_request:
     branches: [main]
     paths:
       - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
       - '.kiro/scripts/validate-drawio.py'
+      - '.kiro/scripts/test-validator.py'
 
 jobs:
   validate:
@@ -29,6 +31,9 @@ jobs:
           echo "=== Validating canonical skeleton ==="
           python3 .kiro/scripts/validate-drawio.py .kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
 
+      - name: Validator regression tests
+        run: python3 .kiro/scripts/test-validator.py
+
       - name: Validate example diagrams (if present)
         run: |
           echo "=== Checking diagram examples ==="
@@ -39,3 +44,23 @@ jobs:
             fi
           done
         continue-on-error: true
+
+  render:
+    # Best effort and non-blocking: gives a reviewer a rendered image of the skeleton (label / waypoint
+    # clearance can only be judged visually). UNVERIFIED CLI flags - adjust to the image's documented usage.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render skeleton pages to PNG
+        run: |
+          mkdir -p render
+          for page in 0 1; do
+            docker run --rm -w /data -v "$(pwd)":/data rlespinasse/drawio-desktop-headless \
+              -x -f png -p $page -o render/skeleton-page-$page.png \
+              .kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skeleton-render
+          path: render/

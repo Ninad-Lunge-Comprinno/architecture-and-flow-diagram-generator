@@ -6,7 +6,8 @@
     "read",
     "write",
     "grep",
-    "glob"
+    "glob",
+    "shell"
   ],
   "allowedTools": [
     "read",
@@ -18,6 +19,11 @@
     "write": {
       "allowedPaths": [
         "outputs/**"
+      ]
+    },
+    "shell": {
+      "allowedCommands": [
+        "python3 \\.kiro/scripts/validate-drawio\\.py (outputs/[A-Za-z0-9._/-]+|\\.kiro/skills/arch-diagram/references/skeleton-3az)\\.drawio\\.xml( --allow scenario-b)?"
       ]
     }
   },

@@ -158,22 +158,27 @@ decorative, inferred, and all-to-all arrows.
 
 1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
    committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
-   it is missing, the most recent validated output in
-   the most recent validated output in `outputs/` is the fallback.
-2. Replace `PROJECT_NAME` on both pages and fill in the metadata.
-3. Look up every coordinate you need in `references/coords-cheatsheet.md` —
-   do not calculate from scratch.
+   it is missing, stop and tell the user — never rebuild the containers by hand.
+2. Replace `PROJECT_NAME` on both pages and fill in the metadata. The skeleton ships the baseline
+   (CloudWatch, CloudTrail, KMS in the regional row; IAM in the global band) live; Secrets Manager, ACM and ECR
+   are commented optional slots — uncomment only what is requested or required (ECR whenever there is an
+   ECS/EKS lane). For Scenario B/D (no VPC / non-AWS) delete the VPC, AZ, IGW and ALB cells.
+3. Look up every coordinate you need in `references/coords-cheatsheet.md` — presets first, formulas
+   otherwise. After **any** change to the subnet columns (2-icon subnet, dual lanes, a lane) re-apply the
+   **wrap rule** to the five containers and the border, and **re-centre** the regional row and global band.
 4. Add service icons into the subnet slots (uncomment the SLOT comments and
    fill in `resIcon` and `fillColor` from the cheatsheet).
 5. If compute spans AZ rows, uncomment the cluster lane block and fill in the
    lane label and task icon stencil.
 6. Add edges (all `parent="1"`).
 7. Fill in the Flow page nodes and edges.
-8. Run the validator before finalizing:
+8. Run the validator before finalizing (the agent's `shell` tool is allowed to run exactly this command):
    ```
    python3 .kiro/scripts/validate-drawio.py <output-file.drawio.xml>
    ```
-   If validation fails, fix the issues. CI also runs this check on PRs.
+   Fix every issue and re-run until it prints `PASS`; paste the raw output in the delivery summary. For a known
+   Scenario B-VPC false positive re-run with `--allow scenario-b` and state the reason. CI also runs the
+   validator and its regression test.
 
 Do not write the container frame, logo, title block, or regional services row
 from scratch — they are already in the skeleton with the correct values.
@@ -204,10 +209,9 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 #### A. Canvas and frame
 1. **Canvas** — `mxGraphModel` has `pageWidth="850" pageHeight="1100"`. Outer
    border: `rounded=0; strokeColor=#000000; strokeWidth=3; fillColor=none`.
-   NOT `strokeColor=#0066CC` or `fillColor=default`. Canvas ~3100×2600 (arch) or ~2500×1200 (flow).
+   NOT `strokeColor=#0066CC` or `fillColor=default`. Architecture border: width `cloud_x + cloud_w + 113` (2570 for the shipped skeleton), height 2600; Flow border 2500×1200.
 2. **Logo** — brand/f-brand style includes `strokeColor=none`. Base64 blob is the
-   full Comprinno logo from the skeleton (3404 chars starting `iVBORw0KGgoAAAANSUhEUgAAAJ8`).
-   No truncated placeholder blob.
+   full Comprinno logo copied from the skeleton. No truncated placeholder blob, never re-encoded from a local file.
 3. **Title block** — both pages have project name, Version, Date, Creator, Reviewer.
    Title block does not overlap the logo (`x ≥ 300`).
 4. **Two pages** — named exactly `Architecture` and `Flow` (case-sensitive).
@@ -233,7 +237,8 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 9. **Container styles** — Cloud (`dashed=0 strokeColor=#232F3E`), Region (`dashed=1
    strokeColor=#147EBA`), VPC (`dashed=0 strokeColor=#248814`), AZ (`dashed=1
    strokeColor=#545B64`). All from house-style.md §6. `strokeWidth=2` on containers.
-10. **Global vs regional placement** — IAM, Route 53, CloudFront, WAF → `parent=cloud`.
+10. **Global vs regional placement** — IAM, Route 53, CloudFront → `parent=cloud`. A WAF fronting CloudFront →
+    `parent=cloud`; a WAF fronting an ALB is regional → `parent=region`.
     ECR, ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, Lambda → `parent=region`.
     IGW, ALB, subnets, lanes, compute → `parent=vpc` or deeper. No compute icon
     floating directly as a `vpc` child without a subnet or lane parent.
@@ -264,34 +269,34 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     Icons within subnets: `y=65`, x centered using `x = (w - n×120 - (n-1)×40) / 2`.
     Subnets identical across all AZ rows so columns align.
     
-    **Subnet centering within AZ:** Subnets should be positioned to create balanced
-    whitespace within the AZ container. Use the standard AZ layout:
-    - public: `x=35`
-    - app: `x = public_x + public_w + 40`
-    - db: `x = app_x + app_w + 40`
-    AZ width should accommodate all three subnets with ~40px right margin.
+    **Wrap rule (containers wrap their content):** `az_w = content_right + 40`, then
+    `vpc_w = 520 + az_w + 65`, `region_w = 85 + vpc_w + 85`, `cloud_w = 247 + region_w + 85`,
+    `border_w = 260 + cloud_w + 113`. No threshold and no proportional scaling. Presets D1/D2/D3 are in the
+    cheatsheet; the validator enforces the rule.
     
-15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
-    3-AZ defaults: x=1010, y=170, w=300, h=1110. Task icons centred in each AZ's app subnet
-    region: task_y = 25/485/945 (single lane) or 85/545/1005 (dual lanes with +60 label clearance).
-    Badge 45×45 at x=1018, y=178.
-    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=2`.
+15. **Cluster lane geometry** — lane `parent=vpc`, renders **inside the app-subnet column** with a 35px left /
+    20px right gap (`app_w = lane_w + 55`; dual lanes 240 each, 20px apart). Values depend on the public-subnet
+    width — use the cheatsheet's lane table (D1: lane_x=930; D3: lane_x=1010; y=170, w=300, h=1110). **Tasks are
+    children of the lane** (`parent=<lane id>`), centred per AZ: task_y = 25/485/945 (dual lanes: +60 only when
+    the lane label wraps). Badge 45×45 at `lane_x+8, lane_y+8`, `parent=vpc`.
+    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
     ECS/EKS stencils are `ecs`/`eks` (not `elastic_container_service`/`elastic_kubernetes_service`).
     **Task icon labels**: Use the task type ("Fargate Task", "EC2 Node", "Worker") — NOT the
     cluster name. The cluster name goes in the lane label only.
 16. **IGW placement** — vpc-relative `x=-60 y=650`. Straddles the VPC left border.
-17. **Row spacing** — regional row and global band each independently centre-aligned
-    at 180px pitch. After any icon add/delete, re-verify no double-width gaps remain.
-18. **WAF placement** — `parent=cloud`, cloud-rel y≈85 (above region top at 285),
-    x = `alb_abs_xc − 60 − cloud_abs_x`. Vertical edge WAF→ALB: `exitY=1 → entryY=0`.
-    WAF is NOT in the regional row and NOT `parent=1`.
+17. **Row spacing** — regional row and global band are each **centred in their own container** at 180px
+    pitch (`start_x = round_half_up((container_w − (n×120 + (n−1)×60))/2)`). Re-centre after any icon add/delete
+    or width change; the validator fails an off-centre row.
+18. **WAF placement** — by scope, **no edge on the Architecture page**. Fronting CloudFront: global band
+    (`parent=cloud`, y=70). Fronting an ALB: regional row (`parent=region`, y=65). Never `parent=1`, never inside
+    the VPC. The WAF → target association is a dashed "inspect" edge on the Flow page.
 
 ---
 
 #### E. Route 53, CloudFront, and inbound path
 
 19. **Route 53 placement** — Route53 is DNS resolution, NOT part of the network request
-    path. It ALWAYS goes in the **global band** at `cloud_rel x=72, y=70`, alongside IAM.
+    path. It ALWAYS goes in the **global band** (`y=70`, x from the band formula, left of IAM), alongside IAM.
     - Do NOT place Route53 inline with IGW — that implies it's a network hop, which is wrong.
     - Do NOT draw Route53 edges on the Architecture page — DNS is shown on Flow page only.
     - Route53 icon shows "DNS is managed" not "requests go through Route53".
@@ -306,8 +311,7 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
     - **Without CloudFront**: Users → IGW → ALB → cluster
     - Route53 is NEVER on the Architecture page inbound path.
     
-22. **Users position** — `parent=1` (outside cloud), `x ≤ 100` so abs-right=220,
-    leaving 40px gap to cloud left=260.
+22. **Users position** — `parent=1` (outside cloud), default `x=60`; any `x ≤ 100` keeps a 40px gap to the cloud.
 
 23. **Internal ALB** — when architecture has both external and internal ALBs:
     - External ALB: vpc-rel `x=160, y=650` (inline with IGW, receives internet traffic)
@@ -334,55 +338,55 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
       CloudWatch, KMS, and all other service connections belong on the **Flow page only**.
     The Architecture page shows *where services are deployed*, not *how they communicate*.
 28. **Baseline edge routing** — the ECR edge that exits a lane top (`exitY=0`)
-    MUST use horizontal waypoints at `y = pvpc_abs_top − 30` before turning toward
-    the target. No exceptions. Edges from nested task icons create vertical lines.
+    MUST use horizontal waypoints at `y = vpc_abs_top − 12` (783 at default scale; the gap between the
+    regional-row labels and the VPC border) before turning toward the target. No exceptions. Edges from nested task icons create vertical lines.
 29. **Multi-DB edges** — when EKS/ECS connects to two icons in the same db subnet
     (e.g. RDS + DocumentDB), use distinct exit/entry points: primary via computed
     exitY (left entry), secondary via entryY=0 (top entry). Never two edges from
     the identical exit point to adjacent icons.
-30. **EKS/ECS→DB exitY** — use the formula `(db_abs_yc − lane_abs_top) / lane_h`,
-    not 0.5. Verify it produces a straight horizontal line (source and target share
-    the same abs y-centre).
-30. **Edge density** — prefer ≤8 edges on the architecture page. Decorative or
+30. **EKS/ECS→DB exitY** — use `(db_abs_yc − lane_abs_top) / lane_h` to **three decimals**
+    (0.077 / 0.491 / 0.905 at default scale), not 0.5. The line must be straight: the validator fails any jog
+    over 2px.
+31. **Edge density** — prefer ≤8 edges on the architecture page. Decorative or
     all-to-all arrows make the diagram unreadable. Remove non-essential edges before
     adding new ones.
-31. **Edge labels** — short (≤4 words), on straight segments, `labelBackgroundColor=#FFFFFF`.
+32. **Edge labels** — short (≤4 words), on straight segments, `labelBackgroundColor=#FFFFFF`.
     No labels on diagonal or near-vertical segments (they overlap icons/borders).
 
 ---
 
 #### G. Bastion and management
-32. **Bastion / jump-box** — management EC2 instances go in **AZ1 or AZ3** public
+33. **Bastion / jump-box** — management EC2 instances go in **AZ1 or AZ3** public
     subnets, never in AZ2. The middle AZ's public subnet sits at the same y-level
     as the ALB→cluster horizontal edge; an icon there causes crossings.
 
 ---
 
 #### H. Flow page
-33. **Flow containers (recommended)** — when the flow involves VPC-scoped services,
-    showing Cloud → Region → VPC containers provides scope context.
-    Service parents should match their AWS scope (IGW/ALB/ECS/EKS → `f-vpc`;
-    S3/RDS/MSK/Lambda/Bedrock → `f-region`; Route53/WAF/CloudFront → `f-cloud`; Users → root).
-    Simpler flows may omit containers entirely — use judgement based on complexity.
-34. **Flow spine alignment** — all spine nodes share the same abs y-centre.
-    Compute `spine_abs_yc = vay + (vch−120)/2 + 60` and derive every node y from it.
-    Any y mismatch → edge bend. Regional services must be right of VPC right border.
-35. **Flow spacing** — spine nodes 320px centre-to-centre. Branch nodes 240px above/below spine.
-36. **Flow edges** — numbered main-path steps (①②③…). Dashed edges for async/optional paths.
+34. **Flow scope boxes (required, flat layout)** — Cloud / Region / VPC are decorative boxes (`container=0`,
+    `parent=1`, absolute coordinates, cheatsheet "Flow page"). Every node is `parent=1`. Each node sits in the
+    box of its scope: IGW, ALB, compute, RDS/Aurora/DocumentDB/MSK/ElastiCache → VPC box; S3, Bedrock, Transcribe,
+    SQS, Lambda, a WAF fronting an ALB → Region box, outside the VPC; CloudFront, Route 53, IAM, a WAF fronting
+    CloudFront → Cloud box, outside the Region; Users → outside the cloud.
+35. **Flow spine alignment** — every spine node has the same y (top 670, centre 730 at default scale); any
+    mismatch → edge bend. Regional services sit right of the VPC border.
+36. **Flow spacing** — spine pitch 320px centre-to-centre (`x = 220 + 320k`). Branch nodes (240px above/below)
+    are region-scope services only, anchored right of the VPC; never branch off a VPC node.
+37. **Flow edges** — numbered main-path steps (①②③…). Dashed edges for async/optional paths.
     No all-to-all arrows. Each edge represents a real step in the primary flow.
 
 ---
 
 #### I. Architecture–Flow consistency
-37. **Same names** — service labels are identical on both pages (e.g. "EKS Fargate (App)"
+38. **Same names** — service labels are identical on both pages (e.g. "EKS Fargate (App)"
     not "EKS" on one and "EKS Fargate" on the other).
-38. **Same scope** — if a service is inside the VPC on the architecture page, it is
+39. **Same scope** — if a service is inside the VPC on the architecture page, it is
     connected to the VPC boundary on the flow page. No service switches scope between pages.
 
 ---
 
 #### J. Provider-specific (Azure / GCP)
-39. **No AWS services on non-AWS diagrams** — Azure/GCP diagrams use only the
+40. **No AWS services on non-AWS diagrams** — Azure/GCP diagrams use only the
     provider's own stencils (`shapes-azure.md` / `shapes-gcp.md`). No IAM, CloudWatch,
     or other AWS icons. Apply the provider's actual scope hierarchy.
 
@@ -390,8 +394,7 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 
 If any check fails, fix the specific cell(s) before saving. Report preview status
 accurately: if a rendering tool was used, state what was checked; if not, state
-"no rendering performed" and list which structural checks passed. State that visual
-preview was unavailable (no MCP) and list which checks passed.
+"no rendering performed". Always include the validator's raw output.
 
 Save the result to the requested output path.
 
@@ -519,7 +522,7 @@ In this case: keep the VPC, place VPC-attached Lambda inside app subnets
 empty. The validator's "Scenario B" rule is a heuristic that cannot see the
 source; when a NAT Gateway / Public IPv4 / Data Transfer is present, its
 warning is a known false positive — do NOT remove the VPC to silence it.
-Note the false positive in the delivery summary instead.
+Re-run the validator with `--allow scenario-b` and note the reason in the delivery summary instead.
 
 **Scenario C — CloudFront + private S3 origin**
 - S3 appears as a CloudFront origin in the cloud band (not as a public bucket).

@@ -1,0 +1,2944 @@
+From 53aa56f06eb6c0fc591341c0fdd8a415a33acd79 Mon Sep 17 00:00:00 2001
+From: review <review@example.com>
+Date: Fri, 16 Oct 2026 18:46:07 +0000
+Subject: [PATCH] Round 2: wrap rule + presets, nested hierarchy kept, flat
+ Flow with scope boxes, scope-aware WAF, numbers-free steering, stricter
+ validator + regression tests, shell+skill agent config
+
+---
+ .github/workflows/validate.yml                |  25 +
+ .kiro/agents/arch-diagram.json                |   8 +-
+ .kiro/scripts/test-validator.py               | 197 +++++
+ .kiro/scripts/validate-drawio.py              | 296 ++++++-
+ .kiro/skills/arch-diagram/SKILL.md            | 111 +--
+ .../references/coords-cheatsheet.md           | 757 +++++-------------
+ .../arch-diagram/references/house-style.md    | 136 ++--
+ .../references/skeleton-3az.drawio.xml        | 250 +++---
+ .kiro/steering/arch-diagram-conventions.md    | 358 +++------
+ ARCHITECTURE.md                               |  52 +-
+ README.md                                     |   9 +-
+ 11 files changed, 1057 insertions(+), 1142 deletions(-)
+ create mode 100644 .kiro/scripts/test-validator.py
+
+diff --git a/.github/workflows/validate.yml b/.github/workflows/validate.yml
+index 9a18f6b..d87cec2 100644
+--- a/.github/workflows/validate.yml
++++ b/.github/workflows/validate.yml
+@@ -6,12 +6,14 @@ on:
+     paths:
+       - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
+       - '.kiro/scripts/validate-drawio.py'
++      - '.kiro/scripts/test-validator.py'
+       - '.github/workflows/validate.yml'
+   pull_request:
+     branches: [main]
+     paths:
+       - '.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml'
+       - '.kiro/scripts/validate-drawio.py'
++      - '.kiro/scripts/test-validator.py'
+ 
+ jobs:
+   validate:
+@@ -29,6 +31,9 @@ jobs:
+           echo "=== Validating canonical skeleton ==="
+           python3 .kiro/scripts/validate-drawio.py .kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
+ 
++      - name: Validator regression tests
++        run: python3 .kiro/scripts/test-validator.py
++
+       - name: Validate example diagrams (if present)
+         run: |
+           echo "=== Checking diagram examples ==="
+@@ -39,3 +44,23 @@ jobs:
+             fi
+           done
+         continue-on-error: true
++
++  render:
++    # Best effort and non-blocking: gives a reviewer a rendered image of the skeleton (label / waypoint
++    # clearance can only be judged visually). UNVERIFIED CLI flags - adjust to the image's documented usage.
++    runs-on: ubuntu-latest
++    continue-on-error: true
++    steps:
++      - uses: actions/checkout@v4
++      - name: Render skeleton pages to PNG
++        run: |
++          mkdir -p render
++          for page in 0 1; do
++            docker run --rm -w /data -v "$(pwd)":/data rlespinasse/drawio-desktop-headless \
++              -x -f png -p $page -o render/skeleton-page-$page.png \
++              .kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
++          done
++      - uses: actions/upload-artifact@v4
++        with:
++          name: skeleton-render
++          path: render/
+diff --git a/.kiro/agents/arch-diagram.json b/.kiro/agents/arch-diagram.json
+index 80580cc..e1b3544 100644
+--- a/.kiro/agents/arch-diagram.json
++++ b/.kiro/agents/arch-diagram.json
+@@ -6,7 +6,8 @@
+     "read",
+     "write",
+     "grep",
+-    "glob"
++    "glob",
++    "shell"
+   ],
+   "allowedTools": [
+     "read",
+@@ -19,6 +20,11 @@
+       "allowedPaths": [
+         "outputs/**"
+       ]
++    },
++    "shell": {
++      "allowedCommands": [
++        "python3 \\.kiro/scripts/validate-drawio\\.py (outputs/[A-Za-z0-9._/-]+|\\.kiro/skills/arch-diagram/references/skeleton-3az)\\.drawio\\.xml( --allow scenario-b)?"
++      ]
+     }
+   },
+   "resources": [
+diff --git a/.kiro/scripts/test-validator.py b/.kiro/scripts/test-validator.py
+new file mode 100644
+index 0000000..d54b662
+--- /dev/null
++++ b/.kiro/scripts/test-validator.py
+@@ -0,0 +1,197 @@
++#!/usr/bin/env python3
++"""Regression tests for validate-drawio.py and the skeleton (exit 0 = every case behaves).
++
++Fixtures are built from the skeleton (lane block uncommented, an Aurora icon in a DB subnet, a lane->DB edge,
++optional WAF / Lambda / NAT). Expected numbers come from the skeleton's own geometry or from the wrap rule
++re-implemented here, so the tests stay valid if constants change.
++Usage: python3 .kiro/scripts/test-validator.py
++"""
++import re, subprocess, sys, tempfile
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++VALIDATOR = ROOT / ".kiro/scripts/validate-drawio.py"
++SKEL = (ROOT / ".kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml").read_text(encoding="utf-8")
++
++ICON = ('        <mxCell id="{i}" parent="{p}" value="&lt;b&gt;{l}&lt;/b&gt;" style="sketch=0;outlineConnect=0;'
++        'fillColor={f};strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;'
++        'html=1;whiteSpace=wrap;fontSize=18;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.{r};" '
++        'vertex="1"><mxGeometry x="{x}" y="{y}" width="120" height="120" as="geometry" /></mxCell>\n')
++EDGE = ('        <mxCell id="{i}" edge="1" parent="1" source="{s}" target="{t}" '
++        'style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=4;{extra}">'
++        '<mxGeometry relative="1" as="geometry" /></mxCell>\n')
++FLOW_MARK = "        <!-- ── FLOW EDGES"
++
++
++def rhu(x):
++    return int(x + 0.5)
++
++
++def geom(cid, xml=SKEL):
++    m = re.search(r'<mxCell id="%s".*?<mxGeometry x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)"' % cid, xml, re.S)
++    return tuple(float(v) for v in m.groups())
++
++
++def set_geom(xml, cid, **kw):
++    def fix(m):
++        blk = m.group(0)
++        for k, v in kw.items():
++            blk = re.sub(r'(<mxGeometry[^>]*?\b%s=")[-\d.]+(")' % k, r'\g<1>%s\2' % v, blk, 1)
++        return blk
++    return re.sub(r'<mxCell id="%s".*?</mxCell>' % cid, fix, xml, 1, flags=re.S)
++
++
++def uncomment_lane(xml):
++    lines = xml.split("\n")
++    i = next(n for n, l in enumerate(lines) if 'id="ecslane"' in l)
++    a = i - 1
++    assert lines[a].strip() == "<!--", "lane block comment start not found"
++    b = next(n for n in range(i, len(lines)) if lines[n].strip() == "-->")
++    return "\n".join(lines[:a] + lines[a + 1:b] + lines[b + 1:])
++
++
++LANE = uncomment_lane(SKEL)
++
++
++def exit_y(az_n):
++    _, lane_y, _, lane_h = geom("ecslane", LANE)
++    return (geom(f"az{az_n}")[1] + geom(f"db{az_n}")[1] + 65 + 60 - lane_y) / lane_h
++
++
++def fixture(db_n=1, y=None, extra=""):
++    xml = LANE
++    y = f"{exit_y(db_n):.3f}" if y is None else y
++    add = ICON.format(i="aurora1", p=f"db{db_n}", l="Aurora Writer", f="#C925D1", r="aurora", x=90, y=65)
++    add += EDGE.format(i="e-db", s="ecslane", t="aurora1", extra=f"exitX=1;exitY={y};entryX=0;entryY=0.5;")
++    xml = xml.replace("</root>", add + extra + "    </root>", 1)
++    return xml.replace(FLOW_MARK, ICON.format(i="f-task", p="1", l="Fargate Task", f="#ED7100", r="fargate", x=860, y=670) + FLOW_MARK, 1)
++
++
++def add_icon(xml, **kw):
++    return xml.replace("</root>", ICON.format(**kw) + "    </root>", 1)
++
++
++def relayout(xml, pub_w=300, app_w=355, db_w=300):
++    """Re-lay the skeleton for other subnet widths using the wrap rule (independent re-implementation)."""
++    app_x = 35 + pub_w + 40
++    db_x = app_x + app_w + 40
++    az_w = db_x + db_w + 40
++    vpc_w = 520 + az_w + 65
++    reg_w = 85 + vpc_w + 85
++    cld_w = 247 + reg_w + 85
++    for n in (1, 2, 3):
++        xml = set_geom(xml, f"pub{n}", width=pub_w)
++        xml = set_geom(xml, f"app{n}", x=app_x, width=app_w)
++        xml = set_geom(xml, f"db{n}", x=db_x, width=db_w)
++        xml = set_geom(xml, f"az{n}", width=az_w)
++    xml = set_geom(xml, "vpc", width=vpc_w)
++    xml = set_geom(xml, "region", width=reg_w)
++    xml = set_geom(xml, "cloud", width=cld_w)
++    xml = set_geom(xml, "border", width=260 + cld_w + 113)
++    start = rhu((reg_w - 480) / 2)
++    for k, cid in enumerate(("cloudwatch", "cloudtrail", "kms")):
++        xml = set_geom(xml, cid, x=start + 180 * k)
++    return set_geom(xml, "iam", x=rhu((cld_w - 120) / 2))
++
++
++def with_regional_waf(xml, edge=False):
++    """Add a regional WAF as the 4th regional-row icon and re-centre the row (start_x from the wrap rule)."""
++    reg_w = geom("region", xml)[2]
++    start = rhu((reg_w - (4 * 120 + 3 * 60)) / 2)
++    for k, cid in enumerate(("cloudwatch", "cloudtrail", "kms")):
++        xml = set_geom(xml, cid, x=start + 180 * k)
++    xml = add_icon(xml, i="waf", p="region", l="AWS WAF", f="#DD344C", r="waf", x=start + 540, y=65)
++    if edge:
++        xml = xml.replace("</root>", EDGE.format(i="e-waf", s="waf", t="alb", extra="") + "    </root>", 1)
++    return xml
++
++
++def no_entry(xml):
++    return re.sub(r'<mxCell id="(igw|alb)".*?</mxCell>\n', "", xml, flags=re.S)
++
++
++FLOW_SLOTS = [  # (id, label, stencil, fill, x, y) — the positions documented in the cheatsheet "Flow page" table
++    ("fn-users", "Users", "users", "#232F3E", 220, 670),
++    ("fn-cf", "CloudFront", "cloudfront", "#8C4FFF", 540, 670),
++    ("fn-alb", "ALB", "application_load_balancer", "#8C4FFF", 860, 670),
++    ("fn-ecs", "ECS Fargate", "ecs", "#ED7100", 1180, 670),
++    ("fn-rds", "Aurora", "aurora", "#C925D1", 1500, 670),
++    ("fn-s3", "S3", "s3", "#7AA116", 1820, 670),
++    ("fn-r53", "Route 53", "route_53", "#8C4FFF", 470, 910),
++    ("fn-waf", "AWS WAF", "waf", "#DD344C", 540, 250),
++]
++
++
++def with_flow_slots(xml, move=None):
++    nodes = "".join(ICON.format(i=i, p="1", l=l, f=f, r=r, x=(move or {}).get(i, (x, y))[0], y=(move or {}).get(i, (x, y))[1])
++                    for i, l, r, f, x, y in FLOW_SLOTS)
++    return xml.replace(FLOW_MARK, nodes + FLOW_MARK, 1)
++
++
++def run(xml, *args):
++    with tempfile.NamedTemporaryFile("w", suffix=".drawio.xml", delete=False, encoding="utf-8") as f:
++        f.write(xml)
++    r = subprocess.run([sys.executable, str(VALIDATOR), f.name, *args], capture_output=True, text=True)
++    return r.returncode, r.stdout
++
++
++def main():
++    ok = fixture()
++    cases = [  # (name, xml, expected substring | None for PASS, extra args)
++        ("skeleton passes", SKEL, None, ()),
++        ("lane + AZ1/AZ2/AZ3 db edges pass", fixture(2), None, ()),
++        ("AZ3 edge passes", fixture(3), None, ()),
++        ("D2 dual-lane columns via the wrap rule pass (no lane)", relayout(SKEL, app_w=555), None, ()),
++        ("D3 2-icon public subnet via the wrap rule passes", relayout(SKEL, pub_w=380), None, ()),
++        ("D3 with the lane block re-based to app_x=455 passes", set_geom(relayout(LANE, pub_w=380), "ecslane", x=1010), None, ()),
++        ("2-icon public subnet but containers not re-wrapped", set_geom(SKEL, "pub1", width=380), "app subnet x must be pub_right+40", ()),
++        ("exitY off by 0.005 (>2px jog)", fixture(3, y=f"{exit_y(3) + 0.005:.3f}"), "not straight", ()),
++        ("exitY rounded to 2 decimals jogs", fixture(3, y=f"{exit_y(3) + 0.01:.3f}"), "not straight", ()),
++        ("lane gaps 27/27 instead of 35/20", set_geom(ok, "ecslane", x=geom("ecslane", ok)[0] - 8, width=geom("ecslane", ok)[2] + 1), "lane gaps", ()),
++        ("lane outside app column", set_geom(ok, "ecslane", x=500), "not inside the app-subnet column", ()),
++        ("tasks parented to subnet", re.sub(r'(id="ecs[123]" parent=")ecslane"', r'\1app1"', ok), "must be children of the lane", ()),
++        ("db subnet not app_right+40", set_geom(ok, "db1", x=geom("db1", ok)[0] + 100), "db subnet x must be app_right+40", ()),
++        ("AZ wider than content (old 1640 default)", set_geom(set_geom(set_geom(ok, "az1", width=1640), "az2", width=1640), "az3", width=1640), "wrap rule", ()),
++        ("VPC width off", set_geom(ok, "vpc", width=geom("vpc", ok)[2] + 30), "vpc width", ()),
++        ("border still 3100", set_geom(ok, "border", width=3100), "border width", ()),
++        ("regional row not re-centred", set_geom(ok, "kms", x=geom("kms", ok)[0] + 120), "regional services row is not centred", ()),
++        ("global band not re-centred", set_geom(ok, "iam", x=geom("iam", ok)[0] + 200), "global band is not centred", ()),
++        ("flow VPC box missing", re.sub(r'<mxCell id="f-vpc".*?</mxCell>\n', "", ok, flags=re.S), "missing scope box 'f-vpc'", ()),
++        ("flow scope box is a container", re.sub(r'(<mxCell id="f-region".*?style="[^"]*)container=0', r'\1container=1', ok, 1, flags=re.S), "must be decorative", ()),
++        ("flow node parented to a box", ok.replace('id="f-task" parent="1"', 'id="f-task" parent="f-vpc"'), "Flow page is flat", ()),
++        ("flow title metadata missing", ok.replace("Creator: To be filled", ""), "missing 'Creator'", ()),
++        ("flow VPC node outside the VPC box", set_geom(ok, "f-task", x=1900), "VPC-bound but sits outside", ()),
++        ("Flow nodes at the documented slots pass", with_flow_slots(ok), None, ()),
++        ("Flow: S3 dropped inside the VPC box", with_flow_slots(ok, {"fn-s3": (1180, 500)}), "regional service", ()),
++        ("Flow: Route 53 inside the Region box", with_flow_slots(ok, {"fn-r53": (900, 910)}), "global service", ()),
++        ("Flow: ALB outside the VPC box", with_flow_slots(ok, {"fn-alb": (1820, 430)}), "VPC-bound but sits outside", ()),
++        ("blank-box ACM stencil", add_icon(ok, i="acm", p="region", l="ACM", f="#DD344C", r="certificate_manager", x=1500, y=65), "unknown resIcon", ()),
++        ("WAF fronting an ALB, regional row, passes", with_regional_waf(ok), None, ()),
++        ("WAF with parent=1 fails", add_icon(ok, i="waf", p="1", l="AWS WAF", f="#DD344C", r="waf", x=1300, y=65), "WAF 'waf' has parent '1'", ()),
++        ("WAF edge on the Architecture page", with_regional_waf(ok, edge=True), "Flow page only", ()),
++        ("VPC re-parented without shifting (drift)", re.sub(r'(<mxCell id="vpc" parent=")region"', r'\1cloud"', ok, 1), "not visually inside", ()),
++        ("KMS in the global band", re.sub(r'(<mxCell id="kms" parent=")region"', r'\1cloud"', ok, 1), "regional service", ()),
++        ("ALB outside the VPC", re.sub(r'(<mxCell id="alb" parent=")vpc"', r'\1cloud"', ok, 1), "VPC-bound but sits outside", ()),
++        ("IAM inside the Region box", re.sub(r'(<mxCell id="iam" parent=")cloud"', r'\1region"', ok, 1), "global service", ()),
++    ]
++    nv = no_entry(SKEL)          # VPC container kept, no IGW/ALB, no ECS tasks
++    cases += [
++        ("Lambda in region + VPC, nothing VPC-bound (Scenario B)", add_icon(nv, i="fn", p="region", l="Lambda", f="#ED7100", r="lambda", x=100, y=400), "Scenario B", ()),
++        ("Scenario B acknowledged with --allow", add_icon(nv, i="fn", p="region", l="Lambda", f="#ED7100", r="lambda", x=100, y=400), None, ("--allow", "scenario-b")),
++        ("VPC-attached Lambda in a subnet passes", add_icon(nv, i="fn", p="app1", l="Lambda", f="#ED7100", r="lambda", x=90, y=65), None, ()),
++        ("NAT Gateway proves the VPC", add_icon(add_icon(nv, i="fn", p="region", l="Lambda", f="#ED7100", r="lambda", x=100, y=400), i="nat1", p="pub1", l="NAT Gateway", f="#8C4FFF", r="nat_gateway", x=90, y=65), None, ()),
++    ]
++    bad = 0
++    for name, xml, expect, extra in cases:
++        code, out = run(xml, *extra)
++        good = (code == 0 and out.startswith("PASS")) if expect is None else (code != 0 and expect in out)
++        print(("ok   " if good else "FAIL ") + name)
++        if not good:
++            bad += 1
++            print("     validator said:", out.strip()[:500])
++    print(f"{len(cases) - bad}/{len(cases)} cases behave")
++    return 1 if bad else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.kiro/scripts/validate-drawio.py b/.kiro/scripts/validate-drawio.py
+index dc9fd95..4f95970 100644
+--- a/.kiro/scripts/validate-drawio.py
++++ b/.kiro/scripts/validate-drawio.py
+@@ -219,7 +219,7 @@ def check_no_invented_vpc(model, issues, page_name="Architecture"):
+     if (has_lambda and not has_rds and not has_ecs and has_vpc
+             and not has_vpc_bound and not lambda_in_subnet):
+         issues.append(
+-            f"[{page_name}] Scenario B: diagram has Lambda+S3 but also contains a VPC container "
++            f"[{page_name}] Scenario B (scenario-b): diagram has Lambda+S3 but also contains a VPC container "
+             "with no VPC-bound resources (no NAT/IGW/endpoints, Lambda not in a subnet). "
+             "Lambda does not require a VPC unless explicitly specified."
+         )
+@@ -262,15 +262,14 @@ def check_flow_page(model, issues, page_name="Flow"):
+         issues.append(f"[{page_name}] Page has zero mxCell elements — empty or incorrectly parsed")
+         return
+ 
+-    # Check title block has metadata fields
++    # Title block must carry the metadata fields (same as the Architecture page)
+     title_cells = [c for c in cells
+                    if c.get('id', '').endswith('title') or c.get('id', '') == 'f-title']
+     for tc in title_cells:
+         val = tc.get('value', '')
+         for field in ['Version', 'Date', 'Creator', 'Reviewer']:
+-            # Only warn for the Architecture title which should have all metadata
+-            # Flow title typically just has project name and flow description
+-            pass  # Relaxed check - flow title just needs project name
++            if field not in val:
++                issues.append(f"[{page_name}] title block '{tc.get('id')}' missing '{field}' metadata")
+ 
+     # Check brand/logo cell has strokeColor=none
+     brand_cells = [c for c in cells if 'brand' in c.get('id', '')]
+@@ -279,9 +278,42 @@ def check_flow_page(model, issues, page_name="Flow"):
+         if 'shape=image' in style and 'strokeColor=none' not in style:
+             issues.append(f"[{page_name}] Logo cell '{bc.get('id')}' missing strokeColor=none (will show underline)")
+ 
+-    # Check cloud/region/vpc containers exist (optional for flow - just a note)
+-    containers = {c.get('id') for c in cells if 'container=1' in c.get('style', '')}
+-    # Note: f-cloud, f-region, f-vpc are recommended but not strictly required for all flows
++    # FLAT layout: f-cloud / f-region / f-vpc are REQUIRED decorative scope boxes (container=0), absolute
++    # coordinates, parent '1'; every node is parent '1' too. Nodes are checked against the boxes by position
++    # (see check_scope_boxes), so editing in draw.io can never re-parent or drift them.
++    by_id = {c.get('id'): c for c in cells}
++
++    def _g(c):
++        g = c.find('mxGeometry')
++        return None if g is None else {k: float(g.get(k) or 0) for k in ('x', 'y', 'width', 'height')}
++
++    boxes = {}
++    for cid in ('f-cloud', 'f-region', 'f-vpc'):
++        c = by_id.get(cid)
++        if c is None:
++            issues.append(f"[{page_name}] missing scope box '{cid}'")
++            continue
++        if 'container=1' in (c.get('style') or ''):
++            issues.append(f"[{page_name}] scope box '{cid}' must be decorative (container=0), not a parent")
++        if c.get('parent') != '1':
++            issues.append(f"[{page_name}] scope box '{cid}' must have parent '1' (flat layout)")
++        boxes[cid] = _g(c)
++
++    def _inside(i, o):
++        return i and o and i['x'] >= o['x'] and i['y'] >= o['y'] \
++            and i['x'] + i['width'] <= o['x'] + o['width'] and i['y'] + i['height'] <= o['y'] + o['height']
++    if all(boxes.get(k) for k in boxes) and len(boxes) == 3:
++        if not _inside(boxes['f-region'], boxes['f-cloud']):
++            issues.append(f"[{page_name}] 'f-region' is not inside 'f-cloud'")
++        if not _inside(boxes['f-vpc'], boxes['f-region']):
++            issues.append(f"[{page_name}] 'f-vpc' is not inside 'f-region'")
++    t = _g(by_id['f-title']) if 'f-title' in by_id else None
++    if t and boxes.get('f-cloud') and t['y'] + t['height'] > boxes['f-cloud']['y']:
++        issues.append(f"[{page_name}] title block overlaps 'f-cloud'")
++    for c in cells:
++        if c.get('vertex') == '1' and c.get('parent') not in ('1', None) and c.get('id') != 'f-border':
++            issues.append(f"[{page_name}] '{c.get('id')}' has parent '{c.get('parent')}': the Flow page is flat, "
++                          f"every node must be parent '1' with absolute coordinates")
+ 
+ 
+ def check_page_name_consistency(diagrams, issues):
+@@ -454,21 +486,20 @@ def check_multiaz_db_placement(model, issues, page_name="Architecture"):
+ 
+ 
+ def check_waf_placement(model, issues, page_name="Architecture"):
+-    """Check that WAF is placed in cloud band, not as parent=1."""
++    """WAF follows what it protects: CloudFront web ACL -> global band (parent cloud); ALB web ACL ->
++    regional row (parent region). Never root / inside the VPC. No WAF edges on the Architecture page."""
+     if model is None:
+         return
+-
+-    for cell in model.iter('mxCell'):
+-        style = cell.get('style', '')
+-        if 'mxgraph.aws4.waf' in style.lower():
+-            parent = cell.get('parent', '')
+-            cell_id = cell.get('id', '')
+-
+-            if parent == '1':
+-                issues.append(
+-                    f"[{page_name}] WAF '{cell_id}' has parent='1' (root). "
+-                    f"WAF is a global service and should have parent='cloud'."
+-                )
++    cells = {c.get('id'): c for c in model.iter('mxCell')}
++    for w in [c for c in cells.values() if 'mxgraph.aws4.waf' in (c.get('style') or '').lower()]:
++        if w.get('parent') not in ('cloud', 'region'):
++            issues.append(f"[{page_name}] WAF '{w.get('id')}' has parent '{w.get('parent')}'. Use parent='cloud' "
++                          f"(global band, fronting CloudFront) or parent='region' (regional row, fronting an ALB); "
++                          f"never root or inside the VPC.")
++        for e in cells.values():
++            if e.get('edge') == '1' and w.get('id') in (e.get('source'), e.get('target')):
++                issues.append(f"[{page_name}] edge '{e.get('id')}' touches WAF '{w.get('id')}': WAF associations "
++                              f"are drawn on the Flow page only")
+ 
+ 
+ def check_icon_dimensions_and_stencils(model, valid_stencils, issues, page_name):
+@@ -518,11 +549,214 @@ def check_unique_ids_and_parents(model, issues, page_name):
+             issues.append(f"[{page_name}] Cell '{c.get('id')}' has dangling parent '{p}'")
+ 
+ 
++def _abs_xy(cells, c):
++    x = y = 0.0
++    while c is not None and c.get("id") not in ("0", "1"):
++        g = c.find("mxGeometry")
++        if g is not None:
++            x += float(g.get("x") or 0); y += float(g.get("y") or 0)
++        c = cells.get(c.get("parent"))
++    return x, y
++
++
++def _geo(c):
++    g = c.find("mxGeometry")
++    return None if g is None else {k: float(g.get(k) or 0) for k in ("x", "y", "width", "height")}
++
++
++def check_container_wrap(model, issues, page_name="Architecture"):
++    """WRAP RULE: containers always wrap their content with fixed insets, and rows stay centred.
++    az_w = content_right + 40; vpc_w = az_x + az_w + 65; region_w = vpc_x + vpc_w + 85;
++    cloud_w = region_x + region_w + 85; border_w = cloud_x + cloud_w + 113 (insets 520/85/247 fixed)."""
++    cells = {c.get("id"): c for c in model.iter("mxCell")}
++    need = ("cloud", "region", "vpc", "az1")
++    if any(n not in cells for n in need):
++        return
++    g = {n: _geo(cells[n]) for n in need}
++    azs = [c for c in cells.values() if (c.get("id") or "").startswith("az") and _geo(c)
++           and "group_availability_zone" in (c.get("style") or "")]
++    right = 0.0
++    for c in cells.values():
++        par = cells.get(c.get("parent"))
++        if par is not None and par in azs and _geo(c) and (c.get("id") or "").startswith(("pub", "app", "db")):
++            right = max(right, _geo(c)["x"] + _geo(c)["width"])
++    if right == 0:
++        return
++
++    def expect(label, got, want):
++        if abs(got - want) > 1:
++            issues.append(f"[{page_name}] {label} is {got:.0f}, wrap rule says {want:.0f}")
++    for fixed, cid, val in (("AZ x-inset", "az1", 520), ("VPC x-inset", "vpc", 85), ("Region x-inset", "region", 247)):
++        expect(fixed, g[cid]["x"], val)
++    for az in azs:
++        expect(f"{az.get('id')} width (content_right {right:.0f} + 40)", _geo(az)["width"], right + 40)
++    expect("vpc width (az_x + az_w + 65)", g["vpc"]["width"], g["az1"]["x"] + g["az1"]["width"] + 65)
++    expect("region width (vpc_x + vpc_w + 85)", g["region"]["width"], g["vpc"]["x"] + g["vpc"]["width"] + 85)
++    expect("cloud width (region_x + region_w + 85)", g["cloud"]["width"], g["region"]["x"] + g["region"]["width"] + 85)
++    if "border" in cells and _geo(cells["border"]):
++        b = _geo(cells["border"])
++        expect("border width (cloud_x + cloud_w + 113)", b["width"], g["cloud"]["x"] + g["cloud"]["width"] + 113)
++
++    def row(parent, y):
++        return [_geo(c) for c in cells.values() if c.get("parent") == parent and _geo(c)
++                and abs(_geo(c)["y"] - y) < 0.5 and _geo(c)["width"] == 120 and c.get("vertex") == "1"]
++    for parent, y, cw, label in (("region", 65, g["region"]["width"], "regional services row"),
++                                 ("cloud", 70, g["cloud"]["width"], "global band")):
++        icons = row(parent, y)
++        if icons:
++            mid = (min(i["x"] for i in icons) + max(i["x"] + 120 for i in icons)) / 2
++            if abs(mid - cw / 2) > 1.5:
++                issues.append(f"[{page_name}] {label} is not centred: group centre {mid:.1f} vs container centre "
++                              f"{cw / 2:.1f}; start_x must be round_half_up((width - (n*120 + (n-1)*60))/2)")
++
++
++def check_lane_geometry(model, issues, page_name="Architecture"):
++    """Cluster lanes sit INSIDE the app-subnet column with a 35px left / 20px right gap
++    (app_w = lane_w + 55; dual lanes: 2*240 + 20 + 55) and own their Fargate/EKS task icons."""
++    cells = {c.get("id"): c for c in model.iter("mxCell")}
++    lanes = [c for c in cells.values()
++             if (c.get("id") or "").endswith("lane") and "ED7100" in (c.get("style") or "")]
++    if not lanes:
++        return
++    apps = []
++    for c in cells.values():
++        par = cells.get(c.get("parent"))
++        if (c.get("id") or "").startswith("app") and par is not None and "group_availability_zone" in (par.get("style") or ""):
++            x, y = _abs_xy(cells, c); g = _geo(c)
++            apps.append((x, x + g["width"], y, y + g["height"]))
++    if apps:
++        left, right = min(a[0] for a in apps), max(a[1] for a in apps)
++        top, bottom = min(a[2] for a in apps), max(a[3] for a in apps)
++        lx = [(_abs_xy(cells, l)[0], _geo(l)["width"]) for l in lanes]
++        ly = [(_abs_xy(cells, l)[1], _geo(l)["height"]) for l in lanes]
++        if min(x for x, _ in lx) < left or max(x + w for x, w in lx) > right \
++                or min(y for y, _ in ly) < top or max(y + h for y, h in ly) > bottom:
++            issues.append(f"[{page_name}] lane is not inside the app-subnet column "
++                          f"(x {left:.0f}-{right:.0f}, y {top:.0f}-{bottom:.0f})")
++        else:
++            gl = min(x for x, _ in lx) - left
++            gr = right - max(x + w for x, w in lx)
++            if abs(gl - 35) > 1 or abs(gr - 20) > 1:
++                issues.append(f"[{page_name}] lane gaps inside the app subnet are {gl:.0f}px left / {gr:.0f}px right; "
++                              f"rule is 35 / 20 (app_w = lane_w + 55; dual lanes: 2*240 + 20 + 55)")
++    lane_ids = {l.get("id") for l in lanes}
++    for c in cells.values():
++        if "mxgraph.aws4.fargate" in (c.get("style") or "") and c.get("parent") not in lane_ids:
++            issues.append(f"[{page_name}] task icon '{c.get('id')}' has parent '{c.get('parent')}'; "
++                          f"tasks must be children of the lane ({sorted(lane_ids)})")
++
++
++def check_subnet_columns(model, issues, page_name="Architecture"):
++    """pub | 40 | app | 40 | db columns, identical in every AZ row."""
++    cells = {c.get("id"): c for c in model.iter("mxCell")}
++    rows = {}
++    for c in cells.values():
++        par = cells.get(c.get("parent"))
++        if par is None or "group_availability_zone" not in (par.get("style") or ""):
++            continue
++        kind = next((k for k in ("pub", "app", "db") if (c.get("id") or "").startswith(k)), None)
++        if kind and _geo(c):
++            rows.setdefault(par.get("id"), {})[kind] = (_geo(c)["x"], _geo(c)["width"])
++    first = None
++    for az, r in sorted(rows.items()):
++        if {"pub", "app", "db"} <= set(r):
++            if abs(r["app"][0] - (r["pub"][0] + r["pub"][1] + 40)) > 1:
++                issues.append(f"[{page_name}] {az}: app subnet x must be pub_right+40")
++            if abs(r["db"][0] - (r["app"][0] + r["app"][1] + 40)) > 1:
++                issues.append(f"[{page_name}] {az}: db subnet x must be app_right+40 "
++                              f"(found {r['db'][0]:.0f}, expected {r['app'][0] + r['app'][1] + 40:.0f})")
++            if first is None:
++                first = r
++            elif r != first:
++                issues.append(f"[{page_name}] {az}: subnet columns differ from the first AZ row")
++
++
++def check_straight_edges(model, issues, page_name="Architecture"):
++    """A right->left edge without waypoints must be horizontal (|dy| <= 2px): exitY/entryY need 3 decimals."""
++    cells = {c.get("id"): c for c in model.iter("mxCell")}
++    for e in cells.values():
++        if e.get("edge") != "1" or e.find(".//Array") is not None:
++            continue
++        st = e.get("style") or ""
++
++        def v(name):
++            m = re.search(name + r"=([0-9.]+)", st)
++            return float(m.group(1)) if m else None
++        src, tgt = cells.get(e.get("source")), cells.get(e.get("target"))
++        ex, ey, nx, ny = v("exitX"), v("exitY"), v("entryX"), v("entryY")
++        if src is None or tgt is None or ex != 1 or nx != 0 or not _geo(src) or not _geo(tgt):
++            continue
++        sx, sy = _abs_xy(cells, src); tx, ty = _abs_xy(cells, tgt)
++        sh, th = _geo(src)["height"], _geo(tgt)["height"]
++        y1 = sy + (0.5 if ey is None else ey) * sh
++        y2 = ty + (0.5 if ny is None else ny) * th
++        if abs(y1 - y2) > 2:
++            issues.append(f"[{page_name}] edge '{e.get('id')}' is not straight: exit y {y1:.1f} vs entry y {y2:.1f} "
++                          f"(dy {y1 - y2:+.1f}px). Use exitY={(y2 - sy) / sh:.3f} (3 decimals).")
++
++
++VPC_BOUND_SCOPE = ("nat_gateway", "application_load_balancer", "network_load_balancer", "ecs", "fargate", "eks",
++                   "rds", "aurora", "documentdb", "elasticache", "msk", "endpoints")   # IGW straddles the border: exempt
++REGION_ONLY_SCOPE = ("cloudwatch_2", "cloudtrail", "key_management_service", "secrets_manager",
++                     "elastic_container_registry", "certificate_manager_3")
++FLOW_REGION_EXTRA = ("s3", "bedrock", "transcribe", "sqs", "sns", "dynamodb")
++GLOBAL_SCOPE = ("identity_and_access_management", "route_53", "cloudfront")
++
++
++def check_scope_boxes(model, issues, page_name="Architecture", ids=("region", "vpc"), cloud_id=None, flow=False):
++    """Hierarchy-agnostic scope check on ABSOLUTE positions: VPC box inside Region box; VPC-bound icons inside
++    the VPC; Region-only services inside the Region but outside the VPC; global services outside the Region
++    (and, when a cloud box is given, inside it)."""
++    cells = {c.get("id"): c for c in model.iter("mxCell")}
++    rid, vid = ids
++    if rid not in cells or vid not in cells:
++        return
++
++    def box(c):
++        x, y = _abs_xy(cells, c); g = _geo(c)
++        return x, y, x + g["width"], y + g["height"]
++
++    def inside(b, o, tol=1):
++        return b[0] >= o[0] - tol and b[1] >= o[1] - tol and b[2] <= o[2] + tol and b[3] <= o[3] + tol
++
++    def centre_in(b, o):
++        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
++        return o[0] <= cx <= o[2] and o[1] <= cy <= o[3]
++    R, V = box(cells[rid]), box(cells[vid])
++    C = box(cells[cloud_id]) if cloud_id in cells else None
++    if not inside(V, R):
++        issues.append(f"[{page_name}] '{vid}' is not visually inside '{rid}' (vpc x {V[0]:.0f}-{V[2]:.0f}, "
++                      f"y {V[1]:.0f}-{V[3]:.0f} vs region x {R[0]:.0f}-{R[2]:.0f}, y {R[1]:.0f}-{R[3]:.0f}) "
++                      f"- check parent and coordinate frame")
++    region_only = REGION_ONLY_SCOPE + (FLOW_REGION_EXTRA if flow else ())
++    for c in cells.values():
++        m = re.search(r"resIcon=mxgraph\.aws4\.(\w+)", c.get("style") or "")
++        if not m or _geo(c) is None:
++            continue
++        res, b = m.group(1), box(c)
++        if res in VPC_BOUND_SCOPE and not centre_in(b, V):
++            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is VPC-bound but sits outside the VPC box")
++        if res in region_only and (not centre_in(b, R) or centre_in(b, V)):
++            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is a regional service: it must be inside the "
++                          f"Region box and outside the VPC box")
++        if res in GLOBAL_SCOPE and (centre_in(b, R) or (C is not None and not centre_in(b, C))):
++            issues.append(f"[{page_name}] '{c.get('id')}' ({res}) is a global service: it must sit inside the "
++                          f"cloud and outside the Region box")
++
++
+ def main():
+-    if len(sys.argv) != 2:
+-        print("usage: validate-drawio.py <file.drawio.xml>")
++    args = sys.argv[1:]
++    allow = []
++    while "--allow" in args:                      # --allow <substring>: report matching issues as WARN, do not fail
++        i = args.index("--allow")
++        if i + 1 >= len(args):
++            print("usage: validate-drawio.py <file.drawio.xml> [--allow <issue-substring> ...]")
++            return 1
++        allow.append(args[i + 1].lower()); del args[i:i + 2]
++    if len(args) != 1:
++        print("usage: validate-drawio.py <file.drawio.xml> [--allow <issue-substring> ...]")
+         return 1
+-    path = Path(sys.argv[1])
++    path = Path(args[0])
+     issues = []
+ 
+     # Detect if this is a reference/template file (not a final output)
+@@ -585,6 +819,11 @@ def main():
+         check_icon_overlaps(arch_model, issues, "Architecture")
+         check_multiaz_db_placement(arch_model, issues, "Architecture")
+         check_waf_placement(arch_model, issues, "Architecture")
++        check_container_wrap(arch_model, issues, "Architecture")
++        check_lane_geometry(arch_model, issues, "Architecture")
++        check_subnet_columns(arch_model, issues, "Architecture")
++        check_straight_edges(arch_model, issues, "Architecture")
++        check_scope_boxes(arch_model, issues, "Architecture")
+     elif "Architecture" in page_names:
+         issues.append("[Architecture] Could not parse mxGraphModel from Architecture page")
+ 
+@@ -595,6 +834,7 @@ def main():
+         check_canvas_and_frame(flow_model, issues, "Flow")
+         check_icon_dimensions_and_stencils(flow_model, valid, issues, "Flow")
+         check_unique_ids_and_parents(flow_model, issues, "Flow")
++        check_scope_boxes(flow_model, issues, "Flow", ids=("f-region", "f-vpc"), cloud_id="f-cloud", flow=True)
+     elif "Flow" in page_names:
+         issues.append("[Flow] Could not parse mxGraphModel from Flow page")
+ 
+@@ -602,13 +842,19 @@ def main():
+     check_page_name_consistency(page_models, issues)
+ 
+     # 6. Report results
++    warned = [f for f in issues if any(a in f.lower() for a in allow)]
++    issues = [f for f in issues if f not in warned]
+     if issues:
+         print(f"FAIL ({len(issues)} issue(s)):")
+         for f in issues:
+             print(f"  - {f}")
++        for f in warned:
++            print(f"  ~ WARN (allowed): {f}")
+         return 1
+ 
+-    print("PASS")
++    print("PASS" if not warned else f"PASS ({len(warned)} allowed warning(s))")
++    for f in warned:
++        print(f"  ~ WARN (allowed): {f}")
+     return 0
+ 
+ 
+diff --git a/.kiro/skills/arch-diagram/SKILL.md b/.kiro/skills/arch-diagram/SKILL.md
+index 74da05d..86d028b 100644
+--- a/.kiro/skills/arch-diagram/SKILL.md
++++ b/.kiro/skills/arch-diagram/SKILL.md
+@@ -158,22 +158,27 @@ decorative, inferred, and all-to-all arrows.
+ 
+ 1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
+    committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
+-   it is missing, the most recent validated output in
+-   the most recent validated output in `outputs/` is the fallback.
+-2. Replace `PROJECT_NAME` on both pages and fill in the metadata.
+-3. Look up every coordinate you need in `references/coords-cheatsheet.md` —
+-   do not calculate from scratch.
++   it is missing, stop and tell the user — never rebuild the containers by hand.
++2. Replace `PROJECT_NAME` on both pages and fill in the metadata. The skeleton ships the baseline
++   (CloudWatch, CloudTrail, KMS in the regional row; IAM in the global band) live; Secrets Manager, ACM and ECR
++   are commented optional slots — uncomment only what is requested or required (ECR whenever there is an
++   ECS/EKS lane). For Scenario B/D (no VPC / non-AWS) delete the VPC, AZ, IGW and ALB cells.
++3. Look up every coordinate you need in `references/coords-cheatsheet.md` — presets first, formulas
++   otherwise. After **any** change to the subnet columns (2-icon subnet, dual lanes, a lane) re-apply the
++   **wrap rule** to the five containers and the border, and **re-centre** the regional row and global band.
+ 4. Add service icons into the subnet slots (uncomment the SLOT comments and
+    fill in `resIcon` and `fillColor` from the cheatsheet).
+ 5. If compute spans AZ rows, uncomment the cluster lane block and fill in the
+    lane label and task icon stencil.
+ 6. Add edges (all `parent="1"`).
+ 7. Fill in the Flow page nodes and edges.
+-8. Run the validator before finalizing:
++8. Run the validator before finalizing (the agent's `shell` tool is allowed to run exactly this command):
+    ```
+    python3 .kiro/scripts/validate-drawio.py <output-file.drawio.xml>
+    ```
+-   If validation fails, fix the issues. CI also runs this check on PRs.
++   Fix every issue and re-run until it prints `PASS`; paste the raw output in the delivery summary. For a known
++   Scenario B-VPC false positive re-run with `--allow scenario-b` and state the reason. CI also runs the
++   validator and its regression test.
+ 
+ Do not write the container frame, logo, title block, or regional services row
+ from scratch — they are already in the skeleton with the correct values.
+@@ -204,10 +209,9 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+ #### A. Canvas and frame
+ 1. **Canvas** — `mxGraphModel` has `pageWidth="850" pageHeight="1100"`. Outer
+    border: `rounded=0; strokeColor=#000000; strokeWidth=3; fillColor=none`.
+-   NOT `strokeColor=#0066CC` or `fillColor=default`. Canvas ~3100×2600 (arch) or ~2500×1200 (flow).
++   NOT `strokeColor=#0066CC` or `fillColor=default`. Architecture border: width `cloud_x + cloud_w + 113` (2570 for the shipped skeleton), height 2600; Flow border 2500×1200.
+ 2. **Logo** — brand/f-brand style includes `strokeColor=none`. Base64 blob is the
+-   full Comprinno logo from the skeleton (3404 chars starting `iVBORw0KGgoAAAANSUhEUgAAAJ8`).
+-   No truncated placeholder blob.
++   full Comprinno logo copied from the skeleton. No truncated placeholder blob, never re-encoded from a local file.
+ 3. **Title block** — both pages have project name, Version, Date, Creator, Reviewer.
+    Title block does not overlap the logo (`x ≥ 300`).
+ 4. **Two pages** — named exactly `Architecture` and `Flow` (case-sensitive).
+@@ -233,7 +237,8 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+ 9. **Container styles** — Cloud (`dashed=0 strokeColor=#232F3E`), Region (`dashed=1
+    strokeColor=#147EBA`), VPC (`dashed=0 strokeColor=#248814`), AZ (`dashed=1
+    strokeColor=#545B64`). All from house-style.md §6. `strokeWidth=2` on containers.
+-10. **Global vs regional placement** — IAM, Route 53, CloudFront, WAF → `parent=cloud`.
++10. **Global vs regional placement** — IAM, Route 53, CloudFront → `parent=cloud`. A WAF fronting CloudFront →
++    `parent=cloud`; a WAF fronting an ALB is regional → `parent=region`.
+     ECR, ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, Lambda → `parent=region`.
+     IGW, ALB, subnets, lanes, compute → `parent=vpc` or deeper. No compute icon
+     floating directly as a `vpc` child without a subnet or lane parent.
+@@ -264,34 +269,34 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+     Icons within subnets: `y=65`, x centered using `x = (w - n×120 - (n-1)×40) / 2`.
+     Subnets identical across all AZ rows so columns align.
+     
+-    **Subnet centering within AZ:** Subnets should be positioned to create balanced
+-    whitespace within the AZ container. Use the standard AZ layout:
+-    - public: `x=35`
+-    - app: `x = public_x + public_w + 40`
+-    - db: `x = app_x + app_w + 40`
+-    AZ width should accommodate all three subnets with ~40px right margin.
++    **Wrap rule (containers wrap their content):** `az_w = content_right + 40`, then
++    `vpc_w = 520 + az_w + 65`, `region_w = 85 + vpc_w + 85`, `cloud_w = 247 + region_w + 85`,
++    `border_w = 260 + cloud_w + 113`. No threshold and no proportional scaling. Presets D1/D2/D3 are in the
++    cheatsheet; the validator enforces the rule.
+     
+-15. **Cluster lane geometry** — lane `parent=vpc`, must render **inside app subnet column**.
+-    3-AZ defaults: x=1010, y=170, w=300, h=1110. Task icons centred in each AZ's app subnet
+-    region: task_y = 25/485/945 (single lane) or 85/545/1005 (dual lanes with +60 label clearance).
+-    Badge 45×45 at x=1018, y=178.
+-    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=2`.
++15. **Cluster lane geometry** — lane `parent=vpc`, renders **inside the app-subnet column** with a 35px left /
++    20px right gap (`app_w = lane_w + 55`; dual lanes 240 each, 20px apart). Values depend on the public-subnet
++    width — use the cheatsheet's lane table (D1: lane_x=930; D3: lane_x=1010; y=170, w=300, h=1110). **Tasks are
++    children of the lane** (`parent=<lane id>`), centred per AZ: task_y = 25/485/945 (dual lanes: +60 only when
++    the lane label wraps). Badge 45×45 at `lane_x+8, lane_y+8`, `parent=vpc`.
++    Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`.
+     ECS/EKS stencils are `ecs`/`eks` (not `elastic_container_service`/`elastic_kubernetes_service`).
+     **Task icon labels**: Use the task type ("Fargate Task", "EC2 Node", "Worker") — NOT the
+     cluster name. The cluster name goes in the lane label only.
+ 16. **IGW placement** — vpc-relative `x=-60 y=650`. Straddles the VPC left border.
+-17. **Row spacing** — regional row and global band each independently centre-aligned
+-    at 180px pitch. After any icon add/delete, re-verify no double-width gaps remain.
+-18. **WAF placement** — `parent=cloud`, cloud-rel y≈85 (above region top at 285),
+-    x = `alb_abs_xc − 60 − cloud_abs_x`. Vertical edge WAF→ALB: `exitY=1 → entryY=0`.
+-    WAF is NOT in the regional row and NOT `parent=1`.
++17. **Row spacing** — regional row and global band are each **centred in their own container** at 180px
++    pitch (`start_x = round_half_up((container_w − (n×120 + (n−1)×60))/2)`). Re-centre after any icon add/delete
++    or width change; the validator fails an off-centre row.
++18. **WAF placement** — by scope, **no edge on the Architecture page**. Fronting CloudFront: global band
++    (`parent=cloud`, y=70). Fronting an ALB: regional row (`parent=region`, y=65). Never `parent=1`, never inside
++    the VPC. The WAF → target association is a dashed "inspect" edge on the Flow page.
+ 
+ ---
+ 
+ #### E. Route 53, CloudFront, and inbound path
+ 
+ 19. **Route 53 placement** — Route53 is DNS resolution, NOT part of the network request
+-    path. It ALWAYS goes in the **global band** at `cloud_rel x=72, y=70`, alongside IAM.
++    path. It ALWAYS goes in the **global band** (`y=70`, x from the band formula, left of IAM), alongside IAM.
+     - Do NOT place Route53 inline with IGW — that implies it's a network hop, which is wrong.
+     - Do NOT draw Route53 edges on the Architecture page — DNS is shown on Flow page only.
+     - Route53 icon shows "DNS is managed" not "requests go through Route53".
+@@ -306,8 +311,7 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+     - **Without CloudFront**: Users → IGW → ALB → cluster
+     - Route53 is NEVER on the Architecture page inbound path.
+     
+-22. **Users position** — `parent=1` (outside cloud), `x ≤ 100` so abs-right=220,
+-    leaving 40px gap to cloud left=260.
++22. **Users position** — `parent=1` (outside cloud), default `x=60`; any `x ≤ 100` keeps a 40px gap to the cloud.
+ 
+ 23. **Internal ALB** — when architecture has both external and internal ALBs:
+     - External ALB: vpc-rel `x=160, y=650` (inline with IGW, receives internet traffic)
+@@ -334,55 +338,55 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+       CloudWatch, KMS, and all other service connections belong on the **Flow page only**.
+     The Architecture page shows *where services are deployed*, not *how they communicate*.
+ 28. **Baseline edge routing** — the ECR edge that exits a lane top (`exitY=0`)
+-    MUST use horizontal waypoints at `y = pvpc_abs_top − 30` before turning toward
+-    the target. No exceptions. Edges from nested task icons create vertical lines.
++    MUST use horizontal waypoints at `y = vpc_abs_top − 12` (783 at default scale; the gap between the
++    regional-row labels and the VPC border) before turning toward the target. No exceptions. Edges from nested task icons create vertical lines.
+ 29. **Multi-DB edges** — when EKS/ECS connects to two icons in the same db subnet
+     (e.g. RDS + DocumentDB), use distinct exit/entry points: primary via computed
+     exitY (left entry), secondary via entryY=0 (top entry). Never two edges from
+     the identical exit point to adjacent icons.
+-30. **EKS/ECS→DB exitY** — use the formula `(db_abs_yc − lane_abs_top) / lane_h`,
+-    not 0.5. Verify it produces a straight horizontal line (source and target share
+-    the same abs y-centre).
+-30. **Edge density** — prefer ≤8 edges on the architecture page. Decorative or
++30. **EKS/ECS→DB exitY** — use `(db_abs_yc − lane_abs_top) / lane_h` to **three decimals**
++    (0.077 / 0.491 / 0.905 at default scale), not 0.5. The line must be straight: the validator fails any jog
++    over 2px.
++31. **Edge density** — prefer ≤8 edges on the architecture page. Decorative or
+     all-to-all arrows make the diagram unreadable. Remove non-essential edges before
+     adding new ones.
+-31. **Edge labels** — short (≤4 words), on straight segments, `labelBackgroundColor=#FFFFFF`.
++32. **Edge labels** — short (≤4 words), on straight segments, `labelBackgroundColor=#FFFFFF`.
+     No labels on diagonal or near-vertical segments (they overlap icons/borders).
+ 
+ ---
+ 
+ #### G. Bastion and management
+-32. **Bastion / jump-box** — management EC2 instances go in **AZ1 or AZ3** public
++33. **Bastion / jump-box** — management EC2 instances go in **AZ1 or AZ3** public
+     subnets, never in AZ2. The middle AZ's public subnet sits at the same y-level
+     as the ALB→cluster horizontal edge; an icon there causes crossings.
+ 
+ ---
+ 
+ #### H. Flow page
+-33. **Flow containers (recommended)** — when the flow involves VPC-scoped services,
+-    showing Cloud → Region → VPC containers provides scope context.
+-    Service parents should match their AWS scope (IGW/ALB/ECS/EKS → `f-vpc`;
+-    S3/RDS/MSK/Lambda/Bedrock → `f-region`; Route53/WAF/CloudFront → `f-cloud`; Users → root).
+-    Simpler flows may omit containers entirely — use judgement based on complexity.
+-34. **Flow spine alignment** — all spine nodes share the same abs y-centre.
+-    Compute `spine_abs_yc = vay + (vch−120)/2 + 60` and derive every node y from it.
+-    Any y mismatch → edge bend. Regional services must be right of VPC right border.
+-35. **Flow spacing** — spine nodes 320px centre-to-centre. Branch nodes 240px above/below spine.
+-36. **Flow edges** — numbered main-path steps (①②③…). Dashed edges for async/optional paths.
++34. **Flow scope boxes (required, flat layout)** — Cloud / Region / VPC are decorative boxes (`container=0`,
++    `parent=1`, absolute coordinates, cheatsheet "Flow page"). Every node is `parent=1`. Each node sits in the
++    box of its scope: IGW, ALB, compute, RDS/Aurora/DocumentDB/MSK/ElastiCache → VPC box; S3, Bedrock, Transcribe,
++    SQS, Lambda, a WAF fronting an ALB → Region box, outside the VPC; CloudFront, Route 53, IAM, a WAF fronting
++    CloudFront → Cloud box, outside the Region; Users → outside the cloud.
++35. **Flow spine alignment** — every spine node has the same y (top 670, centre 730 at default scale); any
++    mismatch → edge bend. Regional services sit right of the VPC border.
++36. **Flow spacing** — spine pitch 320px centre-to-centre (`x = 220 + 320k`). Branch nodes (240px above/below)
++    are region-scope services only, anchored right of the VPC; never branch off a VPC node.
++37. **Flow edges** — numbered main-path steps (①②③…). Dashed edges for async/optional paths.
+     No all-to-all arrows. Each edge represents a real step in the primary flow.
+ 
+ ---
+ 
+ #### I. Architecture–Flow consistency
+-37. **Same names** — service labels are identical on both pages (e.g. "EKS Fargate (App)"
++38. **Same names** — service labels are identical on both pages (e.g. "EKS Fargate (App)"
+     not "EKS" on one and "EKS Fargate" on the other).
+-38. **Same scope** — if a service is inside the VPC on the architecture page, it is
++39. **Same scope** — if a service is inside the VPC on the architecture page, it is
+     connected to the VPC boundary on the flow page. No service switches scope between pages.
+ 
+ ---
+ 
+ #### J. Provider-specific (Azure / GCP)
+-39. **No AWS services on non-AWS diagrams** — Azure/GCP diagrams use only the
++40. **No AWS services on non-AWS diagrams** — Azure/GCP diagrams use only the
+     provider's own stencils (`shapes-azure.md` / `shapes-gcp.md`). No IAM, CloudWatch,
+     or other AWS icons. Apply the provider's actual scope hierarchy.
+ 
+@@ -390,8 +394,7 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
+ 
+ If any check fails, fix the specific cell(s) before saving. Report preview status
+ accurately: if a rendering tool was used, state what was checked; if not, state
+-"no rendering performed" and list which structural checks passed. State that visual
+-preview was unavailable (no MCP) and list which checks passed.
++"no rendering performed". Always include the validator's raw output.
+ 
+ Save the result to the requested output path.
+ 
+@@ -519,7 +522,7 @@ In this case: keep the VPC, place VPC-attached Lambda inside app subnets
+ empty. The validator's "Scenario B" rule is a heuristic that cannot see the
+ source; when a NAT Gateway / Public IPv4 / Data Transfer is present, its
+ warning is a known false positive — do NOT remove the VPC to silence it.
+-Note the false positive in the delivery summary instead.
++Re-run the validator with `--allow scenario-b` and note the reason in the delivery summary instead.
+ 
+ **Scenario C — CloudFront + private S3 origin**
+ - S3 appears as a CloudFront origin in the cloud band (not as a public bucket).
+diff --git a/.kiro/skills/arch-diagram/references/coords-cheatsheet.md b/.kiro/skills/arch-diagram/references/coords-cheatsheet.md
+index 66226b2..2d40c1e 100644
+--- a/.kiro/skills/arch-diagram/references/coords-cheatsheet.md
++++ b/.kiro/skills/arch-diagram/references/coords-cheatsheet.md
+@@ -1,46 +1,59 @@
+ # Coordinate Cheatsheet
+ 
+-> **Single source of truth:** This is the single source of truth for all geometry
+-> numbers. `house-style.md` contains style strings and rules only. Do not duplicate
+-> numbers in other files.
+-
+-> **Two types of values here:**
++> **Single source of truth** for every geometry number. `house-style.md` holds style strings and rules
++> only; steering and SKILL point here. Do not copy numbers into other files.
++>
+ > - **Constants** — fixed dimensions that define the scale. Copy verbatim.
+-> - **Formulas** — compute these from the constants for your specific topology.
+->   Never copy the example outputs from another diagram; recalculate each time.
+-
+-## ⚡ Precomputed 3-AZ lookup (copy directly for N=3, skip all formulas)
+-
+-> Use these values as-is for the standard 3-AZ layout. Only recompute if N≠3.
+-
+-| Element | Value | Notes |
+-|---------|-------|-------|
+-| igw y (vpc-rel) | **650** | aligns with AZ midpoint |
+-| users y (abs) | **1445** | inline with IGW/ALB row |
+-| CF cloud-rel y | **1195** | inline with IGW row |
+-| lane_x (vpc-rel) | **1010** | app_vpc_x + 35 |
+-| lane_y (vpc-rel) | **170** | app_vpc_y_first + 40 |
+-| lane_w | **300** | app_w - 55 (for app_w=355) |
+-| lane_h | **1110** | fits inside app subnets |
+-| task_y AZ-1 | **25** | centred in AZ-1 app subnet (lane-rel) |
+-| task_y AZ-2 | **485** | centred in AZ-2 app subnet (lane-rel) |
+-| task_y AZ-3 | **945** | centred in AZ-3 app subnet (lane-rel) |
+-| task_x | **90** | (301−120)/2 |
+-| EKS→DB exitY | **0.08** | (1050−965)/1110 |
+-| ECS→AZ3 DB exitY | **0.95** | (1015+50+65+60−965)/1110 — for cluster connecting to AZ-3 db |
+-| regional row start_x (n=6) | **688** | (2395−1020)/2 |
+-| regional row start_x (n=7) | **598** | (2395−1200)/2 |
+-| global band start_x (n=2) | **1214** | (2727−300)/2 |
+-| global band start_x (n=4) | **1034** | (2727−660)/2 |
+-| **Dual lanes** x_lane1 (vpc-rel) | **1010** | standard layout (app_az_x=455). For trimmed layout with app_az_x=375 → lane1_x=922 |
+-| **Dual lanes** x_lane2 (vpc-rel) | **1270** | standard layout. Trimmed: lane2_x=1182 |
+-| dual lane task_x | **60** | (240−120)/2 |
+-| dual lane task_y AZ-1 | **85** | 25+60 label clearance |
+-| dual lane task_y AZ-2 | **545** | 485+60 |
+-| dual lane task_y AZ-3 | **1005** | 945+60 |
+-| dual app_w (2 lanes 240+gap) | **555** | 2×240+20+55 |
+-| dual db_x (az-rel) | **1055** | app_x+app_w+40 = 455+555+40 |
+-
++> - **Formulas / presets** — computed from the constants. Never copy another diagram's output; use a
++>   preset below or recompute.
++> - `validate-drawio.py` enforces the wrap rule, centred rows, subnet columns, lane gaps, straight edges and
++>   scope boxes, so a wrong number fails the run instead of shipping.
++
++## The six rules
++
++1. **Wrap rule (containers always wrap their content — no threshold, no "trim later"):**
++   `az_w = content_right + 40`, `vpc_w = 520 + az_w + 65`, `region_w = 85 + vpc_w + 85`,
++   `cloud_w = 247 + region_w + 85`, `border_w = 260 + cloud_w + 113`. `content_right` is the right edge of the
++   right-most subnet (AZ-relative). Insets 520 / 85 / 247 are fixed. Do **not** scale containers
++   proportionally. No rounding of widths; the only rounding is `round_half_up` for centred rows.
++2. **Rows stay centred:** `start_x = round_half_up((container_w − (n×120 + (n−1)×60)) / 2)`, pitch 180 —
++   regional row inside the Region (y=65), global band inside the Cloud (y=70). Recompute after every add/delete.
++3. **Subnet columns:** `public x=35 | 40 | app | 40 | db`, same in every AZ row. Width by icon count: 1 → 300,
++   2 → 380, 3 → 520. **Lane exception:** `app_w = lane_w + 55` (35px left / 20px right gap), single or dual lanes.
++4. **Hierarchy (nested, scope = parent chain):** `cloud → region → vpc → az → subnet → icon`. Regional services
++   `parent=region`; global services `parent=cloud`; the VPC is a child of the Region. All edges `parent="1"`.
++5. **Scope is checked by position, not only by parent:** VPC box inside Region box; VPC-bound icons inside the VPC;
++   regional-only services inside the Region and outside the VPC; global services inside the Cloud and outside
++   the Region.
++6. **Flow page is flat** (all nodes `parent="1"`, absolute coordinates, decorative scope boxes) — see "Flow page".
++
++## ⚡ Presets (3-AZ, copy directly; for other layouts apply rules 1–3)
++
++| Preset | public / app / db w | content_right | AZ | VPC | Region | Cloud | Border |
++|---|---|---|---|---|---|---|---|
++| **D1 (shipped skeleton)** single lane, 1-icon public | 300 / 355 / 300 | 1070 | 1110 | 1695 | 1865 | 2197 | 2570 |
++| D2 dual lanes, 1-icon public | 300 / 555 / 300 | 1270 | 1310 | 1895 | 2065 | 2397 | 2770 |
++| D3 NAT+Bastion (2-icon public), single lane | 380 / 355 / 300 | 1150 | 1190 | 1775 | 1945 | 2277 | 2650 |
++
++Row start_x (round half up) — regional row (inside Region, y=65): D1 n=3: 693, n=4: 603, n=5: 513, n=6: 423, n=7: 333; D2 n=3: 793, n=4: 703, n=5: 613, n=6: 523, n=7: 433; D3 n=3: 733, n=4: 643, n=5: 553, n=6: 463, n=7: 373.
++Global band (inside Cloud, y=70): D1 n=1: 1039, n=2: 949, n=3: 859, n=4: 769; D2 n=1: 1139, n=2: 1049, n=3: 959, n=4: 869; D3 n=1: 1079, n=2: 989, n=3: 899, n=4: 809.
++
++**Lane values (vpc-relative; `lane_x = az_x + app_x + 35`):**
++
++| Element | D1 / D2 (app_x=375) | D3 (app_x=455) |
++|---|---|---|
++| single lane x / y / w / h | **930** / 170 / 300 / 1110 | **1010** / 170 / 300 / 1110 |
++| single-lane badge (45×45) | x=938 y=178 | x=1018 y=178 |
++| single-lane app_w / db_x (az-rel) | 355 / **770** | 355 / **850** |
++| dual lanes (w=240) x1 / x2 | 930 / 1190 | 1010 / 1270 |
++| dual app_w / db_x (az-rel) | 555 / **970** | 555 / **1050** |
++| task_x (lane-relative) single / dual | 90 / 60 | 90 / 60 |
++| task_y (lane-relative) AZ-1/2/3 | 25 / 485 / 945 (dual with a wrapping label: 85 / 545 / 1005) | same |
++| lane→DB `exitY` AZ-1 / AZ-2 / AZ-3 | **0.077 / 0.491 / 0.905** (3 decimals — see "Straight edges") | same |
++| no lane, 1 direct app icon: app_w / db_x | 300 / 715 (pub 300) or 795 (pub 380) | |
++
++N-AZ values: `igw_y = 190 + 230×(N−1)`, `users_y = 795 + igw_y`, `cf_cloud_y = 545 + igw_y`, `lane_h = 190 + 460×(N−1)`
++(N=3: 650 / 1445 / 1195 / 1110). Region, VPC and Cloud heights each grow by 460 per extra AZ.
+ 
+ ---
+ 
+@@ -48,445 +61,136 @@
+ 
+ | Cell | x | y | w | h | Notes |
+ |------|---|---|---|---|-------|
+-| border | 0 | -40 | 3100 | 2600 | `strokeWidth=3; fillColor=none; strokeColor=#000000` |
+-| brand (logo) | 30 | 50 | 240.9 | 50 | image cell, embed fresh base64 |
+-| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1 |
++| border | 0 | -40 | `cloud_x + cloud_w + 113` (2570 for D1) | 2600 | `strokeWidth=3; fillColor=none; strokeColor=#000000` |
++| brand (logo) | 30 | 50 | 240.9 | 50 | copy the cell from the skeleton (embedded blob, `strokeColor=none`) |
++| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1: name, subtitle, Version / Date / Creator / Reviewer |
+ 
+----
+-
+-## Container hierarchy (constants — copy verbatim)
++## Container hierarchy (x/y/h constants; widths from the wrap rule)
+ 
+ | Cell | parent | x | y | w | h |
+ |------|--------|---|---|---|---|
+-| cloud | root(1) | 260 | 250 | 2727 | 2115 |
+-| region | cloud | 247 | 285 | 2395 | 1745 |
+-| vpc | region | 85 | 260 | 2225 | 1405 |
+-| az1 | vpc | 520 | 80 | 1640 | 340 |
+-| az2 | vpc | 520 | 540 | 1640 | 340 |
+-| az3 | vpc | 520 | 1000 | 1640 | 340 |
+-
+-AZ height = **340**. AZ y-spacing = **460px**. All constants.
+-
+-> **Right-margin check — always run before finalising (20% threshold):**
+-> `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative)
+-> If `1640 − content_right > 0.2 × 1640` (i.e. > 328px dead space), trim.
+->
+-> **Trim formula — inset-preserving (works for BOTH nested and flattened layouts).**
+-> Do NOT "scale all containers by new_AZ_w/1640" — that scales the fixed AZ x-inset
+-> (520) and the container insets, which is geometrically wrong and does not match the
+-> validated table below. Instead keep every inset fixed and only grow each container
+-> to wrap its child:
+-> ```
+-> new_AZ_w     = content_right + 40
+-> new_VPC_w    = 520 + new_AZ_w + 65        # 520 = AZ x-inset (constant, NOT scaled)
+-> new_Region_w = 85  + new_VPC_w  + 85      # 85  = VPC x-inset inside region
+-> new_Cloud_w  = 247 + new_Region_w + 85    # 247 = region x-inset inside cloud
+-> ```
+-> Round each to the nearest 10. After trimming, **re-centre the regional-services row
+-> and global band** inside the new widths (start_x = (container_w − group_w)/2), else
+-> the rows sit flush against the right edge.
+->
+-> **Worked example — nested single-lane + extra icon** (public 300 + app 500 + db 300,
+-> content_right = 1215; the Cred-O layout):
+-> Dead space = 425 = 26% → **must trim**.
+-> new_AZ_w = 1255, new_VPC_w = 1840, new_Region_w = 2010, new_Cloud_w = 2340.
+->
+-> **Validated values — FLATTENED dual-lane layout only** (region `container=0`,
+-> vpc `parent=cloud`; public 300 + app 555 + db 300, content_right=1270, new_AZ_w=1310).
+-> These use the flattened insets (vpc at cloud-rel x=332), so copy them **only** when you
+-> are building the flattened dual-lane layout; for any other case use the formula above.
+->
+-> | Cell | parent | w | x | y |
+-> |------|--------|---|---|---|
+-> | cloud | root(1) | **2620** | 260 | 250 |
+-> | region | cloud | **2310** | 140 | 285 — `container=0` |
+-> | vpc | **cloud** | **1965** | 332 | 545 — parent=cloud, not region |
+-> | az1/2/3 | vpc | **1310** | 520 | 80/540/1000 |
+-> | IGW | vpc | 120 | -60 | 650 |
+-> | ALB | vpc | 120 | **230** | 650 — shifted right for dual lanes |
+-> | Global band icons | cloud | 120 | 1034/1214/1394/1574 | 70 |
+-> | Regional services | cloud | 120 | 935/1115/1295/1475/1655/1835 | 350 |
+->
+-> When region is `container=0`, vpc is parented to **cloud** and regional service icons
+-> are also parented to **cloud** at cloud-relative coordinates (not region-relative).
++| cloud | root(1) | 260 | 250 | wrap (D1 2197) | 2115 |
++| region | cloud | 247 | 285 | wrap (D1 1865) | 1745 |
++| vpc | region | 85 | 260 | wrap (D1 1695) | 1405 |
++| az1 | vpc | 520 | 80 | wrap (D1 1110) | 340 |
++| az2 | vpc | 520 | 540 | same | 340 |
++| az3 | vpc | 520 | 1000 | same | 340 |
+ 
+----
++AZ height = **340**, AZ y-spacing = **460**. Absolute origins (3-AZ): vpc_abs = (592, 795); region_abs = (507, 535).
+ 
+-## Entry column (constants)
++## Entry column (constants, N=3)
+ 
+ | Cell | parent | x | y | w | h |
+ |------|--------|---|---|---|---|
+ | igw | vpc | -60 | 650 | 120 | 120 |
+ | alb | vpc | 160 | 650 | 120 | 120 |
+ 
+-> **y=650 is the N=3 value.** The IGW/ALB row centres vertically on the AZ stack,
+-> so for other AZ counts use `igw_y = 190 + 230*(N-1)` (see Users node section).
++For other AZ counts use `igw_y = 190 + 230×(N−1)`.
+ 
+----
+-
+-## Subnets inside each AZ (constants — same across all AZ rows)
+-
+-**Subnet width by icon count (MUST be consistent across subnet types):**
+-
+-| Icons | Width | Formula | Use case |
+-|-------|-------|---------|----------|
+-| 1 | **300** | 120 + 180 padding | NAT, single compute, single DB |
+-| 2 | **380** | 120+40+120 + 100 padding | NAT+Bastion, Writer+Replica |
+-| 3 | **520** | 120+40+120+40+120 + 80 | Three services |
+-
+-**Critical rule:** If public has 1 icon (w=300), app has 1 icon (w=300), and db has 1 icon (w=300),
+-ALL THREE must be w=300. Never make app wider "just because it's compute".
++## Subnets inside each AZ
+ 
+-**Lane exception:** When app contains a cluster lane (vertical bar spanning AZs):
+-- `app_w = lane_w + 55` (lane + 35px left + 20px right)
+-- This is the ONLY case where app width differs from the icon-count formula
+-
+-| Subnet | parent | x | y | w | h | notes |
++| Subnet | parent | x | y | w | h | style |
+ |--------|--------|---|---|---|---|-------|
+-| public | azN | 35 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#E9F3E6` stroke `#248814` |
+-| app | azN | pub_x + pub_w + 40 | 50 | **300** (1 icon) or **lane_w+55** (with lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
+-| db | azN | app_x + app_w + 40 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#CCE5FF` stroke `#147EBA` |
+-
+-**Example layouts:**
+-
+-| Layout | public_w | app_w | db_w | Notes |
+-|--------|----------|-------|------|-------|
+-| All single icons | 300 | 300 | 300 | Consistent, balanced |
+-| NAT+Bastion, single compute, Writer+Standby | 380 | 300 | 380 | Width matches content |
+-| Single NAT, EKS lane (w=300), single DB | 300 | 355 | 300 | Lane adds 55px |
++| public | azN | 35 | 50 | 300 (1 icon) / 380 (2) | 250 | fill `#E9F3E6` stroke `#248814` |
++| app | azN | pub_x + pub_w + 40 | 50 | 300 (1 icon) / lane_w+55 (lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
++| db | azN | app_x + app_w + 40 | 50 | 300 (1) / 380 (2) | 250 | fill `#CCE5FF` stroke `#147EBA` |
+ 
+-Keep gaps between subnets at **40px**.
+-
+----
++**Consistency:** if public, app and db each hold one icon, all three are w=300. Never widen app "because it's
++compute" (the old w=650 default is wrong). Gaps between subnet columns are 40.
+ 
+-## Icons inside subnets — FORMULA, not hardcoded
++Icons inside subnets: 120×120, **y=65**, `x = (subnet_w − n×120 − (n−1)×40) / 2` (w=300, n=1 → 90; w=380, n=2 → 40 / 200).
+ 
+-**Icon size:** always 120×120. **Icon y in 250-high subnet:** always **65** (50px top label gap + centred).
++## Users, CloudFront and the global band
+ 
+-**Icon x — centre formula:**
+ ```
+-x = (subnet_width - n_icons × 120 - (n_icons - 1) × gap) / 2
+-gap = 40px recommended
++users_abs_y_centre = vpc_abs_y + igw_y + 60 = 795 + 650 + 60 = 1505   [N=3]
++users_y = 1445   users_x = 60  (any x ≤ cloud_abs_x − 160 = 100 passes)
+ ```
+ 
+-| Subnet w | n icons | gap | x (first) | x (second) |
+-|----------|---------|-----|-----------|------------|
+-| 300 | 1 | — | 90 | — |
+-| 380 | 2 | 40 | 40 | 200 |
++| Cell | parent | x | y |
++|---|---|---|---|
++| users | root(1) | 60 | igw_abs_y_centre − 60 |
++| CloudFront (only if requested) | cloud | 72 | 1195 [N=3] — inline with IGW, `Users → CF → IGW → ALB` straight, `exitX=1 exitY=0.5 entryX=0 entryY=0.5`, no waypoints |
++| Route 53, IAM, S3 (CloudFront origin) | cloud | global-band formula (left→right: Route 53, IAM, S3) | 70 |
+ 
++- **Route 53 is DNS, not a network hop:** always the global band, never inline, **no Route 53 edges on the Architecture page**.
++- **WAF follows what it protects** (AWS WAF is regional except when attached to CloudFront): fronting CloudFront →
++  global band (`parent=cloud`, y=70); fronting an ALB → regional row (`parent=region`, y=65). Never root, never in
++  the VPC. **No WAF edge on the Architecture page** (the association is a Flow-page edge).
++- Inbound path without CloudFront: `Users → IGW → ALB`, one straight horizontal line; no global-band icon may sit on it.
+ 
+-| 650 | 1 | — | 265 | — |
++## Regional services row (children of region, y=65)
+ 
+----
+-
+-## Users node — FORMULA
+-
+-Users sits on the same horizontal row as IGW/ALB so the inbound path is a straight line.
+-
+-> **N-AZ generalisation** — the IGW/ALB/CF row and the lane height depend on the
+-> number of AZs (N). The values below (650 / 1445 / 1195 / 1260) are the N=3 case.
+-> Recompute with these formulas for any other N:
+-> ```
+-> igw_y       = 190 + 230*(N-1)                     # 650 for N=3
+-> users_y     = cloud_y + region_y + vpc_y + igw_y  # = 795 + igw_y  (1445 for N=3)
+-> cf_cloud_y  = 545 + igw_y                          # 1195 for N=3
+-> lane_h      = 340 + 460*(N-1)                      # 1260 for N=3
+-> ```
+-
+-```
+-users_abs_y_centre = vpc_abs_y + igw_vpc_y + icon_half
+-                   = (cloud_y + region_y + vpc_y) + igw_y + 60
+-                   = (250 + 285 + 260) + 650 + 60 = 1505   [N=3]
+-
+-users_y = users_abs_y_centre - 60 = 1445   [N=3]
+-users_x = 60  (left of cloud boundary)
+-```
+-
+-| Cell | parent | x | y | w | h |
+-|------|--------|---|---|---|---|
+-| users | root(1) | 60 | **= igw_abs_y_centre − 60** | 120 | 120 |
++Baseline (always): CloudWatch, CloudTrail, KMS. IAM is in the global band. Optional: Secrets Manager, ECR, ACM, WAF
++(ALB-fronting), Lambda, primary S3 data store. Start x from rule 2 with `container_w = region_w`.
+ 
+ ---
+ 
+-## Global row icons (children of cloud) — FORMULA
+-
+-### Route 53 — ALWAYS in global band
+-
+-Route 53 is **DNS resolution**, not a network hop. It does NOT belong inline with IGW.
+-- **Always place R53 in the global band** at `cloud_rel x=72, y=70`
+-- **Never draw R53 edges on the Architecture page** — DNS flow belongs on Flow page only
+-- R53 sits alongside IAM, S3 in the top row
+-
+-### CloudFront positioning
+-
+-> **Only add CloudFront if explicitly requested by the user.**
+-
+-CloudFront IS a network hop (edge cache), so it goes inline with IGW:
+-- **CF present**: `cloud_rel x=72, y=1195` (inline with IGW row)
+-- **CF absent**: Users connects directly to IGW
+-
+-### Inbound path on Architecture page
+-
+-The Architecture page shows the **network path**, not DNS resolution:
+-
+-| CloudFront | Inbound path |
+-|------------|--------------|
+-| Yes | Users → CloudFront → IGW → ALB → cluster |
+-| No | Users → IGW → ALB → cluster |
+-
+-**Route53 is NEVER on the Architecture inbound path.**
+-DNS resolution (Users→R53) is shown on the **Flow page** only.
+-
+-### Summary table — icon positions (cloud-relative)
++## Cluster lanes (children of vpc)
+ 
+-| Icon | x | y | Notes |
+-|------|---|---|-------|
+-| Route 53 | 72 | **70** | Always global band (DNS, not network hop) |
+-| CloudFront | 72 | 1195 | Inline with IGW (only if requested) |
+-| IAM | centre formula | 70 | Global band |
+-| S3 (origin) | centre formula | 70 | Global band (if CF origin) |
++One tall, transparent lane (orange outline) shows one logical ECS/EKS service replicated across AZs. It overlays
++the app subnets and crosses the inter-AZ gaps on purpose; do not split it per AZ or convert a subnet into a
++service container. The lane renders **inside the app-subnet column**.
+ 
+-**Global band centre formula** (for IAM, S3, R53):
+ ```
+-n = number of global band icons (S3, IAM)
+-group_w = n × 120 + (n-1) × 60
+-start_x = (cloud_width - group_w) / 2
+-x_i = start_x + i × 180
++lane_x = az_x + app_x + 35                 (35px left gap; D1: 930, D3: 1010)
++lane_y = az1_y + 50 + 40 = 170             (40px for the subnet label)
++lane_w = app_w − 55                        (single 300; dual lanes 240 each, 20px apart)
++lane_h = (az3_y + 50 + 250 − 20) − lane_y = 1110   [N=3]
+ ```
+-For n=2 (S3 + IAM): `start_x = (2727 - 300) / 2 = 1213.5 ≈ 1214`
+ 
+-**Users x-position:**
+-`users_x` must satisfy: `users_abs_right + 40 ≤ cloud_abs_x`
+-→ `users_x ≤ cloud_abs_x - 160 = 100`
+-Default: **users_x = 100** (abs_right=220, 40px gap to cloud left=260).
++- **Width:** `lane_w = 120 + 2×pad`, pad ≥ 60. Short label → 300 (single); label > 20 characters → 480 (then
++  `app_w = 535`); dual lanes 240 each (`app_w = 2×240 + 20 + 55 = 555`).
++- **Tasks are children of the lane** (`parent=<lane id>`): `task_x = (lane_w − 120)/2` (single 90, dual 60),
++  `task_y = az_y + 175 − 60 − lane_y` → 25 / 485 / 945. Keep the AWS Fargate stencil; do not draw arrows between replicas.
++- **Dual-lane label clearance:** add +60 to `task_y` (85 / 545 / 1005) **only when the lane label wraps** (label
++  > ~20 characters at fontSize 14 in a 240-wide lane). Short labels ("Amazon EKS") keep 25 / 485 / 945.
++- **Badge** 45×45, `parent=vpc`, at `x = lane_x + 8`, `y = lane_y + 8 = 178`.
++- The main request path connects to the **lane border** at the middle AZ row, not to each task.
+ 
+-| Icon | formula | example (n=2) |
+-|------|---------|---------------|
+-| first | `start_x` | 1214 |
+-| second | `start_x + 180` | 1394 |
+-| third | `start_x + 360` | 1574 |
+-
+----
+-
+-## Regional services row (children of region) — FORMULA
+-
+-All icons sit at **y=65** (constant). x positions are **centre-aligned** across the region width.
+-
+-```
+-n = number of service icons
+-group_w = n × 120 + (n-1) × 60
+-start_x = (region_width - group_w) / 2   (region_width = 2395)
+-x_i = start_x + i × 180
+-```
+-
+-| n | group_w | start_x | x positions |
+-|---|---------|---------|-------------|
+-| 4 | 660 | 868 | 868, 1048, 1228, 1408 |
+-| 5 | 840 | 778 | 778, 958, 1138, 1318, 1498 |
+-| 6 | 1020 | 688 | 688, 868, 1048, 1228, 1408, 1588 |
+-| 7 | 1200 | 598 | 598, 778, 958, 1138, 1318, 1498, 1678 |
+-
+-> Each row is independently centred within its own container; the global band (few
+-> icons) and the regional row (many icons) are **NOT expected to align column-for-column**
+-> — this is correct, not a bug.
+-
+----
+-
+-## Cluster lanes (children of vpc) — FORMULA
+-
+-### One ECS/Fargate service replicated across AZs
+-
+-Use one tall, transparent service lane to show a single logical ECS service
+-deployed across multiple AZs. The lane is a separate child of the VPC. Its
+-orange outline spans from the first app-subnet row through the last app-subnet
+-row and remains visible across the inter-AZ gaps. **Crossing those gaps is
+-intentional:** it shows that one ECS service is deployed in several AZs. Do not
+-shorten the outline at each subnet, split it into one box per AZ, or treat the
+-gap-crossing outline as a subnet-boundary error. Put the ECS service badge and
+-name just inside the lane's upper-left corner.
+-
+-The orange service lane is an overlay/grouping boundary, not a replacement for
+-the blue app-subnet containers. Keep every app subnet as its own subnet with
+-its existing label, fill, border, AZ parent, and geometry. Do not convert an
+-app subnet into an ECS cluster or service container.
+-
+-Place one Fargate task icon inside each app subnet/AZ where the service runs.
+-Center each task horizontally on the lane and vertically in its AZ's app
+-subnet. Keep each task cell parented to its actual app subnet so the subnet
+-placement remains accurate. Preserve its AWS Fargate icon style and stencil
+-when positioning it; do not recreate it as a generic shape or reparent it to
+-the overlay lane. The task icons share the same x coordinate, forming a
+-straight column. The lane outline groups these replicas; the repeated task
+-icons show their distribution. Do not add arrows between replicas to imply
+-replication.
+-
+-For the main request path, connect to the logical service at the middle AZ row
+-(or to the lane edge on that row), rather than drawing separate incoming and
+-outgoing paths to every task. Keep the connection horizontal through that row
+-and clear of the task label. Only connect directly to an individual task when
+-the user specifically asks to show a task-level interaction. Apply the same
+-layout pattern to EKS workloads when one service is replicated across AZs.
+-
+-**Lane must render INSIDE the app subnet column** — the lane's orange border must
+-not extend beyond the blue app subnet borders. The lane spans from inside the
+-first app subnet through inside the last app subnet, crossing the inter-AZ gaps.
+-
+-**Lane geometry — fit inside app subnets:**
+-```
+-# App subnet vpc-relative position
+-app_vpc_x = az_x + app_az_x = 520 + 455 = 975
+-app_vpc_y_first = az1_y + app_az_y = 80 + 50 = 130
+-app_vpc_y_last_bottom = az3_y + app_az_y + app_h = 1000 + 50 + 250 = 1300
+-
+-# Lane position (vpc-relative) — inside the app subnet column
+-lane_left_padding = 35                 # horizontal padding inside subnet (left)
+-lane_right_padding = 20                # horizontal padding inside subnet (right)
+-lane_top_padding = 40                  # vertical padding for subnet label
+-lane_bottom_padding = 20
+-
+-lane_x = app_vpc_x + lane_left_padding = 975 + 35 = 1010
+-lane_y = app_vpc_y_first + lane_top_padding = 130 + 40 = 170
+-lane_w = app_w - lane_left_padding - lane_right_padding   # e.g. 355 - 55 = 300 for app_w=355
+-lane_h = (app_vpc_y_last_bottom - lane_bottom_padding) - lane_y
+-       = (1300 - 20) - 170 = 1110     [for 3-AZ, app_h=250]
+-```
+-
+-**3-AZ default values (copy directly):**
+-- `lane_x = 1010` (vpc-relative)
+-- `lane_y = 170` (vpc-relative)
+-- `lane_w = 300` (for app_w=355, lane fits inside subnet)
+-- `lane_h = 1110`
+-
+-**Lane width — size to content:**
+-Lane width = `120 + 2×pad` where pad≥60. Single icon, short label: `lane_w=300`.
+-Long label (>20 chars): `lane_w=480`. Dual lanes: `w=240` each.
+-
+-**App subnet width follows the lane:** `app_w = lane_w + 55`
+-(35px left gap + 20px right gap). Do NOT use w=650 as a fixed default.
+-Example: lane_w=300 → app_w=355. lane_w=480 → app_w=535.
+-
+-**Task icon x inside lane (centres 120px icon):**
+-```
+-task_x = (lane_width - 120) / 2
+-```
+-Single lane (w=301): task_x = **90**
+-Dual lane (w=240): task_x = **60**
+-
+-**Task icon y inside lane — centred in app subnet region:**
+-```
+-# Task should be centred vertically in the portion of lane overlapping each AZ's app subnet
+-app_center_vpc_y = az_y + app_az_y + (app_h / 2) = az_y + 50 + 125 = az_y + 175
+-task_y = app_center_vpc_y - 60 - lane_y   # (lane-relative)
+-```
+-
+-| AZ | az_y | app_center_vpc_y | task_y (lane-rel) |
+-|----|------|------------------|-------------------|
+-| AZ-1 | 80 | 255 | 25 |
+-| AZ-2 | 540 | 715 | 485 |
+-| AZ-3 | 1000 | 1175 | 945 |
+-
+-> These table values are for the 3-AZ default with lane_y=170. **If you change
+-> AZ positions or lane geometry, recalculate using the formula.**
+-
+-**Dual-lane label clearance:** With narrow lanes (w=240) and long labels like
+-"EKS Cluster (API)", the label text wraps and overlaps task icons. Add +60px
+-to each task_y for dual lanes: **AZ-1=85, AZ-2=545, AZ-3=1005**.
++## Lane label style (constant)
+ 
+-**Badge (45×45, parent=vpc):**
++Always use these to prevent label overlapping the badge icon:
+ ```
+-badge_x = lane_x + 8 = 1010
+-badge_y = lane_y + 8 = 178
++fontSize=14; spacingLeft=55; align=left; strokeWidth=3
+ ```
+ 
+ ---
+ 
+-## EKS/ECS → database edge — FORMULA
+-
+-When connecting a lane to a database in AZ-1, the edge should be a **straight horizontal line**.
+-The exit point on the lane must match the database's absolute y-centre.
+-
+-```
+-exitY = (db_abs_y_centre - lane_abs_top) / lane_height
+-
+-db_abs_y_centre = cloud_y + region_y + vpc_y + az1_y + db_az_y + db_icon_y + icon_half
+-lane_abs_top    = cloud_y + region_y + vpc_y + lane_vpc_y
+-```
++### Straight edges (lane → database, validator-enforced, |dy| ≤ 2px)
+ 
+-For the 3-AZ defaults with Aurora in AZ-1 db-subnet (lane_y=170, lane_h=1110):
+ ```
+-aurora_abs_y_centre = 250+285+260+80+50+65+60 = 1050
+-lane_abs_top        = 250+285+260+170 = 965
+-lane_height         = 1110
+-exitY = (1050 - 965) / 1110 = 0.077 ≈ 0.08
++exitY = (db_abs_y_centre − lane_abs_top) / lane_h          # use 3 DECIMALS: 0.077, 0.491, 0.905
++db_abs_y_centre = 795 + az_y + 50 + 65 + 60 ; lane_abs_top = 795 + lane_y
+ ```
+ 
+-> **Recalculate this whenever the database's AZ row or the lane's vpc-relative y changes.**
+-> Do not copy 0.14 as a universal value.
++`0.08` is a ~4px jog and `0.91` for AZ-3 a ~5px jog — always three decimals. Recompute whenever the DB's AZ row or
++the lane y changes. Two edges into the same db subnet must leave at different `exitY` (or the second enters from the
++top with waypoints); never route two edges from one exit point to adjacent icons.
+ 
+-**Multiple DB icons in the same subnet (e.g. RDS + DocumentDB):**
+-When EKS/ECS connects to two icons in the same db subnet:
+-- Primary (e.g. RDS Writer): use the computed `exitY` fraction → enters db icon left side.
+-- Secondary (e.g. DocumentDB): enter from the **top** (`entryX=0.5 entryY=0`) using a
+-  separate edge with `exitY=0` from the lane top + horizontal waypoints to avoid piercing
+-  the VPC border. Or: exit the lane right at a different `exitY` so the two edges leave
+-  at visually distinct y-positions.
+-Never route two edges from the identical exit point to adjacent icons — the router bends one through the other.
++### Architecture page edges — allowed set
+ 
+----
++1. Inbound path: Users → (CloudFront →) IGW → ALB → cluster lane (solid).
++2. ECR: lane → ECR (dashed, "pull image") for **every** ECS/EKS lane.
++3. Database: lane → primary DB (solid), primary → replica (dashed replication).
+ 
+-## CloudFront → IGW edge routing
++Everything else (SQS, SNS, MSK, Bedrock, Transcribe, S3 data access, Secrets Manager, CloudWatch, KMS, Lambda
++invocations, Route 53, WAF) is a **Flow-page** edge. All edges `parent="1"`.
+ 
+-CF and IGW share the same absolute y-centre — the edge should be **horizontal** with no jog.
++### ECR / baseline edge waypoints
+ 
+-```
+-exitX=1;exitY=0.5; entryX=0;entryY=0.5; no waypoints needed.
+-```
++Source the **lane border** (`exitX=0.5 exitY=0`), never a task icon. Route the horizontal run through the gap between
++the regional-row labels (they extend to y≈766) and the VPC top (795), 12px clear of the border:
+ 
+-> CloudFront is always inline with IGW (same y-centre). These waypoints are only needed if CF is deliberately placed above the IGW row in an exceptional layout:
+-CF left and travelling down the left side of the cloud boundary:
+ ```
+-exitX=0 exitY=1  entryX=0 entryY=0.5
+-waypoints: x = cloud_abs_x - 40, y = cf_abs_y_centre
+-           x = cloud_abs_x - 40, y = igw_abs_y_centre
++vpc_abs_top = cloud_y + region_y + vpc_y = 250 + 285 + 260 = 795
++waypoint_y  = vpc_abs_top − 12 = 783
++lane_abs_xc = vpc_abs_x + lane_x + lane_w/2        (vpc_abs_x = 260 + 247 + 85 = 592)
++ecr_abs_xc  = region_abs_x + ecr_x + 60            (region_abs_x = 507)
++waypoints: (lane_abs_xc, 783), (ecr_abs_xc, 783)
+ ```
+ 
+----
+-
+-
+-**Inbound path without CloudFront** (the default when CF is not requested):
+-`Users → IGW → ALB` — all at the same abs y-centre, straight horizontal, no waypoints.
+-The horizontal Users→IGW segment **must not pass through any global-band icon** (Route 53,
+-S3, IAM). If a global-band icon would sit on that y-level between Users and IGW, it belongs
+-in the global band row (`cloud_rel_y=70`), not inline. Move the icon up — do not reroute the edge.
+-
+-
+-## Baseline edges (ECR, Secrets) — routing rule
+-
+-**Never** source a baseline edge from a task icon inside a lane (`exitY=0` from a nested icon
+-goes straight up through the lane and region, creating a vertical line).
+-Source from the **lane border** itself:
+-```
+-source = "ecslane" or "ekslane"   (not the individual task icon)
+-exitX=0.5  exitY=0                (exit lane top centre)
+-```
+-Then route horizontal waypoints **above** the vpc top before turning toward the target:
+-```
+-waypoint_y = midpoint between region_svc_abs_bottom and vpc_abs_top
+-           = (region_abs_y + 65 + 120 + vpc_abs_y) / 2
+-           ≈ 757  for the default scale (compute per topology)
+-```
+-Route: lane_top → up to waypoint_y → left to target_abs_x → up to target.
+-
+----
+-
+-## Lane label style (constant)
+-
+-Always use these to prevent label overlapping the badge icon:
+-```
+-fontSize=14; spacingLeft=55; align=left; strokeWidth=3
+-```
+-
+----
++Keep baseline edges unlabelled or use a short label ("pull").
+ 
+ ## Icon style (copy verbatim — change only resIcon and fillColor)
+ 
+@@ -498,9 +202,11 @@ Label HTML: `<font style="font-size:18px"><b>Service Name</b></font>`
+ 
+ ---
+ 
++---
++
+ ## ⚠️ Stencil names — always verify in shapes-aws.md
+ 
+-Never guess a stencil name. Look it up in `references/shapes-aws.md` before writing `resIcon=`.
++Never guess. Look the key up in `references/shapes-aws.md` before writing `resIcon=`.
+ 
+ | Wrong (blank box) | Correct |
+ |-------------------|---------|
+@@ -526,6 +232,8 @@ Never guess a stencil name. Look it up in `references/shapes-aws.md` before writ
+ 
+ ---
+ 
++---
++
+ ## Edge styles (constants — copy verbatim)
+ 
+ **Solid (primary path):**
+@@ -547,167 +255,66 @@ All edges: `parent="1"` (root).
+ 
+ ---
+ 
+-## Flow page (constants)
++---
++
++## Flow page (flat layout — constants)
++
++The Flow page is **flat**: every icon and edge is `parent="1"` with absolute coordinates. The Cloud / Region / VPC
++boxes are **decorative scope boxes** (`container=0`, parent `1`); they are never parents, so editing in draw.io
++cannot re-parent or drift a node. `validate-drawio.py` checks each node against the boxes by position.
+ 
+ | Cell | x | y | w | h |
+ |------|---|---|---|---|
+ | border | 0 | 0 | 2500 | 1200 |
+ | brand | 40 | 30 | 240.9 | 50 |
+-| title | 300.9 | 0 | 440 | 120 |
+-
+-Flow nodes: 120×120, spine at y≈500, spacing = **320px** centre-to-centre (constant).
+-Branch nodes (e.g. S3): same x as anchor, y = spine_y − 240.
++| title | 300.9 | 0 | 440 | 200 (name, subtitle, Version/Date/Creator/Reviewer) |
++| f-cloud (box) | 380 | 220 | 2040 | 920 |
++| f-region (box) | 680 | 390 | 1700 | 680 |
++| f-vpc (box) | 740 | 450 | 1000 | 560 |
++
++**Spine:** nodes 120×120, node top `y = 670` (centre 730) for every spine node, pitch **320** centre-to-centre,
++`x = 220 + 320k`:
++
++| k | scope | x | rule |
++|---|---|---|---|
++| 0 | Users (outside the cloud box) | 220 | `users_x = cloud_x − 40 − 120` |
++| 1 | cloud, left of the region box | 540 | CloudFront |
++| 2–4 | VPC box | 860 / 1180 / 1500 | IGW, ALB, compute, DB… (all VPC-bound) |
++| 5–6 | region box, right of the VPC | 1820 / 2140 | S3, Bedrock, Transcribe, SQS… |
++
++Scope map: **VPC box** — IGW, ALB/NLB, ECS/EKS/Fargate/EC2, RDS, Aurora, DocumentDB, MSK, ElastiCache, NAT, endpoints
++(they live in VPC subnets — same scope as the Architecture page). **Region box, outside the VPC** — S3, Bedrock,
++Transcribe, SQS, SNS, DynamoDB, Lambda (unless VPC-attached), CloudWatch, KMS, Secrets Manager, ECR, a WAF fronting an
++ALB. **Cloud box, outside the Region** — CloudFront, Route 53, IAM, a WAF fronting CloudFront.
++
++**Branch nodes** (240px off the spine: `y = 430` above, `y = 910` below) are **region-scope** services anchored to
++k=5/6 only. Never branch off a VPC node: 240px above/below leaves the 560px-high VPC box. Cloud scope (outside the region): WAF
++fronting CloudFront at `(540, 250)`, Route 53 at `(470, 910)`.
++
++**Edges:** Users → Route 53 (dashed "DNS query") → the public endpoint it resolves to (CloudFront, otherwise the
++ALB — **never the IGW**); WAF → its target (dashed "inspect"). Keep every edge off other icons; add waypoints if needed.
++The y-centre of nodes joined by a straight edge must be identical, or the router adds a bend.
+ 
+ ---
+ 
+-
+-## Architecture page edges — allowed set
+-
+-**Only these edges belong on the Architecture page:**
+-1. **Inbound path**: Users → (CloudFront →) IGW → ALB → cluster lane (solid)
+-2. **ECR**: lane → ECR (dashed, "pull image")
+-3. **Database**: lane → primary DB (solid), primary → replica (dashed replication)
+-
+-**Everything else goes on Flow page only:**
+-- SQS, SNS, MSK, Kinesis (messaging/streaming)
+-- Bedrock, Transcribe, Comprehend (AI/ML)
+-- S3 (when used as data store)
+-- Secrets Manager, CloudWatch, KMS (operational)
+-- Lambda invocations, API calls, event triggers
+-
+-The Architecture page shows **where services are deployed** (containers, subnets, AZs).
+-The Flow page shows **how requests flow through services** (numbered steps, branches).
+-
+-## ECR edge waypoints — formula
+-
+-Both EKS and ECS clusters must have a dashed `pull image` edge to ECR.
+-Source: the lane container border (`exitY=0`). Use horizontal waypoints:
+-
+-```
+-waypoint_y = pvpc_abs_top - 30
+-           = cloud_y + region_cloud_y + pvpc_region_y - 30
+-
+-For each lane:
+-  lane_abs_xc = pvpc_abs_x + lane_vpc_x + lane_w/2
+-  ecr_abs_xc  = region_abs_x + ecr_region_x + 60
+-
+-Waypoints: (lane_abs_xc, waypoint_y), (ecr_abs_xc, waypoint_y)
+-```
+-
+-Keep ECR edge unlabelled or use a short label like "pull" — verbose labels overlap container borders.
+-
+-
+-## Flow page layout — containers and alignment
+-
+-Flow pages should show **AWS Cloud → Region → VPC** containers as context.
+-All service icons have `parent` matching their actual AWS scope.
+-
+-### Container parents in flow diagrams
+-
+-| Service | Parent | Reason |
+-|---------|--------|--------|
+-| Users | root(1) | External, outside cloud |
+-| Route 53, WAF, CloudFront | `f-cloud` | Global services |
+-| S3, Bedrock, Transcribe, MSK, RDS, DocumentDB, Lambda | `f-region` | Regional, outside VPC |
+-| IGW, ALB, ECS/EKS compute | `f-vpc` | VPC-bound |
+-
+-### Spine alignment (critical — prevents edge bends)
+-
+-All nodes on the main horizontal path MUST share the same abs y-centre.
+-Compute a single `spine_abs_yc` and derive every y from it:
+-
+-```
+-spine_abs_yc = vay + vpc_icon_y + 60
+-  vpc_icon_y = vcy + (vch - 120) // 2   (centres 120px icon in VPC height)
+-
+-For nodes in VPC (parent=f-vpc):
+-  node_y = vpc_icon_y
+-
+-For nodes in Region (parent=f-region):
+-  node_y = spine_abs_yc - 60 - ray   (ray = cloud_y + region_cloud_y)
+-
+-For nodes parent=1:
+-  node_y = spine_abs_yc - 60
+-```
+-
+-If source and target y-centres differ by even 1px, orthogonal router adds a bend.
+-
+-### Flow page spine spacing
+-
+-Spine nodes are spaced **320px centre-to-centre** on the main horizontal path.
+-Branch nodes (S3, WAF, RDS) sit 240px above or below the spine.
+-
+-```
+-node_x_i = first_node_x + i * 280
+-branch_y  = spine_abs_yc - 240 - 60   (above spine)
+-```
+-
+-### WAF x-alignment in flow (must match ALB exactly)
+-
+-```
+-alb_abs_xc  = vpc_abs_x + alb_vpc_rel_x + 60
+-waf_cloud_x = alb_abs_xc - 60 - cloud_abs_x
+-waf_cloud_y = region_cloud_y - 120 - 20   (20px gap above region top)
+-```
+-
+-### Route 53 in flow page
+-
+-Route 53 is `parent=f-cloud`. Cloud-relative x equidistant between cloud and region:
+-```
+-r53_cloud_x = (region_cloud_x - 120) // 2
+-r53_cloud_y = spine_abs_yc - 60 - cloud_abs_y
+-```
+-
+-### S3 and regional services: must be RIGHT of VPC right border
+-
+-```
+-min_region_rel_x = vpc_abs_right - region_abs_x + gap(40)
+-                 = (vpc_region_rel_x + vpc_width) + gap
+-```
+-S3/Bedrock/Transcribe etc. must have `region_rel_x ≥ min_region_rel_x` or they
+-visually appear inside the VPC.
+-
+-### Users x in flow
+-
+-```
+-users_x = cloud_abs_x - gap(40) - 120
+-```
+-Default: cloud_x=380 → users_x=100, right=340, gap to cloud=40px.
+-
+-
+-## Route 53 placement (conditional)
+-
+-## Route 53 placement — ALWAYS global band
+-
+-Route 53 is **DNS resolution**, not a network hop. It does NOT belong on the Architecture
+-page inbound path.
+-
+-**Placement:** Always in the **global band** at `cloud_rel y=70`, centre-aligned with other
+-global icons (IAM, S3).
+-
+-**Edges:** Route 53 edges (Users→R53→service) belong on the **Flow page only**.
+-Do NOT draw Route 53 edges on the Architecture page.
+-
+-```
+-cloud_rel_y = 70   (global band)
+-cloud_rel_x = global-band centre formula: start_x + i × 180
+-```
+-
+-## Common mistakes (constants that are often wrong)
++## Common mistakes
+ 
+ | Wrong | Correct |
+ |-------|---------|
+-| AZ height 720 | **340** |
+-| AZ y-spacing 820 | **460** |
++| containers left at the old 1640/2225/2395/2727 widths | wrap rule (rule 1); D1 = 1110/1695/1865/2197 |
++| rows not re-centred after a width change | rule 2 |
++| AZ height 720 / spacing 820 | **340** / **460** |
+ | subnet height 580 | **250** |
+-| public subnet w=300 with 2 icons | **380** |
+-| lane w=480 each when 2 lanes | **240** each |
+-| lane w=230 | **300–480** depending on content |
+-| app w=650 with single lane | **lane_w + 55** (e.g. 355 for lane_w=300) |
++| public w=300 holding 2 icons | **380** |
++| app w=650 with a single lane | **lane_w + 55** (355 for lane_w=300) |
++| lane x copied from another layout | `az_x + app_x + 35` (D1 930, D3 1010) |
++| tasks parented to the subnet | children of the lane |
++| `exitY` rounded to 2 decimals | 3 decimals (0.077 / 0.491 / 0.905) |
+ | lane label fontSize=20, align=center | **14, align=left, spacingLeft=55** |
+ | icon size 60×60 | **120×120** |
+ | border strokeWidth=2 | **3** |
+ | fontSize=14 on icons | **18** |
+-| `elastic_container_service` stencil | **`ecs`** |
+-| `elastic_kubernetes_service` stencil | **`eks`** |
+-| `certificate_manager` stencil | **`certificate_manager_3`** |
++| WAF with parent=1, or a WAF edge on the Architecture page | scope rule above; Flow-page edge only |
++| Route 53 inline / Route 53 → IGW | global band; DNS → CloudFront or ALB |
++| Flow nodes parented to the scope boxes | parent `1`, absolute coordinates |
++| `elastic_container_service` / `elastic_kubernetes_service` / `certificate_manager` stencils | `ecs` / `eks` / `certificate_manager_3` |
+diff --git a/.kiro/skills/arch-diagram/references/house-style.md b/.kiro/skills/arch-diagram/references/house-style.md
+index 40be183..7e6d27e 100644
+--- a/.kiro/skills/arch-diagram/references/house-style.md
++++ b/.kiro/skills/arch-diagram/references/house-style.md
+@@ -24,7 +24,7 @@ Every diagram page uses these `mxGraphModel` attributes:
+ 
+ `pageWidth` / `pageHeight` are only the print-page hint — the actual canvas is
+ much larger. All geometry coordinates are absolute in a coordinate space that
+-starts at (0,0). Working diagrams span roughly **x: 0–3100, y: 0–2500** for
++starts at (0,0). Working diagrams span roughly **x: 0–border_w (2570 for the shipped skeleton), y: 0–2500** for
+ architecture pages and **x: 0–2300, y: 0–1100** for flow pages.
+ 
+ ---
+@@ -41,14 +41,14 @@ an old/truncated blob — a broken blob renders as a blank or missing image. Cop
+ Set the brand cell style to
+ `shape=image;aspect=fixed;imageAspect=0;strokeColor=none;image=data:image/png,iVBORw0KGgoAAAANSUhEUgAAAJ8AAAAhCAYAAADH23nlAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZIgAAAmjSURBVHhe7VtdbBxXFT531k7XGwobG1IqguI8tCKC0A1BIBBSHZ6oExHnoSpPjUMrVTRFcYh4QAhiEIigIMURFUTiITZCKkigOhE2LS/dSiDVL8V5QuJH3UgpL5WtTdWsI9lzD9+Z3fHembl3dtaNvbU1+5TM3Ln33HO/c853zj1WlP9yDXSrgecXrpKi55qf8TKR9+Kl4Z/86fjQ3HeUUqc6T8fvPrzH/6XqPDAfkWsgpoEzC9N4EgfZXSL1m2ce+u0fv/vJq08S8zgp9ZGE7pjf3b/XXyruohs5+HJkda+BFxa+Sky/xoePWsDl49lLR0o3X/zdp888oZgn1kHYBN7bxQfoIL6/koOve9W/7y/6y6OVAjG8At+6V3+l9r4n7MUEk6/10TsDzwFEPwS49tpF4PlHdv338o3PPr1PsTq/f+9aIQBeEK1z8G35sQ0Mjc4qUifChTXx6XtL8xLGtufvm397kIr954Gm8wDhh6yb8PpfPX/w1e//4pHvvYH3fTn4enDUpaEnxkDOX44v3Via2/4R6Ntvfoz81R+T4mfB/ZoAk5/X9w49XHmPPO8GH1Efx5OnOoKvODQ6Dlf5GLKaiqksxPCq1npm24aLHoAuXFJ06pG6tiPBF27qzAJ4IF8CAL9OfQ/cpocOrQJ4B/B6pfroyInHH3z9r07wDQwem4AZXgDoymnnxERV9v3TOQizo7lY/tqw53mLZhbIxNdXlubhEXfY7/k3vkL7vvAr8tQhY2c/4M+p48DWF6OcrzxSHiiUroGPZFcEU11rdfJe/c/VHaa6TduOAFB5HjJARBRWsyv67jTVq/VNW7CXE/8cmS7TZUOE/90+tO/cJ3a9/YcI+ECEqwDe413LCgCuaj66Wp9f7Prb/IOdrYFJLlKR/olNDq9vlOlb/HkloHwlILqlwdFJhIILcU0w8y08Q3ZGgWUi1I6jgr3fMq62sjwvcT36gzctFnafUMTwpqqMwuMw1qlhprryabpRn78e/yTgmhStkq/5fE7AHX8H/llb1XQlDnwpZfR7dJaVMjbN8DKNmbiXGRgcnYJMj5lyrCzNHSWJBF7pFN6NhXLLelp74LtRT58qczPUXhBZZF4xcugCqmz9mG9CdxMic19BmV4C+uYZyYSL5eMjnqdPtffDdSY1e29pbiauv/j84Rzd6MScs0UVZO0ReQ4dlPHvOoRbXNM809HpXORv4LOXDPD9yz9SuOyR/hSY3Ui55O1+K8HxmGYa+u5E/LBcpDleMggyO/aupXFHgLu2pumkuQGbITDTOQD2LIDfBpOhIbyfWlmewxgiARPGnU0YQtN6EjTB5vFXfT7c59HLrvUAxunG8vzpcA2bzNpXR5XHFaXaYUey2tLQsTbwApH4dXC+kQBgBX7NlBv6uQL97XdSIebFhm4cNc8oPj9k/REWLKfpxBW5UnUZ2g7BqP3G6VTqcJH/juFfDvc2WFh+aqkydFDZwBQqxHqAjgM2ibMLoK75iPTJxtJfZuW9ywu7v22+kYPCIZVxWOl3izGaYKUbGJMl4Qo8pEtmGG9clm7BJ8bSSQ5sfBGGcHjdEGLgzjYH1eFoDkRAPHgMiRFFIoLzDCBn/PvI2IsswBMAtg6LFpB4PKlsyher3WgSYbPgTsARBYXWt1HwdVzDGCCZegicDXNdzBd6+6wydw2+jJsyo07C82WcQzwkQDwpw7N4vMS0MSNIvP8Z/x5gbtb45KfoS0nwMd+BEKlllrT9lCwWI9yRFU2S79WooIc9hMnEpbOE+eW5cSf/RHgCd5zSfqGuPD3mDiN8B/JNgZtVvYJfBjdC6SiZSDX8u3vE0p3gY7qpFU+JzEH4JBZeHL0obyl8M8EnUYh9b9InXe8v8DCzEloR4d1mpLKCD3shpSe1z4teQSHL9rCXqFcTCiS8PeB4hcJb8TOWyAY5puQ5+OeILUcwI5gFfOD79B88L7TeXXdykKwGY44LSG1B/SPyrYBZN4ZNl+7aoACi5JXkIjqS/NhoQFCPNPhUe812CA+f2Qwi9O428NnWaxH2ahyAwg+R3IxZEzbDYEQWiSZdcr5bSJIqHXUnYW95bo+sYeF8d3ApUInUYwOeX6rF9xJ4ZkvyaatF2vTfsWZ5ka9CxFYrFu52XcrYCPisXM9w5+acNtcugLBZlev+06Zom9e2e6YmSO2eLwlgdzjSJ1Gvq2QxGBs40hIOMxRGdGcpi4VXdFnPEwY5HeekQZJU0JPxSKF9/4DtMgF6BSc1ooFhBFb8XOK9tEb/xrofxvsrlrDbtqJuAejK+mz80QUI20G6OGjco7kSJSsPbRmFDXyuu1aXcTU5TKxU5TC6bjzffQEfEjEp5cTP0pmhW8Dn0kc3ultf/6f8GfLoo/j/bQFfpMtCBm004dhq8MU3/0ECn9Nguii13A/wueboGfgMK3CUWtrZoM372UJmQEhRkE5cnN+PsOvIvjcLfC7ibM8C7WF3J4Eve9jtLlltFZmT5DMopOrGueSNgJ3oCy/zfVqMJxxBFqUbh8150hITW8LhOsjNAp9ZigmNzypzECX8A7jBkJbxSJK0XcFnzWRblQjTEWVNTNKoW3C95socBTggMwjLbF6vDccnlFIKeEXw3JZZSiFUK4WyhUbZQqFsoSTVj5ZzUkotWw2+YH+GzJ4nV0u4j0zKfBNZZqUruvEBD7tEazVHqWWWfZSe8IM+xNjGk8CyJ2ouAK43Mdq4X6aEA6UU3K+OhFdkrobJ1LkwR1gO6OYgN8vzZdp3MKip7G5k3uqEo1vOF5SDLJlwJ510uhWzfd/uoG22VE2bLd6dFsTGIsALx2cturbnT79e23LPh31Z//LKUIhZ09pp4HNGMAcggsgXq0d2xA4GJNq3JQQj5qCAm+xeMSdsVrz1hKuZtNlYoFBLsvz5XGsiERqNBWOdGgu2GnytwnGioLy+/xgH2onga3X1TDpvksIzlGZYvzG+kZ5E598OtMBTwbUY+M76D600qsran83UwRy0VJXGsIg0qJbRlo92HLRTMdqqlJ4NmwlMUDfbkyjCJ9Z8mrC17jTboYw2f7T52GpazXYlXOlFPBdNS7uSs1YVtFTtBrdBOxijH01RTeRG8+y0vaUqo8xBS1VEkEDmNBnjXiSxbwyQzhgZ12ypav+QPAX7jM+RVc+tlqpxwYGcn8wjZygtVaz1VCYcONzg9v/DFcfGsj7eUKE06+T5uFQN5OBLuarKsbO5GsjBl4NvcxGWMnsOvhx8Ofh6pYGc8/VK85ZSS+9E6c3KOfh6o3dZNQ+7edjtGfr+D78ykGcekdvUAAAAAElFTkSuQmCC;`
+ Recommended logo geometry on an architecture page: `x=30 y=50 width=240.9 height=50`.
+-The actual PNG is 1200×250 (~4.8:1); keep that aspect ratio when resizing.
++The embedded PNG is 159×33 (~4.8:1); keep that aspect ratio when resizing. A sharper logo needs a vector or ≥482×100 source from the brand owner.
+ 
+ ```xml
+ <!-- outer border — strokeWidth=3, fillColor=none, plain black -->
+ <mxCell id="border" parent="1"
+   style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
+   vertex="1">
+-  <mxGeometry x="0" y="-40" width="3100" height="2600" as="geometry"/>
++  <mxGeometry x="0" y="-40" width="2570" height="2600" as="geometry"/> <!-- width = cloud_x + cloud_w + 113; 2570 for the shipped skeleton -->
+ </mxCell>
+ 
+ <!-- Comprinno logo — real PNG, base64 copied from references/skeleton-3az.drawio.xml -->
+@@ -63,7 +63,7 @@ The actual PNG is 1200×250 (~4.8:1); keep that aspect ratio when resizing.
+   value="&lt;h1 style='text-align:left'&gt;&lt;b style='font-size:32px'&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style='text-align:left;font-size:20px'&gt;Version: 1.0&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Date: To be filled&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Creator: To be filled&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Reviewer: To be filled&lt;/div&gt;"
+   style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
+   vertex="1">
+-  <mxGeometry x="290.9" y="0" width="440" height="200" as="geometry"/>
++  <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry"/>
+ </mxCell>
+ ```
+ 
+@@ -86,53 +86,47 @@ parent=1 (root)
+ ├── title           (absolute)
+ ├── users           (absolute, outside AWS Cloud)
+ │
+-├── cloud           (absolute, e.g. x=260 y=250 w=2727 h=2115)
+-│   ├── waf         (relative to cloud, global row y=70)
+-│   ├── route53     (relative to cloud, global row y=70)
+-│   ├── s3          (relative to cloud, global row y=70)
+-│   ├── iam         (relative to cloud, global row y=70)
++├── cloud           (absolute, x=260 y=250; w from the wrap rule)
++│   ├── route53     (relative to cloud, global band y=70)
++│   ├── iam         (relative to cloud, global band y=70)
++│   ├── s3          (relative to cloud, global band y=70 — CloudFront origin only)
++│   ├── waf         (relative to cloud, global band y=70 — only when it fronts CloudFront)
+ │   │
+-│   ├── region      (relative to cloud — container=0 DECORATIVE BOX ONLY,
+-│   │               NOT a parent. Children are parented to cloud directly.)
+-│   │
+-│   ├── secrets_manager  (relative to cloud, y≈350 — visually inside region)
+-│   ├── cloudwatch       (relative to cloud, y≈350)
+-│   ├── cloudtrail       (relative to cloud, y≈350)
+-│   ├── kms              (relative to cloud, y≈350)
+-│   ├── ecr              (relative to cloud, y≈350)
+-│   │
+-│   └── vpc   (relative to cloud — NOT child of region.
+-│             vpc_cloud_x = region_cloud_x + vpc_region_x
+-│             vpc_cloud_y = region_cloud_y + vpc_region_y)
+-│       ├── igw           (relative to vpc)
+-│       ├── alb           (relative to vpc)
+-│       │
+-│       ├── az1           (relative to vpc, e.g. x=520 y=80  w=1640 h=340)
+-│       │   ├── pub1      (relative to az1, e.g. x=35 y=50 w=300 h=250)
+-│       │   │   └── nat1  (relative to pub1)
+-│       │   ├── app1      (relative to az1, e.g. x=375 y=50 w=555 h=250)
+-│       │   └── db1       (relative to az1, e.g. x=970 y=50 w=300 h=250)
+-│       │       └── rds1  (relative to db1)
+-│       │
+-│       ├── az2           (relative to vpc, e.g. x=520 y=540 w=1640 h=340)
+-│       │   └── ...same subnet structure...
++│   └── region      (relative to cloud, x=247 y=285 — container, parent of everything regional)
++│       ├── secrets_manager  (relative to region, services row y=65)
++│       ├── cloudwatch       (relative to region, services row)
++│       ├── cloudtrail       (relative to region, services row)
++│       ├── kms              (relative to region, services row)
++│       ├── ecr / acm / waf (ALB-fronting) / lambda  (relative to region, services row)
+ │       │
+-│       └── lane   (relative to vpc, vertical lane spanning all AZs)
+-│           ├── task-az1  (relative to lane)
+-│           └── task-az2  (relative to lane)
++│       └── vpc   (relative to region, x=85 y=260)
++│           ├── igw           (relative to vpc)
++│           ├── alb           (relative to vpc)
++│           │
++│           ├── az1           (relative to vpc, x=520 y=80; w = content_right + 40)
++│           │   ├── pub1      (relative to az1, x=35 y=50 w=300 h=250)
++│           │   │   └── nat1  (relative to pub1)
++│           │   ├── app1      (relative to az1, x=pub_right+40, w=300 or lane_w+55)
++│           │   └── db1       (relative to az1, x=app_right+40)
++│           │       └── rds1  (relative to db1)
++│           │
++│           ├── az2           (relative to vpc, y=540)  └── ...same subnet structure...
++│           │
++│           └── lane   (relative to vpc, vertical lane spanning all AZs)
++│               ├── task-az1  (relative to lane)
++│               └── task-az2  (relative to lane)
+ │
+-└── edges           (all edges: parent=1 for cross-boundary edges;
+-                    parent=vpc permitted for intra-VPC edges)
++└── edges           (all edges: parent=1, absolute coordinates for waypoints)
+ ```
+ 
+ **Critical rules:**
+-- `region` uses **`container=0`** — it is a decorative boundary box, not a parent.
+-  All services visually inside the region are actually parented to **`cloud`**.
+-- `vpc` is a direct child of **`cloud`**, not of `region`.
++- The hierarchy is **nested and scope is the parent chain**: regional services `parent=region`, global services
++  `parent=cloud`, the VPC is a child of the Region. Do not flatten it (the validator also checks scope by absolute
++  position, so a mis-framed child fails).
+ - Compute icons inside subnets have `parent` set to the subnet cell.
+-- Compute icons inside cluster lanes have `parent` set to the lane cell.
+-- **Cross-boundary edges** (e.g. Users→IGW) have `parent="1"` (root).
+-- **Intra-VPC edges** (IGW→ALB, ALB→lane, lane→DB) may use `parent="vpc"` for cleaner routing.
++- Compute icons (tasks) inside cluster lanes have `parent` set to the lane cell.
++- **All edges have `parent="1"`** (root) — never parent an edge to a container.
++- The **Flow page is the exception: flat** (every node `parent="1"`, decorative scope boxes) — see §11.
+ 
+ ---
+ 
+@@ -298,9 +292,8 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
+ 
+ | Scope | Container parent | Examples |
+ |-------|-----------------|----------|
+-| Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), **WAF** |
+-| Cloud band global icon row | `cloud` | WAF — `parent=cloud`, `y=70` alongside Route53/IAM; **no edge to ALB on the Architecture page**. WAF's association with ALB/CF is shown on the Flow page only (dashed "inspect" edge). |
+-| Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda |
++| Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), WAF fronting CloudFront |
++| Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda, WAF fronting an ALB |
+ | VPC entry column | `vpc` | IGW, ALB |
+ | Public subnet | inside AZ public-subnet container | NAT Gateway |
+ | App subnet | inside AZ app-subnet container | (compute lives in the cluster/ASG lane over this column) |
+@@ -313,9 +306,10 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
+ - **CloudFront is the entry point for web traffic**: place it in the `cloud`
+   band inline with the IGW/ALB row (same y-centre), left of the VPC entry
+   column. This keeps the inbound path a straight horizontal line
+-  (Users → CloudFront → IGW → ALB). WAF, when
+-  present, attaches to CloudFront there.
+-- When there is NO CloudFront, the ALB (and WAF) is the entry point inside `vpc`.
++  (Users → CloudFront → IGW → ALB).
++- When there is NO CloudFront, the ALB is the entry point inside `vpc`.
++- **WAF follows what it protects** (regional unless attached to CloudFront): CloudFront web ACL → global band; ALB
++  web ACL → regional row. No WAF edge on the Architecture page; draw the dashed "inspect" edge on the Flow page.
+ - IGW sits at the **left VPC border**: negative x (e.g. x=-60) relative to the
+   vpc container so it straddles the VPC left edge.
+ - **S3 as a CloudFront static-site origin** sits in the global/edge band next to
+@@ -343,32 +337,28 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
+ 
+ ## 11. Flow page layout
+ 
+-Flow pages use a simpler coordinate space (typically ~2500×1200):
++Flow pages are **flat**: every node and edge is `parent="1"` with absolute coordinates, on a 2500×1200 canvas.
++Numbers (boxes, spine, slots) are in the cheatsheet "Flow page" section.
+ 
+ - Border: `x=0 y=0 w=2500 h=1200; rounded=0; strokeColor=#000000; strokeWidth=3`
+-- Logo and title block: same style as the architecture page (real base64 logo).
+-- Nodes: left-to-right, 280px spacing between icon centres (icon=120×120).
+-- All nodes are children of `parent="1"` (root), NOT nested inside containers,
+-  unless a container boundary is meaningful for the flow.
+-- Branch nodes (e.g. S3 static assets, Secrets Manager) sit on a row ~220px
+-  above the main left-to-right spine and connect with a short dashed arrow.
+-- Edges: `parent="1"`, `strokeWidth=4`, use waypoints to avoid crossings.
+-- Return/response edges use `dashed=1` and a lighter/category `strokeColor`.
+-- Labels on edges: short verb phrases; number the main-path steps ①②③④.
++- Logo and title block: same style as the architecture page (real base64 logo); the title carries
++  Version / Date / Creator / Reviewer.
++- **Scope boxes** (`f-cloud`, `f-region`, `f-vpc`): required, decorative (`container=0`), parent `1`. They are never
++  parents; each node must sit inside the box that matches its AWS scope (the validator checks by position).
++- Nodes: left-to-right on one spine, 320px between icon centres (icon=120×120), identical y for every spine node.
++- Branch nodes (240px above/below the spine) are region-scope services only (S3, Bedrock, Secrets Manager…).
++- Edges: `strokeWidth=4`, use waypoints to avoid crossings. Return/response edges use `dashed=1` and a
++  lighter/category `strokeColor`. Labels are short verb phrases; number the main-path steps ①②③④.
++- Route 53: `Users → Route 53 → the public endpoint it resolves to` (CloudFront, otherwise the ALB; never the IGW).
++  WAF: dashed "inspect" edge to its target.
+ 
+ ---
+ 
+ ## 12. What the architecture page must NOT do
+ 
+-- Do not shrink containers arbitrarily — but **do** apply the right-margin check: if
+-  `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), trim the four containers
+-  with the **inset-preserving formula** (NOT a proportional `×new_AZ_w/1640` scale — that
+-  scales the fixed AZ inset and is geometrically wrong):
+-  `new_AZ_w = content_right + 40`; `new_VPC_w = 520 + new_AZ_w + 65`;
+-  `new_Region_w = 85 + new_VPC_w + 85`; `new_Cloud_w = 247 + new_Region_w + 85`.
+-  Then re-centre the regional/global rows in the new widths. The full formula, worked
+-  examples, and the flattened dual-lane validated table live in `coords-cheatsheet.md`
+-  (single source). Dead space exceeding 20% must be corrected.
++- Do not leave containers at stale default widths — they always wrap their content (wrap rule in the cheatsheet,
++  `az_w = content_right + 40` and the fixed insets), and the regional row and global band are re-centred after
++  every change. No proportional scaling.
+ - Do not set `container=0` on subnets or AZ cells.
+ - Do not use `fillColor=default` on the outer border; use `fillColor=none` + black stroke, `strokeWidth=3`.
+ - Do not reuse a stale/truncated logo blob — copy a fresh base64 blob from `references/skeleton-3az.drawio.xml`.
+@@ -407,12 +397,12 @@ style="fillColor=none;strokeColor=#ED7100;verticalAlign=top;fontStyle=1;
+ style="sketch=0;...shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;"
+ ```
+ Use `resIcon=mxgraph.aws4.ecs` for ECS, `resIcon=mxgraph.aws4.eks` for EKS.
+-Never use `ecs` or `eks` — those produce blank boxes.
++Never use `elastic_container_service` or `elastic_kubernetes_service` — those produce blank boxes.
+ 
+ **Checklist before saving:**
+ - [ ] Lane parent is `vpc` (not `az` or `subnet`)
+-- [ ] Badge resIcon is `ecs` or `eks` (NOT `ecs`)
+-- [ ] Task icon parent is the lane cell
++- [ ] Badge resIcon is `ecs` or `eks` (NOT `elastic_container_service` / `elastic_kubernetes_service`)
++- [ ] Task icon parent is the lane cell; lane inside the app column with 35px left / 20px right gap
+ - [ ] Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`
+ - [ ] Two lanes side by side: w=240 each (not 480 each — overflows app column)
+ 
+@@ -433,7 +423,7 @@ All edges must pass these checks before the file is saved:
+       `source="ecslane"` / `source="ekslane"` and add explicit horizontal
+       waypoints to route below the regional services row.
+       **Every baseline edge that exits a lane top MUST use horizontal waypoints**
+-      at `y = pvpc_abs_top − 30` — no exceptions. This applies to ECR, Secrets
++      at `y = vpc_abs_top − 12` (783 at default scale) — no exceptions. This applies to ECR, Secrets
+       Manager, Bedrock, Transcribe, MSK, S3, and any other service above the VPC.
+       **Prefer removing non-essential baseline edges.** Only ECR (image pull) and
+       optionally Secrets Manager are required on the architecture page. Bedrock,
+diff --git a/.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml b/.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
+index 61a9baf..526bb21 100644
+--- a/.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
++++ b/.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml
+@@ -17,40 +17,31 @@
+   COORDINATE REFERENCE: .kiro/skills/arch-diagram/references/coords-cheatsheet.md
+   FULL RULES:           .kiro/skills/arch-diagram/references/house-style.md
+ 
+-  GEOMETRY SUMMARY (do not change these container values):
+-    cloud:   x=260  y=250  w=2727 h=2115  (child of root)
+-    region:  x=247  y=285  w=2395 h=1745  (child of cloud)
+-    vpc:     x=85   y=260  w=2225 h=1405  (child of region)
+-    az1:     x=520  y=80   w=1640 h=340   (child of vpc)
+-    az2:     x=520  y=540  w=1640 h=340   (child of vpc)
+-    az3:     x=520  y=1000 w=1640 h=340   (child of vpc)
++  GEOMETRY SUMMARY — container sizes follow the WRAP RULE (cheatsheet). Values below are for the
++  shipped layout (single lane, public 1 icon):
++    border:  x=0    y=-40 w=2570 h=2600  (w = cloud_x + cloud_w + 113)
++    cloud:   x=260  y=250 w=2197 h=2115  (child of root; w = 247 + region_w + 85)
++    region:  x=247  y=285 w=1865 h=1745  (child of cloud; w = 85 + vpc_w + 85)
++    vpc:     x=85   y=260 w=1695 h=1405  (child of region; w = 520 + az_w + 65)
++    az1:     x=520  y=80   w=1110 h=340   (child of vpc; w = content_right + 40)
++    az2:     x=520  y=540  w=1110 h=340
++    az3:     x=520  y=1000 w=1110 h=340
+     icons in subnets: w=120 h=120, y=65, x=centred
+-    igw: x=-60 y=650 (child of vpc)
+-    alb: x=160 y=650 (child of vpc)
+-
+-  ⚠️  SUBNET WIDTH — MUST BE CONSISTENT:
+-    Width by icon count (applies to ALL subnet types equally):
+-      - 1 icon:  w=300  (public, app, OR db — all same)
+-      - 2 icons: w=380
+-      - 3 icons: w=520
+-    
+-    LANE EXCEPTION ONLY: When app contains a cluster lane (not direct icons):
+-      - app_w = lane_w + 55 (e.g., lane_w=300 → app_w=355)
+-    
+-    Subnet x positions (relative to AZ):
+-      - public: x=35
+-      - app:    x = 35 + public_w + 40
+-      - db:     x = app_x + app_w + 40
+-
+-    EXAMPLE — all subnets with 1 icon each:
+-      public: x=35,  w=300
+-      app:    x=375, w=300  (35+300+40)
+-      db:     x=715, w=300  (375+300+40)
++    igw: x=-60 y=650 (child of vpc)      alb: x=160 y=650 (child of vpc)
++  If the subnet columns change (2-icon subnet, dual lanes, ...) recompute the five container widths with the
++  wrap rule and RE-CENTRE the regional row and global band (validate-drawio.py enforces both).
++
++  SUBNET COLUMNS (relative to AZ): public x=35 | 40 | app | 40 | db   (x = previous right edge + 40)
++    Width by icon count: 1 icon w=300, 2 icons w=380, 3 icons w=520.
++    Lane exception: app_w = lane_w + 55 (35px left / 20px right gap).
++    SHIPPED (lane-ready): public x=35 w=300 | app x=375 w=355 | db x=770 w=300  -> content_right=1070.
++    No lane and 1 direct app icon: app w=300 -> db x=715 -> re-run the wrap rule.
+ 
+   LANE GEOMETRY (relative to vpc, only add when compute spans AZs):
+-    Single lane:  x=1030 y=80 w=480 h=1260 (single lane; dual: w=240 each, gap=100px)
+-    Task icons:   x=180  y=110 / y=570 / y=1030  (AZ-1/2/3)
+-    Badge:        x=1008 y=88  w=45 h=45 (child of vpc)
++    lane_x = az_x + app_x + 35 = 520 + 375 + 35 = 930      (35px left / 20px right gap)
++    Single lane:  x=930 y=170 w=300 h=1110   (dual: w=240 each, x=930 and 1190, app_w=555)
++    Task icons:   x=90  y=25 / 485 / 945     (AZ-1/2/3, children of the lane)
++    Badge:        x=938 y=178 w=45 h=45      (child of vpc)
+ -->
+ <mxfile host="app.diagrams.net" pages="2">
+ 
+@@ -69,7 +60,7 @@
+         <mxCell id="border" parent="1"
+           style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
+           vertex="1">
+-          <mxGeometry x="0" y="-40" width="3100" height="2600" as="geometry" />
++          <mxGeometry x="0" y="-40" width="2570" height="2600" as="geometry" />
+         </mxCell>
+ 
+         <!-- COMPRINNO LOGO — real PNG base64 (do not reuse stale blobs) -->
+@@ -103,7 +94,7 @@
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;AWS Cloud&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="260" y="250" width="2727" height="2115" as="geometry" />
++          <mxGeometry x="260" y="250" width="2197" height="2115" as="geometry" />
+         </mxCell>
+ 
+         <!-- ── GLOBAL ROW: S3-origin + IAM in top band; CloudFront INLINE with IGW ── -->
+@@ -118,22 +109,16 @@
+           <mxGeometry x="72" y="1195" width="120" height="120" as="geometry" />
+         </mxCell> -->
+ 
+-        <!-- SLOT: S3 static-site origin (top global band) — x=452 y=70 -->
+-        <!-- <mxCell id="s3_origin" parent="cloud" ... x=452 y=70 /> -->
+-
+-        <!-- SLOT: IAM (top global band, grouped with S3) — x=632 y=70 -->
++        <!-- SLOT: S3 static-site origin (global band, parent=cloud, y=70; x from the band formula) -->
++        <!-- <mxCell id="s3_origin" parent="cloud" ... y=70 /> -->
+ 
+-        <!-- SLOT: Route53 (global service, parent=cloud, equidistant cloud↔region)
+-             Formula: cloud_rel_x = (region_cloud_x - 120) / 2 = (247-120)/2 = 63
+-             cloud_rel_y = spine_abs_yc - 60 - cloud_abs_y (= 1135 for 3-AZ default)
+-             y = same inline row as IGW/ALB so inbound path is horizontal.
+-             Users x = cloud_abs_x - 40 - 120 = 100 (outside cloud, 40px gap)
+-        <mxCell id="route53" parent="cloud"
+-          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Route 53&lt;/b&gt;&lt;/font&gt;"
+-          style="...fillColor=#8C4FFF...resIcon=mxgraph.aws4.route_53;" vertex="1">
+-          <mxGeometry x="63" y="1135" width="120" height="120" as="geometry" />
+-        </mxCell> -->
+-        <!-- <mxCell id="iam" parent="cloud" ... x=632 y=70 /> -->
++        <!-- IAM (baseline, always included) — global band, parent=cloud, y=70. n global icons: start_x = round_half_up((cloud_w - (n*120 + (n-1)*60))/2), pitch 180 (n=1: x=1039; n=2: 949/1129); order left to right: Route 53, IAM, S3 origin -->
++        <mxCell id="iam" parent="cloud"
++          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;KMS&lt;/b&gt;&lt;/font&gt;"
++          style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.identity_and_access_management;"
++          vertex="1">
++          <mxGeometry x="1039" y="70" width="120" height="120" as="geometry" />
++        </mxCell>
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <!--  REGION                                                        -->
+@@ -142,59 +127,65 @@
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;REGION_NAME&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="247" y="285" width="2395" height="1745" as="geometry" />
++          <mxGeometry x="247" y="285" width="1865" height="1745" as="geometry" />
+         </mxCell>
+ 
+         <!-- ── REGIONAL SERVICES ROW (children of region, all y=65) ───── -->
+-        <!-- Space 165px apart from x=140. Add/remove as needed.          -->
++        <!-- Baseline row = CloudWatch, CloudTrail, KMS (n=3: x=693/873/1053, pitch 180). Re-centre after any add/delete: start_x = round_half_up((region_w - (n*120 + (n-1)*60))/2) -->
+ 
+-        <!-- SLOT: Secrets Manager — x=140 y=65 -->
++        <!-- SLOT: Secrets Manager (optional) — re-centre the row after adding -->
++        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
+         <mxCell id="secrets" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Secrets Manager&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;"
+           vertex="1">
+           <mxGeometry x="688" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
++        -->
+ 
+-        <!-- SLOT: CloudWatch — x=305 y=65 -->
++        <!-- CloudWatch (baseline, always included) -->
+         <mxCell id="cloudwatch" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;CloudWatch&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;"
+           vertex="1">
+-          <mxGeometry x="868" y="65" width="120" height="120" as="geometry" />
++          <mxGeometry x="693" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
+ 
+-        <!-- SLOT: CloudTrail — x=470 y=65 -->
++        <!-- CloudTrail (baseline, always included) -->
+         <mxCell id="cloudtrail" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;CloudTrail&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudtrail;"
+           vertex="1">
+-          <mxGeometry x="1048" y="65" width="120" height="120" as="geometry" />
++          <mxGeometry x="873" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
+ 
+-        <!-- SLOT: KMS — x=635 y=65 -->
++        <!-- KMS (baseline, always included) -->
+         <mxCell id="kms" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;KMS&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.key_management_service;"
+           vertex="1">
+-          <mxGeometry x="1228" y="65" width="120" height="120" as="geometry" />
++          <mxGeometry x="1053" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
+ 
+-        <!-- SLOT: ACM — x=800 y=65 -->
++        <!-- SLOT: ACM (optional) — re-centre the row after adding -->
++        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
+         <mxCell id="acm" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;ACM&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.certificate_manager_3;"
+           vertex="1">
+           <mxGeometry x="1408" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
++        -->
+ 
+-        <!-- SLOT: ECR — x=965 y=65 -->
++        <!-- SLOT: ECR (optional) — re-centre the row after adding -->
++        <!-- OPTIONAL — uncomment only if requested/required, then re-centre the row
+         <mxCell id="ecr" parent="region"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;ECR&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecr;"
+           vertex="1">
+           <mxGeometry x="1588" y="65" width="120" height="120" as="geometry" />
+         </mxCell>
++        -->
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <!--  VPC                                                           -->
+@@ -203,17 +194,14 @@
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;VPC&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="85" y="260" width="2225" height="1405" as="geometry" />
++          <mxGeometry x="85" y="260" width="1695" height="1405" as="geometry" />
+         </mxCell>
+ 
+ 
+-        <!-- ── WAF (optional, global service) — place ABOVE ALB if WAF is in scope ──────── -->
+-        <!-- WAF is NOT in the regional services row and NOT inline with the inbound path.    -->
+-        <!-- parent=1 (root). x = ALB_abs_x_left. y = ALB_abs_y_top - 200.                  -->
+-        <!-- Edge: WAF→ALB. exitX=0.5 exitY=1, entryX=0.5 entryY=0. Vertical drop.          -->
+-        <!-- <mxCell id="waf" parent="1" value="..." style="...resIcon=mxgraph.aws4.waf;" vertex="1">
+-          <mxGeometry x="ALB_abs_x_left" y="ALB_abs_y_top_minus_200" width="120" height="120" />
+-        </mxCell> -->
++        <!-- ── WAF (optional) — placement follows what it protects; NO edge on this page ────────── -->
++        <!-- Fronting CloudFront (global web ACL): global band, parent=cloud, y=70 (band formula).    -->
++        <!-- Fronting an ALB (regional web ACL):   regional row, parent=region, y=65 (row formula).   -->
++        <!-- Never parent=1, never inside the VPC. The WAF->target association is a Flow-page edge.  -->
+ 
+         <!-- ── ENTRY COLUMN (children of vpc) ───────────────────────── -->
+ 
+@@ -234,13 +222,13 @@
+         </mxCell>
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+-        <!--  AVAILABILITY ZONE 1  (vpc-relative: x=520 y=80 w=1640 h=340) -->
++        <!--  AVAILABILITY ZONE 1  (vpc-relative: x=520 y=80 w=1110 h=340 — w = content_right + 40) -->
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <mxCell id="az1" parent="vpc"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="520" y="80" width="1640" height="340" as="geometry" />
++          <mxGeometry x="520" y="80" width="1110" height="340" as="geometry" />
+         </mxCell>
+ 
+         <!-- Public subnet 1 (az1-relative: x=35 y=50 w=300 h=250) -->
+@@ -248,110 +236,110 @@
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-1&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
++          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+-        <!-- SLOT: 1 icon in pub — x=130 y=65 w=120 h=120 (centred: (380-120)/2=130)
+-        2 icons in pub — x=50 y=65 and x=210 y=65 (formula: (380-280)/2=50) -->
++        <!-- SLOT: 1 icon in pub — x=90 y=65 w=120 h=120 (centred: (300-120)/2=90)
++        2 icons in pub — widen pub1-3 to 380, shift app/db right by 80, re-run the wrap rule; x=50 and x=210 -->
+         <!-- <mxCell id="nat1" parent="pub1" ... x=90 y=65 w=120 h=120 /> -->
+ 
+-        <!-- App subnet 1 (az1-relative: x=415 y=50 w=650 h=250) -->
++        <!-- App subnet 1 (az1-relative: x=375 y=50 w=355 h=250 — lane-ready; 1 direct icon: w=300) -->
+         <mxCell id="app1" parent="az1"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-1&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
++          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
+         </mxCell>
+-        <!-- SLOT: icon in app1 — x=265 y=65 (if compute lane not used) -->
++        <!-- SLOT: icon in app1 — without a lane use w=300 and x=90 y=65; with a lane see CLUSTER LANE below -->
+ 
+-        <!-- DB subnet 1 (az1-relative: x=1145 y=50 w=460 h=250) -->
++        <!-- DB subnet 1 (az1-relative: x=770 y=50 w=300 h=250 = app_right+40) -->
+         <mxCell id="db1" parent="az1"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-1&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
++          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+         <!-- SLOT: single db icon in db1 — x=90 y=65 w=120 h=120 (centred in w=300) -->
+         <!-- SLOT: two db icons  in db1 — left x=20, right x=160 (for w=300: (300-280)/2=10≈20), y=65 -->
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+-        <!--  AVAILABILITY ZONE 2  (vpc-relative: x=520 y=540 w=1640 h=340) -->
++        <!--  AVAILABILITY ZONE 2  (vpc-relative: x=520 y=540 w=1110 h=340 — w = content_right + 40) -->
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <mxCell id="az2" parent="vpc"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="520" y="540" width="1640" height="340" as="geometry" />
++          <mxGeometry x="520" y="540" width="1110" height="340" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="pub2" parent="az2"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-2&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
++          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="app2" parent="az2"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-2&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
++          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="db2" parent="az2"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-2&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
++          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+-        <!--  AVAILABILITY ZONE 3  (vpc-relative: x=520 y=1000 w=1640 h=340) -->
++        <!--  AVAILABILITY ZONE 3  (vpc-relative: x=520 y=1000 w=1110 h=340 — w = content_right + 40) -->
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <mxCell id="az3" parent="vpc"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Availability Zone&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_availability_zone;strokeColor=#545B64;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#545B64;dashed=1;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="520" y="1000" width="1640" height="340" as="geometry" />
++          <mxGeometry x="520" y="1000" width="1110" height="340" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="pub3" parent="az3"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;public-subnet-3&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#248814;fillColor=#E9F3E6;verticalAlign=top;align=left;spacingLeft=30;fontColor=#248814;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="35" y="50" width="380" height="250" as="geometry" />
++          <mxGeometry x="35" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="app3" parent="az3"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;app-subnet-3&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#E6F2F8;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="455" y="50" width="650" height="250" as="geometry" />
++          <mxGeometry x="375" y="50" width="355" height="250" as="geometry" />
+         </mxCell>
+ 
+         <mxCell id="db3" parent="az3"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;db-subnet-3&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;strokeColor=#147EBA;fillColor=#CCE5FF;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="1145" y="50" width="300" height="250" as="geometry" />
++          <mxGeometry x="770" y="50" width="300" height="250" as="geometry" />
+         </mxCell>
+ 
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <!--  CLUSTER LANE (optional — add when compute spans AZ rows)     -->
+         <!--  Lane must fit INSIDE the app subnet column borders.          -->
+-        <!--  Single lane: x=1010 y=170 w=300 h=1110 (vpc-relative)        -->
++        <!--  Single lane: x=930 y=170 w=300 h=1110 (vpc-relative)         -->
+         <!--  Task icons (child of lane): x=90, y=25/485/945               -->
+-        <!--  Badge (child of vpc): x=1018 y=178 w=45 h=45                 -->
++        <!--  Badge (child of vpc): x=938 y=178 w=45 h=45                  -->
+         <!-- ══════════════════════════════════════════════════════════════ -->
+         <!--
+         <mxCell id="ecslane" parent="vpc"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Amazon ECS (Fargate)&lt;/b&gt;&lt;/font&gt;"
+           style="fillColor=none;strokeColor=#ED7100;verticalAlign=top;fontStyle=1;fontColor=#ED7100;whiteSpace=wrap;html=1;strokeWidth=3;align=left;spacingTop=8;spacingLeft=55;fontSize=14;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;"
+           vertex="1">
+-          <mxGeometry x="1010" y="170" width="300" height="1110" as="geometry" />
++          <mxGeometry x="930" y="170" width="300" height="1110" as="geometry" />
+         </mxCell>
+         <mxCell id="ecsbadge" parent="vpc" value=""
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;" vertex="1">
+-          <mxGeometry x="1018" y="178" width="45" height="45" as="geometry" />
++          <mxGeometry x="938" y="178" width="45" height="45" as="geometry" />
+         </mxCell>
+         <mxCell id="ecs1" parent="ecslane" value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;Fargate Task&lt;/b&gt;&lt;/font&gt;"
+           style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;whiteSpace=wrap;labelWidth=160;spacingTop=2;fontSize=18;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;" vertex="1">
+@@ -406,70 +394,48 @@
+ 
+         <!-- TITLE BLOCK — replace PROJECT_NAME -->
+         <mxCell id="f-title" parent="1"
+-          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;"
++          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
+           style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
+           vertex="1">
+-          <mxGeometry x="300.9" y="0" width="440" height="120" as="geometry" />
++          <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry" />
+         </mxCell>
+ 
+-        <!-- ══════════════════════════════════════════════════════════════ -->
+-        <!--  FLOW CONTAINERS (optional — uncomment for VPC-scoped flows)  -->
+-        <!--  Provides scope context: which services run where.            -->
+-        <!-- ══════════════════════════════════════════════════════════════ -->
+-
+-        <!-- AWS CLOUD boundary — uncomment to show global/regional scope -->
+-        <!--
++        
++        <!-- ── SCOPE BOXES — decorative (container=0), ABSOLUTE coordinates, never parents. -->
++        <!--    Every flow node is parent="1" with absolute coordinates (flat layout).      -->
+         <mxCell id="f-cloud" parent="1"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;AWS Cloud&lt;/b&gt;&lt;/font&gt;"
+-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
++          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="300" y="120" width="2100" height="1000" as="geometry" />
++          <mxGeometry x="380" y="220" width="2040" height="920" as="geometry" />
+         </mxCell>
+-        -->
+-
+-        <!-- REGION boundary — child of f-cloud, uncomment for regional services -->
+-        <!--
+-        <mxCell id="f-region" parent="f-cloud"
+-          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;eu-west-1&lt;/b&gt;&lt;/font&gt;"
+-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
++        <mxCell id="f-region" parent="1"
++          value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;REGION_NAME&lt;/b&gt;&lt;/font&gt;"
++          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#147EBA;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#147EBA;dashed=1;strokeWidth=2;"
+           vertex="1">
+-          <mxGeometry x="100" y="80" width="1900" height="840" as="geometry" />
++          <mxGeometry x="680" y="390" width="1700" height="680" as="geometry" />
+         </mxCell>
+-        -->
+-
+-        <!-- VPC boundary — child of f-region, uncomment for VPC-internal flows -->
+-        <!--
+-        <mxCell id="f-vpc" parent="f-region"
++        <mxCell id="f-vpc" parent="1"
+           value="&lt;font style=&quot;font-size:18px;&quot;&gt;&lt;b&gt;VPC&lt;/b&gt;&lt;/font&gt;"
+-          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
+-          vertex="1">
+-          <mxGeometry x="100" y="280" width="1000" height="480" as="geometry" />
+-        </mxCell>
+-        -->
+-
+-        <!-- ── FLOW NODES ─────────────────────────────────────────────── -->
+-        <!--  Layout: left-to-right spine at y≈500, nodes spaced 320px    -->
+-        <!--  Branch nodes (e.g. S3 static): y≈260 (240px above spine)    -->
+-        <!--  All nodes: parent="1", w=120 h=120                          -->
+-        <!--                                                               -->
+-        <!--  Node 1  x=80   (Users)                                      -->
+-        <!--  Node 2  x=400  (+320)                                       -->
+-        <!--  Node 3  x=720  (+320)                                       -->
+-        <!--  Node 4  x=1040 (+320)                                       -->
+-        <!--  Node 5  x=1360 (+320)                                       -->
+-        <!--  Node 6  x=1680 (+320)                                       -->
+-        <!--  Branch  same x as anchor, y=260                             -->
++          style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=18;fontStyle=0;container=0;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#248814;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;strokeWidth=2;"
++          vertex="1">
++          <mxGeometry x="740" y="450" width="1000" height="560" as="geometry" />
++        </mxCell>
++
++        <!-- ── FLOW NODES (all parent="1", absolute coordinates, w=h=120) ─────────────── -->
++        <!--  Spine: node top y=670 (centre 730); pitch 320; node x = 220 + 320*k            -->
++        <!--  k=0 Users                 x=220  y=670   (outside the cloud box)               -->
++        <!--  k=1 CloudFront            x=540  y=670   (cloud scope, left of the region box) -->
++        <!--  k=2..4 VPC nodes          x=860 / 1180 / 1500, y=670   (inside the VPC box)    -->
++        <!--  k=5..6 regional nodes     x=1820 / 2140, y=670         (region, right of VPC)  -->
++        <!--  Branch nodes (240px above y=430 / below y=910): REGION-scope services only,    -->
++        <!--  anchored to k=5/6. Never branch off a VPC node (it would leave the VPC box).   -->
++        <!--  Cloud scope: WAF fronting CloudFront x=540 y=250; Route 53 x=470 y=910.        -->
++        <!--  WAF fronting an ALB is region scope: first free region slot, dashed inspect    -->
++        <!--  edge to the ALB. Route 53 edges: Users -> R53 -> the public endpoint it        -->
++        <!--  resolves to (CloudFront, else the ALB) — never the IGW.                        -->
+         <!-- ─────────────────────────────────────────────────────────── -->
+ 
+-        <!-- SLOT: User node — x=80 y=500 -->
+-        <!-- <mxCell id="f-user" parent="1" ... x=80 y=500 w=120 h=120 /> -->
+-
+-        <!-- SLOT: Node 2 — x=400 y=500 -->
+-        <!-- SLOT: Node 3 — x=720 y=500 -->
+-        <!-- SLOT: Node 4 — x=1040 y=500 -->
+-        <!-- SLOT: Node 5 — x=1360 y=500 -->
+-        <!-- SLOT: Node 6 — x=1680 y=500 -->
+-
+         <!-- ── FLOW EDGES — all parent="1" ──────────────────────────── -->
+         <!-- <mxCell id="f-e1" edge="1" source="f-user" target="..." parent="1" ...> -->
+ 
+diff --git a/.kiro/steering/arch-diagram-conventions.md b/.kiro/steering/arch-diagram-conventions.md
+index a83e8a8..c3dbcdf 100644
+--- a/.kiro/steering/arch-diagram-conventions.md
++++ b/.kiro/steering/arch-diagram-conventions.md
+@@ -1,249 +1,113 @@
+ # Architecture diagram conventions
+ 
+-For architecture requests, use `.kiro/skills/arch-diagram/SKILL.md`. Let Kiro
+-reason about the requirements, ask only topology-changing questions, and keep
+-the user-facing workflow prompt based. The normal deliverable is one editable
+-Draw.io file with one architecture page and one primary flow page; do not add
+-extra flows unless requested.
+-
+-**Visual reference precedence (most authoritative first):**
+-1. `references/coords-cheatsheet.md` — **the only source for geometry numbers**.
+-   All x/y/w/h values, formulas, and derived positions live here. Do not read
+-   numbers from any other file.
+-2. `references/skeleton-3az.drawio.xml` — ready-made blank 3-AZ architecture.
+-   Copy it; fill in the topology. Never build containers from scratch.
+-3. `references/house-style.md` — style strings and layout rules (no numbers).
+-4. `diagram examples/Comprinno Architecture Template.drawio.xml` — visual
+-   style reference only. Do not copy its coordinates or topology.
+-
+-Any recent validated output in `outputs/` can serve as a local reference
+-(gitignored, not in the repo).
+-
+-Treat the template's example topology, AZ count, service inventory, metadata,
+-and connections as non-defaults. Use only its visual structure.
+-
+-## Recurring rules that commonly fail — enforce these strictly
+-
+-**Coordinate scale — constants (copy verbatim, never change):**
+-- Canvas border: `x=0 y=-40 w=3100 h=2600; strokeWidth=3; fillColor=none; strokeColor=#000000`
+-- Cloud: `x=260 y=250 w=2727 h=2115`
+-- Region: `x=247 y=285 w=2395 h=1745` (relative to cloud)
+-- VPC: `x=85 y=260 w=2225 h=1405` (relative to region)
+-- AZ rows (relative to VPC): `y=80 / 540 / 1000; h=340; spacing=460px`
+-- Subnets (relative to AZ): all `h=250`, width by icon count:
+-  - **1 icon**: `w=300` (public, app, or db — all same for consistency)
+-  - **2 icons**: `w=380`
+-  - **With lane**: `app_w = lane_w + 55` (lane exception only)
+-  - `x` positions: public=35, app=pub_x+pub_w+40, db=app_x+app_w+40
+-  **Consistency rule:** If all subnets have 1 icon each, they MUST all be w=300.
+-  Never make app subnet wider "just because it's compute". The old w=650 default
+-  was wrong — it was for 4+ icons and should never be used for single icons.
+-- IGW: `x=-60 y=650` (relative to VPC)
+-- Icon size: always 120×120. Icon y in 250-high subnet: always 65.
+-
+-**Derived positions — always compute from formulas, never copy from another diagram:**
+-The specific values below (e.g. CloudFront y=1195, Users y=1445) are **N=3
+-examples**. For any other AZ count, recompute using the formulas in
+-`references/coords-cheatsheet.md` — do not reuse these numbers.
+-- **Users y**: `cloud_y + vpc_cloud_y + igw_vpc_y = 250+545+650 = 1445`
+-  (With region=container=0, vpc is cloud-relative at y=545, not region-relative.
+-  Old formula `cloud_y+region_y+vpc_y+igw_y = 250+285+260+650` gives the same result
+-  for the untrimmed layout only — use the vpc_cloud_y form for trimmed diagrams.)
+-- **CloudFront y** (inline with IGW row): `region_y + vpc_y + igw_y = 285+260+650 = 1195` (cloud-relative)
+-- **Regional icons x**: `start_x = (2395 - n×120 - (n-1)×60) / 2`, then `x_i = start_x + i×180`
+-- **Global band icons x** (S3, IAM): `start_x = (2727 - n×120 - (n-1)×60) / 2`, then `x_i = start_x + i×180`
+-- **Icon x inside subnet**: `(subnet_width - n×120 - (n-1)×40) / 2`
+-- **Lane height**: `(last_AZ_y + AZ_height) - first_AZ_y`
+-- **Task icon y in lane**: `(AZ_y + AZ_height/2) - lane_vpc_y - 60`
+-- **Task icon x in lane**: `(lane_width - 120) / 2`
+-- **EKS/ECS→DB exitY**: `(db_abs_y_centre - lane_abs_top) / lane_height`
+-
+-**Cluster lanes (ECS/EKS/ASG):**
+-- Lane y = az1_y = 80. Lane height = formula above. Single lane w=480; dual lanes w=240 each.
+-- Use `fontSize=14; spacingLeft=55; align=left; strokeWidth=2` on lane label.
+-- Badge: 45×45, parented to `vpc`, at `x=lane_x+8, y=88`.
+-- Two lanes of w=480 each overflow the app column — use w=240 each for dual lanes.
+-- **Dual-lane task_y — label-clearance offset is conditional:** The precomputed dual
+-  values (AZ-1=85, AZ-2=545, AZ-3=1005) include a +60 px top offset to prevent the
+-  lane label from overlapping the first task icon. Apply this offset **only when the
+-  lane label wraps to two lines** (i.e. label text > ~20 characters at fontSize=14).
+-  For short labels (≤20 chars, single line), use the standard single-lane values
+-  (AZ-1=25, AZ-2=485, AZ-3=945) even inside dual lanes. Check: if `lane_w=240` and
+-  label is "Amazon EKS" (9 chars) — use 25/485/945. If label is "ECS Fargate (App Tier)"
+-  — use 85/545/1005.
+-
+-**Edge routing rules:**
+-- **Inbound path Users→CF→IGW→ALB**: all at same abs y-centre (1505). Use `exitX=1 exitY=0.5, entryX=0 entryY=0.5`, no waypoints.
+-- **EKS/ECS→DB edge**: exitY is NOT 0.5 — use formula: `exitY = (db_abs_y_centre - lane_abs_top) / lane_h`
+-- **Inbound path without CloudFront** (the default when CF is not requested):
+-  `Users → IGW → ALB` — all at the same abs y-centre, straight horizontal, no waypoints.
+-  The horizontal Users→IGW segment **must not pass through any global-band icon** (Route 53,
+-  S3, IAM). If a global-band icon would sit on that y-level between Users and IGW, it belongs
+-  in the global band row (cloud_rel_y=70), not inline. Move the icon up — do not reroute the edge.
+-- **Baseline edges** (ECR, Secrets): source the LANE border, not a task icon inside it. Source from a task icon with `exitY=0` creates a long vertical line.
+-- **EKS/ECS→DB**: use computed `exitY` fraction so edge exits at db's y-centre → straight horizontal line.
+-- **All edges**: `parent="1"` (root).
+-
+-**Stencil names — always verify in `references/shapes-aws.md`:**
+-- Never guess. `elastic_container_service` → **ecs**, `elastic_kubernetes_service` → **eks**, `certificate_manager` → **certificate_manager_3**.
+-
+-**Common wrong values to avoid:**
+-- AZ height 720 → **340**. AZ spacing 820 → **460**.
+-- Subnet height 580 → **250**. Lane width 230 → **480** (single) / **240** (dual).
+-- `strokeWidth=2` on border → **3**. `fillColor=default; strokeColor=#0066CC` on border → wrong.
+-
+-**Other layout rules:**
+-- Default to a **3-AZ** three-tier layout unless the user specifies otherwise.
+-- **Baseline services always included** — every diagram gets CloudWatch, CloudTrail,
+-  KMS (regional row) and IAM (global band) even if user doesn't ask. These are
+-  essential operational hygiene. Other security services (WAF, Secrets Manager,
+-  GuardDuty) are optional — only if user requests or architecture requires.
+-- **Container widths — always check and trim to content:**
+-  Cloud, Region, VPC, and AZ containers start from the skeleton defaults (AZ w=1640,
+-  VPC w=2225, Region w=2395, Cloud w=2727). **Always run the right-margin check before
+-  finalising — do not skip it even when the gap looks acceptable:**
+-  1. Compute `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative).
+-     For a layout with public x=35 w=300, app x=375 w=500, db x=915 w=300: content_right = 1215.
+-  2. If `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), reduce containers
+-     using the **inset-preserving formula** (do NOT scale proportionally — scaling the
+-     fixed AZ x-inset of 520 is geometrically wrong and was the cause of the Cred-O
+-     untrimmed bug):
+-     ```
+-     new_AZ_w     = content_right + 40
+-     new_VPC_w    = 520 + new_AZ_w + 65
+-     new_Region_w = 85  + new_VPC_w + 85
+-     new_Cloud_w  = 247 + new_Region_w + 85   # round each to nearest 10
+-     ```
+-  3. After resizing, re-centre the regional-services row and global band in the new
+-     widths (`start_x = (container_w − group_w)/2`), or the rows sit flush right.
+-  4. **Worked examples** (the full tables, including the flattened dual-lane validated
+-     values, live in `coords-cheatsheet.md` — that is the single source):
+-     - Nested single-lane+icon, content_right=1215 → AZ 1255, VPC 1840, Region 2010, Cloud 2340.
+-     - Flattened dual-lane, content_right=1270 → AZ 1310, VPC 1965, Region 2310, Cloud 2620
+-       (flattened insets only — use the cheatsheet table verbatim for that layout).
+-  The 20% threshold means dual-lane and extra-icon app layouts will always be trimmed.
+-  The old 40% threshold was too permissive and produced visible dead space.
+-- **Region container — use `container=0` (decorative box) on architecture pages:**
+-  Three-level nesting (`cloud→region→vpc`) with all containers set to `container=1`
+-  causes coordinate drift: children of region are relative to region, children of vpc
+-  are relative to region-relative-vpc, and regional services must be placed with
+-  compound offsets that are easy to miscalculate. The stable pattern is:
+-  - `region`: set **`container=0`** — draws the dashed blue Region boundary as a
+-    non-parent reference box. All children that visually appear inside it are parented
+-    directly to **`cloud`** instead.
+-  - `vpc`: parented directly to **`cloud`** (not to region), with absolute cloud-relative
+-    coordinates. Compute `vpc_cloud_x = region_cloud_x + vpc_region_x` and
+-    `vpc_cloud_y = region_cloud_y + vpc_region_y`.
+-  - Regional service icons (CloudWatch, KMS, ECR, etc.): parented to **`cloud`**, placed
+-    at the visual position inside the region box using cloud-relative coordinates.
+-  - VPC children (IGW, ALB, subnets, lanes): still parented to **`vpc`** as normal.
+-  This flattens the hierarchy from three levels to two and eliminates region-relative
+-  coordinate math entirely. The region box remains visible as a drawn boundary.
+-- Embed the real Comprinno logo as a fresh base64 blob from
+-  `Downloads/comprinno-logo.png`; never reuse a stale/truncated blob.
+-  Always add `strokeColor=none` to the logo image cell style to prevent a border/underline appearing.
+-- **Size each subnet to its content.** Keep dimensions identical across AZ rows.
+-  App subnet with a lane as only content: `w = lane_w + 55` (35px left + 20px right).
+-  App subnet with direct icons: `w = n×120 + (n-1)×40 + 80` (40px each side).
+-  Do NOT use a fixed w=650 if the lane is narrower than 595px.
+-- **Lambda is regional** — place it in the regional services row (`parent=region`), NOT
+-  floating inside the VPC.
+-- **S3 placement** — S3 as a CloudFront static-site origin goes in the **cloud band**.
+-  S3 as a primary object/document store accessed by EKS/ECS/Lambda goes in the
+-  **regional services row alongside the compute**. The baseline security row
+-  (Secrets Manager, CloudWatch, KMS, etc.) is for monitoring/security services only —
+-  do not bury a primary data store in it. If S3 is the main storage service,
+-  give it a position that reflects its importance in the architecture. Lambda does not belong in a subnet or as a vpc child unless
+-  it is a VPC-attached Lambda with a subnet ENI, which must be explicitly modelled.
+-- **ECR**: every compute cluster (ECS, EKS) in the diagram should have a dashed
+-  baseline edge to ECR for image pulls — not just one of them.
+-- **Architecture page edges — minimal set only:**
+-  - Inbound path: Users → (CloudFront →) IGW → ALB → cluster lane
+-  - ECR: dashed edge from lane to ECR
+-  - Database: lane → primary DB, plus dashed replication edges
+-  - **Nothing else.** SQS, SNS, MSK, S3, Bedrock, Transcribe, Secrets Manager,
+-    CloudWatch, KMS — all service connections go on the **Flow page only**.
+-  The Architecture page shows *where services are deployed*, not *how they communicate*.
+-- Connect the load balancer to the **cluster lane border** (not each task).
+-  Connect the cluster to the **primary database only** (replicas get dashed edges).
+-- **Inbound LB-to-tier wiring — state as assumption, never infer as fact:** A cost
+-  estimate or service inventory lists what LBs exist but does NOT specify which tier
+-  each fronts. If the source is ambiguous (e.g. both ALB and NLB present but no routing
+-  description), explicitly state an assumption ("Assumed ALB → app tier, NLB → data tier")
+-  and ask the user to confirm before drawing the edges. Never pick a wiring silently and
+-  present it as a fact.
+-- **Cost-estimate coverage — read every group, diff before finalising:** A cost
+-  estimate may split one workload across several top-level groups (e.g.
+-  `Azure-Mapping`, `GCP-Mapping`, `Best Practices`). AI/ML, monitoring, and networking
+-  lines (Transcribe, Polly, Managed Prometheus, PrivateLink) often live only in a
+-  secondary group. Enumerate the **union** of services across all groups, then diff the
+-  final diagram's icon set against that union: every service must be drawn or explicitly
+-  skipped-with-reason in the delivery summary (EBS via its host; Public IPv4 / Data
+-  Transfer as non-drawable billing lines). Do not treat the first group as complete —
+-  omission produces no validator error, so this diff is the only guard.
+-- **CloudFront** must be explicitly requested by the user. Never infer CloudFront
+-  from the presence of S3 or a load balancer. If CloudFront is not in the user's
+-  spec, do not add it. The phrase "include CF when relevant" has been removed.
+-  Place **CloudFront** inline with the IGW/ALB row so the inbound path
+-  `Users → CloudFront → IGW → ALB` is a straight horizontal line.
+-  S3 (static-site origin) and IAM stay in the top global band (y=70), centre-aligned.
+-
+-**Environment scope:** Default to a **single environment** (prod only) unless the user
+-explicitly asks for multi-environment. Do not add Dev/QA/Staging VPCs unless requested.
+-
+-For the prompt-based workflow, use Kiro's reasoning to create editable Draw.io
+-XML directly from the requirements and references. Do not run or modify the
+-Python generator or create project-specific code. A supplied YAML spec is a
+-topology source, not a required intermediate format. Use MCP tools only when
+-already configured and useful for AWS fact checks or native Draw.io editing;
+-never assume an MCP is available.
+-
+-- **WAF is a global service** — place it in the **cloud band** (`parent=cloud`) in the
+-  global icon row at `y=70`, alongside Route53 and IAM. Do NOT place WAF directly above
+-  ALB with a vertical drop edge on the Architecture page — that edge crosses the region
+-  row, skims adjacent icons, and creates visual clutter. WAF's association with ALB/CF
+-  is shown on the **Flow page only** (dashed "inspect" edge from WAF to ALB or CF).
+-  On the Architecture page, WAF is an icon showing "WAF is provisioned"; no edge needed.
+-- **Route53** — DNS resolution, NOT a network hop. **Always in the global band** at
+-  `cloud_rel x=72, y=70`, alongside IAM. Route53 edges belong on the **Flow page only** —
+-  do NOT draw Users→R53 on the Architecture page.
+-- **CloudFront** — only if explicitly requested. Inline at `cloud_rel x=72, y=1195`.
+-  CloudFront IS a network hop (edge cache), so it appears on the Architecture inbound path:
+-  Users → CloudFront → IGW → ALB.
+-- **Inbound path on Architecture** — shows network path, not DNS:
+-  - With CloudFront: Users → CF → IGW → ALB → cluster
+-  - Without CloudFront: Users → IGW → ALB → cluster
+-  Route53 is NEVER on the Architecture page inbound path.
+-- **Internal ALB** — when architecture has both external and internal ALBs:
+-  - External ALB: vpc-rel `x=160, y=650` (inline with IGW)
+-  - Internal ALB: place in **AZ-1 or AZ-2 public subnet** (NOT AZ-3)
+-  - Internal ALB connects from cluster to backend services, not from IGW
+-
+-- **No orphan compute icons** — every EC2/ECS/EKS icon must be inside a subnet or lane,
+-  not floating directly as a VPC child with no container parent.
+-- **Bastion / jump-box placement** — place management EC2 instances in **AZ1 or AZ3**
+-  public subnets, never in the middle AZ (AZ2). The middle AZ public subnet sits at the
+-  same y-level as the ALB→cluster horizontal edge, causing icon/edge crossings.
+-  AZ1 is preferred (top row, visually clear).
+-
+-Keep paths semantically correct and visually clear: few essential arrows,
+-short routes, readable labels, no overlaps, and no arrows running along
+-container borders. Inspect a rendered preview when available and correct visual
+-issues before delivery.
+-
+-- **Flow page service placement**: Use correct AWS container parents.
+-  Compute a single `spine_abs_yc` from the VPC icon y-centre and derive all
+-  node y-positions from it — mismatched y-centres create edge bends.
+-  Regional services (S3, RDS etc.) must be placed right of the VPC right border.
+-- **Flow page container guidance — flat layout for complex flows:** When the flow
+-  involves 6 or more distinct service icons, use a **flat absolute layout**: all nodes
+-  `parent="1"` with absolute coordinates; containers (`container=0`) drawn as non-parent
+-  reference boxes only. Three-level nested containers (`f-cloud → f-region → f-vpc`)
+-  with container-relative child coordinates become brittle at this scale — coordinate
+-  drift causes nodes to fall outside their intended containers when edited. Reserve
+-  nested containers (`container=1`) only for simple flows with 4 or fewer icons.
+-- **Flow page Route53 edge:** When Route53 is shown on the flow page, always draw a
+-  dashed edge from Route53 **to CloudFront** (or to IGW if no CF) to complete the DNS
+-  resolution story. The edge `Users → R53` shows the DNS query; the edge `R53 → CF`
+-  shows the resolved target. Stopping at R53 without connecting it forward leaves the
+-  flow incomplete. Label the R53→CF edge "resolves to" or leave it unlabelled.
++For architecture requests, use `.kiro/skills/arch-diagram/SKILL.md`. Let Kiro reason about the requirements, ask
++only topology-changing questions, and keep the user-facing workflow prompt based. The normal deliverable is one
++editable Draw.io file with one architecture page and one primary flow page; do not add extra flows unless requested.
++
++**Source precedence (most authoritative first):**
++1. `references/coords-cheatsheet.md` — **the only source for geometry numbers** (constants, formulas, presets).
++   This file deliberately contains no coordinates: if a number here ever disagrees with the cheatsheet, the
++   cheatsheet wins and this file has a bug.
++2. `references/skeleton-3az.drawio.xml` — ready-made blank 3-AZ architecture (preset D1). Copy it; fill in the
++   topology. Never build containers from scratch.
++3. `references/house-style.md` — style strings and layout rules.
++4. `diagram examples/Comprinno Architecture Template.drawio.xml` — visual style reference only. Do not copy its
++   coordinates, topology, AZ count, service inventory or metadata.
++
++Any recent validated output in `outputs/` can serve as a local reference (untracked, not in the repo).
++
++## Quality gate
++
++After saving a diagram run `python3 .kiro/scripts/validate-drawio.py outputs/<project>/<file>.drawio.xml`, fix
++every issue and re-run until it prints `PASS`, and paste the **raw output** in the delivery summary. The validator
++enforces the wrap rule, centred rows, subnet columns, lane gaps, straight edges, scope boxes, stencil names and the
++flat Flow layout. Use `--allow scenario-b` only for a known false positive (Scenario B-VPC with Public IPv4 /
++Data Transfer lines the validator cannot see) and name the reason in the summary. Never edit the validator to
++make a diagram pass.
++
++## Layout rules that commonly fail
++
++- **Numbers come from formulas and presets, never from memory or another diagram.** Containers always wrap their
++  content (wrap rule), rows are re-centred after every add/delete, subnet columns are `public | app | db` with 40px
++  gaps, and a cluster lane sits inside the app-subnet column (35px left / 20px right, `app_w = lane_w + 55`). All
++  of it is in the cheatsheet; the skeleton already satisfies it for its layout.
++- **Hierarchy is nested; scope is the parent chain:** `cloud → region → vpc → az → subnet → icon`. Regional
++  services are `parent=region`, global services `parent=cloud`, VPC-bound resources live in subnets. Do not
++  flatten it. Every edge is `parent="1"`.
++- **Stencil names — always verify in `references/shapes-aws.md`.** Never guess. Known blank-box traps:
++  `elastic_container_service` → `ecs`, `elastic_kubernetes_service` → `eks`, `certificate_manager` →
++  `certificate_manager_3`, `cloudwatch` → `cloudwatch_2`.
++- **Common wrong values** are listed in the cheatsheet ("Common mistakes"); consult it instead of memory.
++- Default to a **3-AZ** three-tier layout unless the user specifies otherwise (other N: cheatsheet N-AZ formulas).
++- **Baseline services are always included:** CloudWatch, CloudTrail, KMS (regional row) and IAM (global band), even
++  if the user doesn't ask. Other security services (WAF, Secrets Manager, GuardDuty) are optional — only if
++  requested or required by the architecture.
++- **Size each subnet to its content** and keep dimensions identical across AZ rows. Lane as only content:
++  `w = lane_w + 55`. Direct icons: by icon count. Never use the old fixed w=650.
++- **Logo:** copy the `brand` cell from the skeleton verbatim. Never re-encode a logo from a local path or reuse a
++  stale/truncated blob; keep `strokeColor=none` on the logo cell.
++- **Cluster lanes:** lane label style, badge and task rules are in the cheatsheet. Tasks are children of the lane.
++  Dual-lane `task_y` gets the +60 label-clearance offset only when the lane label wraps (cheatsheet).
++- **Lambda is regional:** place it in the regional services row (`parent=region`). Only a VPC-attached Lambda
++  (explicitly modelled, with its subnet ENI) belongs in a subnet.
++- **No orphan compute icons:** every EC2/ECS/EKS icon sits inside a subnet or lane, never floating as a VPC child.
++- **S3 placement:** S3 as a CloudFront static-site origin goes in the global band. S3 as the primary
++  object/document store used by EKS/ECS/Lambda goes in the regional row beside the compute, positioned to reflect
++  its importance. The baseline row is for monitoring/security services only.
++- **ECR:** every ECS/EKS lane has a dashed `pull image` edge to ECR.
++- **Bastion / jump boxes:** AZ1 (preferred) or AZ3 public subnets, never AZ2 (its public subnet shares the y-level of
++  the ALB→cluster edge).
++- **Internal ALB:** the external ALB stays inline with the IGW row; an internal ALB goes in the AZ1 or AZ2 public
++  subnet (not AZ3) and connects from the cluster to backend services, not from the IGW.
++- **CloudFront** only if the user explicitly asks; never infer it from S3 or a load balancer. It is a network hop:
++  inline with the IGW/ALB row so `Users → CloudFront → IGW → ALB` is one straight horizontal line.
++- **Route 53** is DNS, not a hop: always the global band, never inline, never an edge on the Architecture page.
++- **WAF follows what it protects** (AWS WAF is regional except when attached to CloudFront): fronting CloudFront →
++  global band; fronting an ALB → regional row. No WAF edge on the Architecture page; the association is a
++  dashed "inspect" edge on the Flow page.
++- **Environment scope:** a single environment (prod only) unless the user explicitly asks for more.
++
++## Edges
++
++- **Architecture page — minimal set only:** inbound path (Users → [CloudFront →] IGW → ALB → lane), ECR (dashed,
++  lane → ECR), database (lane → primary DB, dashed replication). **Nothing else:** SQS, SNS, MSK, S3, Bedrock,
++  Transcribe, Secrets Manager, CloudWatch, KMS and all service-to-service calls go on the Flow page. The
++  Architecture page shows where services are deployed, not how they communicate.
++- Connect the load balancer to the **lane border**, not to each task, and the cluster to the **primary database only**.
++- **Straight edges:** nodes joined by a horizontal edge share the identical y-centre; lane → DB `exitY` uses three
++  decimals (the validator fails any jog over 2px).
++- **Inbound path without CloudFront:** `Users → IGW → ALB`, straight, no waypoints. No global-band icon may sit on
++  that line; keep global icons in the band.
++- Baseline edges (ECR, Secrets) source the **lane border**, never a task icon; waypoints per the cheatsheet.
++- Few essential arrows, short routes, no overlaps, no arrows along container borders. Inspect a rendered preview
++  when one is available (CI uploads a skeleton render); otherwise state that no rendering was performed.
++
++## Flow page
++
++- **Flat layout:** every node and edge is `parent="1"` with absolute coordinates; the Cloud / Region / VPC boxes
++  are decorative (`container=0`). Each node must sit in the box that matches its AWS scope (cheatsheet scope map).
++  VPC-bound services (RDS, Aurora, DocumentDB, MSK, ElastiCache, compute, ALB) are in the VPC box on both pages.
++- One spine y for all main-path nodes (identical y-centres, otherwise the router adds a bend); pitch and slots are in
++  the cheatsheet. Regional services sit right of the VPC border.
++- **Route 53 on the Flow page:** `Users → Route 53` (DNS query), then Route 53 → the **public endpoint it resolves
++  to** — CloudFront, otherwise the ALB. Never the IGW (an IGW is not a DNS target). Leave the edge unlabelled or
++  use "resolves to".
++
++## Sources: cost estimates and migration sheets
++
++- A cost estimate or service inventory is **not a wiring diagram**. State the inferred data/request path as an
++  assumption; if load balancers are ambiguous (e.g. ALB and NLB, no routing description) write the assumption
++  ("Assumed ALB → app tier, NLB → data tier") and ask the user to confirm before drawing the edges.
++- **Read every group before building.** One workload can be split across several top-level groups; AI/ML,
++  monitoring and networking lines often live only in a secondary group. Enumerate the union of services, then diff
++  the final icon set against it: every service is drawn or skipped with a stated reason (EBS via its host; Public
++  IPv4 / Data Transfer as billing-only lines). Omission produces no validator error — this diff is the only guard.
++- Model the **AWS target** service (the `Service Name` field), not the Azure/external name in a description; map a
++  non-AWS line (e.g. "OpenAI/GPT") to its AWS-native stand-in (Amazon Bedrock) and note the substitution.
++
++## Workflow
++
++For the prompt-based workflow, use Kiro's reasoning to create editable Draw.io XML directly from the requirements
++and references. There is no generator: the only script is `validate-drawio.py` (plus its regression test). A
++supplied YAML spec is a topology source, not a required intermediate format. Use MCP tools only when already
++configured and useful for AWS fact checks or native Draw.io editing; never assume an MCP is available.
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 33e6fc0..ea8fcda 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -67,13 +67,13 @@ sources (most authoritative first):
+ 
+ | Source | Role |
+ |---|---|
+-| `diagram examples/Comprinno Architecture Template.drawio.xml` | House-style template — geometry, styles, title block, logo |
+-| `outputs/<project>/<project>.drawio.xml` | Validated working output — any recent output in the outputs folder |
+-| `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules, scaling guidance |
+-| `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | Formulas and constants for every position |
+-| `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton for the default 3-AZ three-tier layout |
++| `.kiro/skills/arch-diagram/references/coords-cheatsheet.md` | **Only source of geometry numbers** — constants, wrap rule, presets, formulas |
++| `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml` | Starting skeleton (preset D1: 3-AZ three-tier, single lane) — copy it |
++| `.kiro/skills/arch-diagram/references/house-style.md` | Hierarchy, container styles, colours, edge rules (no numbers) |
+ | `.kiro/skills/arch-diagram/references/shapes-*.md` | AWS / Azure / GCP stencil catalogs |
+-| `.kiro/steering/arch-diagram-conventions.md` | Always-on rules and common failure corrections |
++| `.kiro/steering/arch-diagram-conventions.md` | Always-on rules (no numbers; points to the cheatsheet) |
++| `diagram examples/Comprinno Architecture Template.drawio.xml` | Visual reference only — never copy its coordinates or topology |
++| `outputs/<project>/<project>.drawio.xml` | Local, untracked prior outputs — optional reference |
+ 
+ Treat the template's example topology, AZ count, service inventory, and
+ connections as non-defaults — only its visual structure is reused.
+@@ -87,9 +87,9 @@ into the correct container parent:
+ 
+ | Scope | Container | Examples |
+ |---|---|---|
+-| Global | Cloud band above the Region box | CloudFront, Route 53, WAF, S3, IAM |
++| Global | Cloud band above the Region box | CloudFront, Route 53, IAM, S3 (static origin), WAF fronting CloudFront |
+ | Ingress band | Inline IGW/ALB row inside the Cloud | IGW, ALB (Users stay outside the cloud) |
+-| Region services | Inside Region, outside any VPC | ECR, Cognito, Lambda, Secrets Manager |
++| Region services | Inside Region, outside any VPC | CloudWatch, CloudTrail, KMS, ECR, Lambda, Secrets Manager, WAF fronting an ALB |
+ | Public subnet | Web/DMZ tier in an AZ | NAT Gateway, Bastion |
+ | App subnet | App tier band (lanes overlay it) | — |
+ | DB subnet | Data tier in an AZ | Aurora, ElastiCache, RDS |
+@@ -99,7 +99,8 @@ Key placement rules the agent enforces (from the conventions file):
+ 
+ - **Lambda is regional** — placed in the regional services row, not inside a VPC
+   subnet (unless a VPC-attached Lambda with a subnet ENI is explicitly modelled).
+-- **WAF and Route 53 are global** — placed in the cloud band above the region.
++- **Route 53 is global** (always the cloud band; DNS, not a hop). **WAF follows what it protects:** global band when it
++  fronts CloudFront, regional row when it fronts an ALB; its association is a Flow-page edge only.
+ - **CloudFront** sits inline with the IGW/ALB row so the inbound path
+   `Users → CloudFront → IGW → ALB` is a straight horizontal line.
+ - Every compute cluster (ECS, EKS) gets a dashed baseline edge to **ECR** for
+@@ -109,17 +110,19 @@ Key placement rules the agent enforces (from the conventions file):
+ 
+ ## 4. Geometry — reasoned, not computed by code
+ 
+-The agent applies fixed house-style constants and derives positions with the
+-formulas in `coords-cheatsheet.md` and the conventions file. These are applied
+-by hand in the XML, not produced by a layout engine. The core constants:
++The agent applies house-style constants and derives positions with the formulas and presets in
++`coords-cheatsheet.md`. They are applied by hand in the XML, not produced by a layout engine, and
++`validate-drawio.py` checks them. The core ideas:
+ 
+-- **Canvas border**: `x=0 y=-40 w=3100 h=2600; strokeWidth=3`
+-- **Cloud**: `x=260 y=250 w=2727 h=2115`
+-- **Region** (rel. to cloud): `x=247 y=285 w=2395 h=1745`
+-- **VPC** (rel. to region): `x=85 y=260 w=2225 h=1405`
+-- **AZ rows** (rel. to VPC): `y=80 / 540 / 1000; h=340; spacing=460`
+-- **Subnets** (rel. to AZ): public `x=35 w=380 h=250`; app `w=650`; db `w=300`
+-- **Icon size**: always 120×120; icon y in a 250-high subnet is always 65
++- **Wrap rule:** containers always wrap their content — `az_w = content_right + 40`, `vpc_w = 520 + az_w + 65`,
++  `region_w = 85 + vpc_w + 85`, `cloud_w = 247 + region_w + 85`, `border_w = 260 + cloud_w + 113` — and the regional
++  row and global band are re-centred after every change. Shipped skeleton (D1): AZ 1110, VPC 1695,
++  Region 1865, Cloud 2197, border 2570.
++- **Fixed:** Cloud `x=260 y=250 h=2115`; Region `x=247 y=285 h=1745`; VPC `x=85 y=260 h=1405`; AZ rows
++  `y=80 / 540 / 1000; h=340; spacing=460`; icons 120×120, y=65 in a 250-high subnet.
++- **Subnet columns:** `public x=35 | 40 | app | 40 | db`; width 300 (1 icon) / 380 (2); app with a lane = `lane_w + 55`.
++- **Hierarchy:** nested `cloud → region → vpc → az → subnet → icon`; scope is the parent chain. The **Flow page is flat**
++  with decorative scope boxes.
+ 
+ Derived positions (users y, CloudFront y, regional icon x spread, lane heights,
+ cluster→DB exit fractions) are computed from the documented formulas each time
+@@ -141,7 +144,7 @@ The agent emits draw.io's uncompressed format directly:
+ 
+     <!-- containers (Cloud, Region, VPC, AZ, subnet, lane) -->
+     <mxCell id="cloud" parent="1" value="AWS Cloud" style="points=...;..." vertex="1">
+-      <mxGeometry x="260" y="250" width="2727" height="2115" as="geometry" />
++      <mxGeometry x="260" y="250" width="2197" height="2115" as="geometry" />
+     </mxCell>
+ 
+     <!-- resource icons -->
+@@ -196,14 +199,15 @@ To add a service, add a row to the relevant `shapes-*.md` catalog.
+ 
+ ## 7. Self-checks before delivery
+ 
+-There is no automated test suite. The agent validates its own output against the
+-house-style rules before delivering:
++There is no generator. Structure is checked by `.kiro/scripts/validate-drawio.py` (run by the agent through a
++restricted `shell` permission and by CI, with `test-validator.py` as its regression test). The agent additionally
++reviews against the house-style rules before delivering:
+ 
+ | Check | What it confirms |
+ |---|---|
+ | Boundary containment | Every icon sits fully inside its declared container |
+-| Column alignment | Subnet widths are identical across AZ rows so columns line up |
+-| Scope correctness | Lambda regional, WAF/Route 53 global, CloudFront inline with IGW/ALB |
++| Column alignment | Subnet widths and the wrap rule hold; rows are centred; columns identical across AZ rows |
++| Scope correctness | Lambda regional, Route 53 global, WAF scoped to its target, CloudFront inline with IGW/ALB (checked by position) |
+ | Edge geometry | Inbound path is a straight horizontal line; no arrows run along borders |
+ | Stencil validity | Every `shape=` key exists in the shape catalog |
+ | Visual review | A rendered preview is inspected and corrected when one is available |
+diff --git a/README.md b/README.md
+index c0e5296..db8e284 100644
+--- a/README.md
++++ b/README.md
+@@ -57,7 +57,14 @@ The agent is steered entirely through Markdown files. When you open the
+ 3. It reasons about the architecture and builds Draw.io XML directly.
+ 4. The result is saved to `outputs/<project-slug>/<project>.drawio.xml`.
+ 
+-No Python, no intermediate spec, no CLI commands.
++No generator and no intermediate spec. The only code is the structural validator
++`.kiro/scripts/validate-drawio.py` (run by the agent after saving, and by CI) and its regression test
++`.kiro/scripts/test-validator.py`:
++
++```
++python3 .kiro/scripts/validate-drawio.py outputs/<project-slug>/<project>.drawio.xml
++python3 .kiro/scripts/test-validator.py
++```
+ 
+ ---
+ 
+-- 
+2.43.0
+
