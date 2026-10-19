@@ -1,46 +1,59 @@
 # Coordinate Cheatsheet
 
-> **Single source of truth:** This is the single source of truth for all geometry
-> numbers. `house-style.md` contains style strings and rules only. Do not duplicate
-> numbers in other files.
-
-> **Two types of values here:**
+> **Single source of truth** for every geometry number. `house-style.md` holds style strings and rules
+> only; steering and SKILL point here. Do not copy numbers into other files.
+>
 > - **Constants** — fixed dimensions that define the scale. Copy verbatim.
-> - **Formulas** — compute these from the constants for your specific topology.
->   Never copy the example outputs from another diagram; recalculate each time.
+> - **Formulas / presets** — computed from the constants. Never copy another diagram's output; use a
+>   preset below or recompute.
+> - `validate-drawio.py` enforces the wrap rule, centred rows, subnet columns, lane gaps, straight edges and
+>   scope boxes, so a wrong number fails the run instead of shipping.
 
-## ⚡ Precomputed 3-AZ lookup (copy directly for N=3, skip all formulas)
+## The six rules
 
-> Use these values as-is for the standard 3-AZ layout. Only recompute if N≠3.
+1. **Wrap rule (containers always wrap their content — no threshold, no "trim later"):**
+   `az_w = content_right + 40`, `vpc_w = 520 + az_w + 65`, `region_w = 85 + vpc_w + 85`,
+   `cloud_w = 247 + region_w + 85`, `border_w = 260 + cloud_w + 113`. `content_right` is the right edge of the
+   right-most subnet (AZ-relative). Insets 520 / 85 / 247 are fixed. Do **not** scale containers
+   proportionally. No rounding of widths; the only rounding is `round_half_up` for centred rows.
+2. **Rows stay centred:** `start_x = round_half_up((container_w − (n×120 + (n−1)×60)) / 2)`, pitch 180 —
+   regional row inside the Region (y=65), global band inside the Cloud (y=70). Recompute after every add/delete.
+3. **Subnet columns:** `public x=35 | 40 | app | 40 | db`, same in every AZ row. Width by icon count: 1 → 300,
+   2 → 380, 3 → 520. **Lane exception:** `app_w = lane_w + 55` (35px left / 20px right gap), single or dual lanes.
+4. **Hierarchy (nested, scope = parent chain):** `cloud → region → vpc → az → subnet → icon`. Regional services
+   `parent=region`; global services `parent=cloud`; the VPC is a child of the Region. All edges `parent="1"`.
+5. **Scope is checked by position, not only by parent:** VPC box inside Region box; VPC-bound icons inside the VPC;
+   regional-only services inside the Region and outside the VPC; global services inside the Cloud and outside
+   the Region.
+6. **Flow page is flat** (all nodes `parent="1"`, absolute coordinates, decorative scope boxes) — see "Flow page".
 
-| Element | Value | Notes |
-|---------|-------|-------|
-| igw y (vpc-rel) | **650** | aligns with AZ midpoint |
-| users y (abs) | **1445** | inline with IGW/ALB row |
-| CF cloud-rel y | **1195** | inline with IGW row |
-| lane_x (vpc-rel) | **1010** | app_vpc_x + 35 |
-| lane_y (vpc-rel) | **170** | app_vpc_y_first + 40 |
-| lane_w | **300** | app_w - 55 (for app_w=355) |
-| lane_h | **1110** | fits inside app subnets |
-| task_y AZ-1 | **25** | centred in AZ-1 app subnet (lane-rel) |
-| task_y AZ-2 | **485** | centred in AZ-2 app subnet (lane-rel) |
-| task_y AZ-3 | **945** | centred in AZ-3 app subnet (lane-rel) |
-| task_x | **90** | (301−120)/2 |
-| EKS→DB exitY | **0.08** | (1050−965)/1110 |
-| ECS→AZ3 DB exitY | **0.95** | (1015+50+65+60−965)/1110 — for cluster connecting to AZ-3 db |
-| regional row start_x (n=6) | **688** | (2395−1020)/2 |
-| regional row start_x (n=7) | **598** | (2395−1200)/2 |
-| global band start_x (n=2) | **1214** | (2727−300)/2 |
-| global band start_x (n=4) | **1034** | (2727−660)/2 |
-| **Dual lanes** x_lane1 (vpc-rel) | **1010** | standard layout (app_az_x=455). For trimmed layout with app_az_x=375 → lane1_x=922 |
-| **Dual lanes** x_lane2 (vpc-rel) | **1270** | standard layout. Trimmed: lane2_x=1182 |
-| dual lane task_x | **60** | (240−120)/2 |
-| dual lane task_y AZ-1 | **85** | 25+60 label clearance |
-| dual lane task_y AZ-2 | **545** | 485+60 |
-| dual lane task_y AZ-3 | **1005** | 945+60 |
-| dual app_w (2 lanes 240+gap) | **555** | 2×240+20+55 |
-| dual db_x (az-rel) | **1055** | app_x+app_w+40 = 455+555+40 |
+## ⚡ Presets (3-AZ, copy directly; for other layouts apply rules 1–3)
 
+| Preset | public / app / db w | content_right | AZ | VPC | Region | Cloud | Border |
+|---|---|---|---|---|---|---|---|
+| **D1 (shipped skeleton)** single lane, 1-icon public | 300 / 355 / 300 | 1070 | 1110 | 1695 | 1865 | 2197 | 2570 |
+| D2 dual lanes, 1-icon public | 300 / 555 / 300 | 1270 | 1310 | 1895 | 2065 | 2397 | 2770 |
+| D3 NAT+Bastion (2-icon public), single lane | 380 / 355 / 300 | 1150 | 1190 | 1775 | 1945 | 2277 | 2650 |
+
+Row start_x (round half up) — regional row (inside Region, y=65): D1 n=3: 693, n=4: 603, n=5: 513, n=6: 423, n=7: 333; D2 n=3: 793, n=4: 703, n=5: 613, n=6: 523, n=7: 433; D3 n=3: 733, n=4: 643, n=5: 553, n=6: 463, n=7: 373.
+Global band (inside Cloud, y=70): D1 n=1: 1039, n=2: 949, n=3: 859, n=4: 769; D2 n=1: 1139, n=2: 1049, n=3: 959, n=4: 869; D3 n=1: 1079, n=2: 989, n=3: 899, n=4: 809.
+
+**Lane values (vpc-relative; `lane_x = az_x + app_x + 35`):**
+
+| Element | D1 / D2 (app_x=375) | D3 (app_x=455) |
+|---|---|---|
+| single lane x / y / w / h | **930** / 170 / 300 / 1110 | **1010** / 170 / 300 / 1110 |
+| single-lane badge (45×45) | x=938 y=178 | x=1018 y=178 |
+| single-lane app_w / db_x (az-rel) | 355 / **770** | 355 / **850** |
+| dual lanes (w=240) x1 / x2 | 930 / 1190 | 1010 / 1270 |
+| dual app_w / db_x (az-rel) | 555 / **970** | 555 / **1050** |
+| task_x (lane-relative) single / dual | 90 / 60 | 90 / 60 |
+| task_y (lane-relative) AZ-1/2/3 | 25 / 485 / 945 (dual with a wrapping label: 85 / 545 / 1005) | same |
+| lane→DB `exitY` AZ-1 / AZ-2 / AZ-3 | **0.077 / 0.491 / 0.905** (3 decimals — see "Straight edges") | same |
+| no lane, 1 direct app icon: app_w / db_x | 300 / 715 (pub 300) or 795 (pub 380) | |
+
+N-AZ values: `igw_y = 190 + 230×(N−1)`, `users_y = 795 + igw_y`, `cf_cloud_y = 545 + igw_y`, `lane_h = 190 + 460×(N−1)`
+(N=3: 650 / 1445 / 1195 / 1110). Region, VPC and Cloud heights each grow by 460 per extra AZ.
 
 ---
 
@@ -48,436 +61,92 @@
 
 | Cell | x | y | w | h | Notes |
 |------|---|---|---|---|-------|
-| border | 0 | -40 | 3100 | 2600 | `strokeWidth=3; fillColor=none; strokeColor=#000000` |
-| brand (logo) | 30 | 50 | 240.9 | 50 | image cell, embed fresh base64 |
-| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1 |
+| border | 0 | -40 | `cloud_x + cloud_w + 113` (2570 for D1) | 2600 | `strokeWidth=3; fillColor=none; strokeColor=#000000` |
+| brand (logo) | 30 | 50 | 240.9 | 50 | copy the cell from the skeleton (embedded blob, `strokeColor=none`) |
+| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1: name, subtitle, Version / Date / Creator / Reviewer |
 
----
-
-## Container hierarchy (constants — copy verbatim)
+## Container hierarchy (x/y/h constants; widths from the wrap rule)
 
 | Cell | parent | x | y | w | h |
 |------|--------|---|---|---|---|
-| cloud | root(1) | 260 | 250 | 2727 | 2115 |
-| region | cloud | 247 | 285 | 2395 | 1745 |
-| vpc | region | 85 | 260 | 2225 | 1405 |
-| az1 | vpc | 520 | 80 | 1640 | 340 |
-| az2 | vpc | 520 | 540 | 1640 | 340 |
-| az3 | vpc | 520 | 1000 | 1640 | 340 |
+| cloud | root(1) | 260 | 250 | wrap (D1 2197) | 2115 |
+| region | cloud | 247 | 285 | wrap (D1 1865) | 1745 |
+| vpc | region | 85 | 260 | wrap (D1 1695) | 1405 |
+| az1 | vpc | 520 | 80 | wrap (D1 1110) | 340 |
+| az2 | vpc | 520 | 540 | same | 340 |
+| az3 | vpc | 520 | 1000 | same | 340 |
 
-AZ height = **340**. AZ y-spacing = **460px**. All constants.
+AZ height = **340**, AZ y-spacing = **460**. Absolute origins (3-AZ): vpc_abs = (592, 795); region_abs = (507, 535).
 
-> **Right-margin check — always run before finalising (20% threshold):**
-> `content_right = rightmost_subnet_x + rightmost_subnet_w` (AZ-relative)
-> If `1640 − content_right > 0.2 × 1640` (i.e. > 328px dead space), trim.
->
-> **Trim formula — inset-preserving (works for BOTH nested and flattened layouts).**
-> Do NOT "scale all containers by new_AZ_w/1640" — that scales the fixed AZ x-inset
-> (520) and the container insets, which is geometrically wrong and does not match the
-> validated table below. Instead keep every inset fixed and only grow each container
-> to wrap its child:
-> ```
-> new_AZ_w     = content_right + 40
-> new_VPC_w    = 520 + new_AZ_w + 65        # 520 = AZ x-inset (constant, NOT scaled)
-> new_Region_w = 85  + new_VPC_w  + 85      # 85  = VPC x-inset inside region
-> new_Cloud_w  = 247 + new_Region_w + 85    # 247 = region x-inset inside cloud
-> ```
-> Round each to the nearest 10. After trimming, **re-centre the regional-services row
-> and global band** inside the new widths (start_x = (container_w − group_w)/2), else
-> the rows sit flush against the right edge.
->
-> **Worked example — nested single-lane + extra icon** (public 300 + app 500 + db 300,
-> content_right = 1215; the Cred-O layout):
-> Dead space = 425 = 26% → **must trim**.
-> new_AZ_w = 1255, new_VPC_w = 1840, new_Region_w = 2010, new_Cloud_w = 2340.
->
-> **Validated values — FLATTENED dual-lane layout only** (region `container=0`,
-> vpc `parent=cloud`; public 300 + app 555 + db 300, content_right=1270, new_AZ_w=1310).
-> These use the flattened insets (vpc at cloud-rel x=332), so copy them **only** when you
-> are building the flattened dual-lane layout; for any other case use the formula above.
->
-> | Cell | parent | w | x | y |
-> |------|--------|---|---|---|
-> | cloud | root(1) | **2620** | 260 | 250 |
-> | region | cloud | **2310** | 140 | 285 — `container=0` |
-> | vpc | **cloud** | **1965** | 332 | 545 — parent=cloud, not region |
-> | az1/2/3 | vpc | **1310** | 520 | 80/540/1000 |
-> | IGW | vpc | 120 | -60 | 650 |
-> | ALB | vpc | 120 | **230** | 650 — shifted right for dual lanes |
-> | Global band icons | cloud | 120 | 1034/1214/1394/1574 | 70 |
-> | Regional services | cloud | 120 | 935/1115/1295/1475/1655/1835 | 350 |
->
-> When region is `container=0`, vpc is parented to **cloud** and regional service icons
-> are also parented to **cloud** at cloud-relative coordinates (not region-relative).
-
----
-
-## Entry column (constants)
+## Entry column (constants, N=3)
 
 | Cell | parent | x | y | w | h |
 |------|--------|---|---|---|---|
 | igw | vpc | -60 | 650 | 120 | 120 |
 | alb | vpc | 160 | 650 | 120 | 120 |
 
-> **y=650 is the N=3 value.** The IGW/ALB row centres vertically on the AZ stack,
-> so for other AZ counts use `igw_y = 190 + 230*(N-1)` (see Users node section).
+For other AZ counts use `igw_y = 190 + 230×(N−1)`.
 
----
+## Subnets inside each AZ
 
-## Subnets inside each AZ (constants — same across all AZ rows)
-
-**Subnet width by icon count (MUST be consistent across subnet types):**
-
-| Icons | Width | Formula | Use case |
-|-------|-------|---------|----------|
-| 1 | **300** | 120 + 180 padding | NAT, single compute, single DB |
-| 2 | **380** | 120+40+120 + 100 padding | NAT+Bastion, Writer+Replica |
-| 3 | **520** | 120+40+120+40+120 + 80 | Three services |
-
-**Critical rule:** If public has 1 icon (w=300), app has 1 icon (w=300), and db has 1 icon (w=300),
-ALL THREE must be w=300. Never make app wider "just because it's compute".
-
-**Lane exception:** When app contains a cluster lane (vertical bar spanning AZs):
-- `app_w = lane_w + 55` (lane + 35px left + 20px right)
-- This is the ONLY case where app width differs from the icon-count formula
-
-| Subnet | parent | x | y | w | h | notes |
+| Subnet | parent | x | y | w | h | style |
 |--------|--------|---|---|---|---|-------|
-| public | azN | 35 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#E9F3E6` stroke `#248814` |
-| app | azN | pub_x + pub_w + 40 | 50 | **300** (1 icon) or **lane_w+55** (with lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
-| db | azN | app_x + app_w + 40 | 50 | **300** (1 icon) or **380** (2 icons) | 250 | fill `#CCE5FF` stroke `#147EBA` |
+| public | azN | 35 | 50 | 300 (1 icon) / 380 (2) | 250 | fill `#E9F3E6` stroke `#248814` |
+| app | azN | pub_x + pub_w + 40 | 50 | 300 (1 icon) / lane_w+55 (lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
+| db | azN | app_x + app_w + 40 | 50 | 300 (1) / 380 (2) | 250 | fill `#CCE5FF` stroke `#147EBA` |
 
-**Example layouts:**
+**Consistency:** if public, app and db each hold one icon, all three are w=300. Never widen app "because it's
+compute" (the old w=650 default is wrong). Gaps between subnet columns are 40.
 
-| Layout | public_w | app_w | db_w | Notes |
-|--------|----------|-------|------|-------|
-| All single icons | 300 | 300 | 300 | Consistent, balanced |
-| NAT+Bastion, single compute, Writer+Standby | 380 | 300 | 380 | Width matches content |
-| Single NAT, EKS lane (w=300), single DB | 300 | 355 | 300 | Lane adds 55px |
+Icons inside subnets: 120×120, **y=65**, `x = (subnet_w − n×120 − (n−1)×40) / 2` (w=300, n=1 → 90; w=380, n=2 → 40 / 200).
 
-Keep gaps between subnets at **40px**.
+## Users, CloudFront and the global band
+
+```
+users_abs_y_centre = vpc_abs_y + igw_y + 60 = 795 + 650 + 60 = 1505   [N=3]
+users_y = 1445   users_x = 60  (any x ≤ cloud_abs_x − 160 = 100 passes)
+```
+
+| Cell | parent | x | y |
+|---|---|---|---|
+| users | root(1) | 60 | igw_abs_y_centre − 60 |
+| CloudFront (only if requested) | cloud | 72 | 1195 [N=3] — inline with IGW, `Users → CF → IGW → ALB` straight, `exitX=1 exitY=0.5 entryX=0 entryY=0.5`, no waypoints |
+| Route 53, IAM, S3 (CloudFront origin) | cloud | global-band formula (left→right: Route 53, IAM, S3) | 70 |
+
+- **Route 53 is DNS, not a network hop:** always the global band, never inline, **no Route 53 edges on the Architecture page**.
+- **WAF follows what it protects** (AWS WAF is regional except when attached to CloudFront): fronting CloudFront →
+  global band (`parent=cloud`, y=70); fronting an ALB → regional row (`parent=region`, y=65). Never root, never in
+  the VPC. **No WAF edge on the Architecture page** (the association is a Flow-page edge).
+- Inbound path without CloudFront: `Users → IGW → ALB`, one straight horizontal line; no global-band icon may sit on it.
+
+## Regional services row (children of region, y=65)
+
+Baseline (always): CloudWatch, CloudTrail, KMS. IAM is in the global band. Optional: Secrets Manager, ECR, ACM, WAF
+(ALB-fronting), Lambda, primary S3 data store. Start x from rule 2 with `container_w = region_w`.
 
 ---
 
-## Icons inside subnets — FORMULA, not hardcoded
+## Cluster lanes (children of vpc)
 
-**Icon size:** always 120×120. **Icon y in 250-high subnet:** always **65** (50px top label gap + centred).
-
-**Icon x — centre formula:**
-```
-x = (subnet_width - n_icons × 120 - (n_icons - 1) × gap) / 2
-gap = 40px recommended
-```
-
-| Subnet w | n icons | gap | x (first) | x (second) |
-|----------|---------|-----|-----------|------------|
-| 300 | 1 | — | 90 | — |
-| 380 | 2 | 40 | 40 | 200 |
-
-
-| 650 | 1 | — | 265 | — |
-
----
-
-## Users node — FORMULA
-
-Users sits on the same horizontal row as IGW/ALB so the inbound path is a straight line.
-
-> **N-AZ generalisation** — the IGW/ALB/CF row and the lane height depend on the
-> number of AZs (N). The values below (650 / 1445 / 1195 / 1260) are the N=3 case.
-> Recompute with these formulas for any other N:
-> ```
-> igw_y       = 190 + 230*(N-1)                     # 650 for N=3
-> users_y     = cloud_y + region_y + vpc_y + igw_y  # = 795 + igw_y  (1445 for N=3)
-> cf_cloud_y  = 545 + igw_y                          # 1195 for N=3
-> lane_h      = 340 + 460*(N-1)                      # 1260 for N=3
-> ```
+One tall, transparent lane (orange outline) shows one logical ECS/EKS service replicated across AZs. It overlays
+the app subnets and crosses the inter-AZ gaps on purpose; do not split it per AZ or convert a subnet into a
+service container. The lane renders **inside the app-subnet column**.
 
 ```
-users_abs_y_centre = vpc_abs_y + igw_vpc_y + icon_half
-                   = (cloud_y + region_y + vpc_y) + igw_y + 60
-                   = (250 + 285 + 260) + 650 + 60 = 1505   [N=3]
-
-users_y = users_abs_y_centre - 60 = 1445   [N=3]
-users_x = 60  (left of cloud boundary)
+lane_x = az_x + app_x + 35                 (35px left gap; D1: 930, D3: 1010)
+lane_y = az1_y + 50 + 40 = 170             (40px for the subnet label)
+lane_w = app_w − 55                        (single 300; dual lanes 240 each, 20px apart)
+lane_h = (az3_y + 50 + 250 − 20) − lane_y = 1110   [N=3]
 ```
 
-| Cell | parent | x | y | w | h |
-|------|--------|---|---|---|---|
-| users | root(1) | 60 | **= igw_abs_y_centre − 60** | 120 | 120 |
-
----
-
-## Global row icons (children of cloud) — FORMULA
-
-### Route 53 — ALWAYS in global band
-
-Route 53 is **DNS resolution**, not a network hop. It does NOT belong inline with IGW.
-- **Always place R53 in the global band** at `cloud_rel x=72, y=70`
-- **Never draw R53 edges on the Architecture page** — DNS flow belongs on Flow page only
-- R53 sits alongside IAM, S3 in the top row
-
-### CloudFront positioning
-
-> **Only add CloudFront if explicitly requested by the user.**
-
-CloudFront IS a network hop (edge cache), so it goes inline with IGW:
-- **CF present**: `cloud_rel x=72, y=1195` (inline with IGW row)
-- **CF absent**: Users connects directly to IGW
-
-### Inbound path on Architecture page
-
-The Architecture page shows the **network path**, not DNS resolution:
-
-| CloudFront | Inbound path |
-|------------|--------------|
-| Yes | Users → CloudFront → IGW → ALB → cluster |
-| No | Users → IGW → ALB → cluster |
-
-**Route53 is NEVER on the Architecture inbound path.**
-DNS resolution (Users→R53) is shown on the **Flow page** only.
-
-### Summary table — icon positions (cloud-relative)
-
-| Icon | x | y | Notes |
-|------|---|---|-------|
-| Route 53 | 72 | **70** | Always global band (DNS, not network hop) |
-| CloudFront | 72 | 1195 | Inline with IGW (only if requested) |
-| IAM | centre formula | 70 | Global band |
-| S3 (origin) | centre formula | 70 | Global band (if CF origin) |
-
-**Global band centre formula** (for IAM, S3, R53):
-```
-n = number of global band icons (S3, IAM)
-group_w = n × 120 + (n-1) × 60
-start_x = (cloud_width - group_w) / 2
-x_i = start_x + i × 180
-```
-For n=2 (S3 + IAM): `start_x = (2727 - 300) / 2 = 1213.5 ≈ 1214`
-
-**Users x-position:**
-`users_x` must satisfy: `users_abs_right + 40 ≤ cloud_abs_x`
-→ `users_x ≤ cloud_abs_x - 160 = 100`
-Default: **users_x = 100** (abs_right=220, 40px gap to cloud left=260).
-
-| Icon | formula | example (n=2) |
-|------|---------|---------------|
-| first | `start_x` | 1214 |
-| second | `start_x + 180` | 1394 |
-| third | `start_x + 360` | 1574 |
-
----
-
-## Regional services row (children of region) — FORMULA
-
-All icons sit at **y=65** (constant). x positions are **centre-aligned** across the region width.
-
-```
-n = number of service icons
-group_w = n × 120 + (n-1) × 60
-start_x = (region_width - group_w) / 2   (region_width = 2395)
-x_i = start_x + i × 180
-```
-
-| n | group_w | start_x | x positions |
-|---|---------|---------|-------------|
-| 4 | 660 | 868 | 868, 1048, 1228, 1408 |
-| 5 | 840 | 778 | 778, 958, 1138, 1318, 1498 |
-| 6 | 1020 | 688 | 688, 868, 1048, 1228, 1408, 1588 |
-| 7 | 1200 | 598 | 598, 778, 958, 1138, 1318, 1498, 1678 |
-
-> Each row is independently centred within its own container; the global band (few
-> icons) and the regional row (many icons) are **NOT expected to align column-for-column**
-> — this is correct, not a bug.
-
----
-
-## Cluster lanes (children of vpc) — FORMULA
-
-### One ECS/Fargate service replicated across AZs
-
-Use one tall, transparent service lane to show a single logical ECS service
-deployed across multiple AZs. The lane is a separate child of the VPC. Its
-orange outline spans from the first app-subnet row through the last app-subnet
-row and remains visible across the inter-AZ gaps. **Crossing those gaps is
-intentional:** it shows that one ECS service is deployed in several AZs. Do not
-shorten the outline at each subnet, split it into one box per AZ, or treat the
-gap-crossing outline as a subnet-boundary error. Put the ECS service badge and
-name just inside the lane's upper-left corner.
-
-The orange service lane is an overlay/grouping boundary, not a replacement for
-the blue app-subnet containers. Keep every app subnet as its own subnet with
-its existing label, fill, border, AZ parent, and geometry. Do not convert an
-app subnet into an ECS cluster or service container.
-
-Place one Fargate task icon inside each app subnet/AZ where the service runs.
-Center each task horizontally on the lane and vertically in its AZ's app
-subnet. Keep each task cell parented to its actual app subnet so the subnet
-placement remains accurate. Preserve its AWS Fargate icon style and stencil
-when positioning it; do not recreate it as a generic shape or reparent it to
-the overlay lane. The task icons share the same x coordinate, forming a
-straight column. The lane outline groups these replicas; the repeated task
-icons show their distribution. Do not add arrows between replicas to imply
-replication.
-
-For the main request path, connect to the logical service at the middle AZ row
-(or to the lane edge on that row), rather than drawing separate incoming and
-outgoing paths to every task. Keep the connection horizontal through that row
-and clear of the task label. Only connect directly to an individual task when
-the user specifically asks to show a task-level interaction. Apply the same
-layout pattern to EKS workloads when one service is replicated across AZs.
-
-**Lane must render INSIDE the app subnet column** — the lane's orange border must
-not extend beyond the blue app subnet borders. The lane spans from inside the
-first app subnet through inside the last app subnet, crossing the inter-AZ gaps.
-
-**Lane geometry — fit inside app subnets:**
-```
-# App subnet vpc-relative position
-app_vpc_x = az_x + app_az_x = 520 + 455 = 975
-app_vpc_y_first = az1_y + app_az_y = 80 + 50 = 130
-app_vpc_y_last_bottom = az3_y + app_az_y + app_h = 1000 + 50 + 250 = 1300
-
-# Lane position (vpc-relative) — inside the app subnet column
-lane_left_padding = 35                 # horizontal padding inside subnet (left)
-lane_right_padding = 20                # horizontal padding inside subnet (right)
-lane_top_padding = 40                  # vertical padding for subnet label
-lane_bottom_padding = 20
-
-lane_x = app_vpc_x + lane_left_padding = 975 + 35 = 1010
-lane_y = app_vpc_y_first + lane_top_padding = 130 + 40 = 170
-lane_w = app_w - lane_left_padding - lane_right_padding   # e.g. 355 - 55 = 300 for app_w=355
-lane_h = (app_vpc_y_last_bottom - lane_bottom_padding) - lane_y
-       = (1300 - 20) - 170 = 1110     [for 3-AZ, app_h=250]
-```
-
-**3-AZ default values (copy directly):**
-- `lane_x = 1010` (vpc-relative)
-- `lane_y = 170` (vpc-relative)
-- `lane_w = 300` (for app_w=355, lane fits inside subnet)
-- `lane_h = 1110`
-
-**Lane width — size to content:**
-Lane width = `120 + 2×pad` where pad≥60. Single icon, short label: `lane_w=300`.
-Long label (>20 chars): `lane_w=480`. Dual lanes: `w=240` each.
-
-**App subnet width follows the lane:** `app_w = lane_w + 55`
-(35px left gap + 20px right gap). Do NOT use w=650 as a fixed default.
-Example: lane_w=300 → app_w=355. lane_w=480 → app_w=535.
-
-**Task icon x inside lane (centres 120px icon):**
-```
-task_x = (lane_width - 120) / 2
-```
-Single lane (w=301): task_x = **90**
-Dual lane (w=240): task_x = **60**
-
-**Task icon y inside lane — centred in app subnet region:**
-```
-# Task should be centred vertically in the portion of lane overlapping each AZ's app subnet
-app_center_vpc_y = az_y + app_az_y + (app_h / 2) = az_y + 50 + 125 = az_y + 175
-task_y = app_center_vpc_y - 60 - lane_y   # (lane-relative)
-```
-
-| AZ | az_y | app_center_vpc_y | task_y (lane-rel) |
-|----|------|------------------|-------------------|
-| AZ-1 | 80 | 255 | 25 |
-| AZ-2 | 540 | 715 | 485 |
-| AZ-3 | 1000 | 1175 | 945 |
-
-> These table values are for the 3-AZ default with lane_y=170. **If you change
-> AZ positions or lane geometry, recalculate using the formula.**
-
-**Dual-lane label clearance:** With narrow lanes (w=240) and long labels like
-"EKS Cluster (API)", the label text wraps and overlaps task icons. Add +60px
-to each task_y for dual lanes: **AZ-1=85, AZ-2=545, AZ-3=1005**.
-
-**Badge (45×45, parent=vpc):**
-```
-badge_x = lane_x + 8 = 1010
-badge_y = lane_y + 8 = 178
-```
-
----
-
-## EKS/ECS → database edge — FORMULA
-
-When connecting a lane to a database in AZ-1, the edge should be a **straight horizontal line**.
-The exit point on the lane must match the database's absolute y-centre.
-
-```
-exitY = (db_abs_y_centre - lane_abs_top) / lane_height
-
-db_abs_y_centre = cloud_y + region_y + vpc_y + az1_y + db_az_y + db_icon_y + icon_half
-lane_abs_top    = cloud_y + region_y + vpc_y + lane_vpc_y
-```
-
-For the 3-AZ defaults with Aurora in AZ-1 db-subnet (lane_y=170, lane_h=1110):
-```
-aurora_abs_y_centre = 250+285+260+80+50+65+60 = 1050
-lane_abs_top        = 250+285+260+170 = 965
-lane_height         = 1110
-exitY = (1050 - 965) / 1110 = 0.077 ≈ 0.08
-```
-
-> **Recalculate this whenever the database's AZ row or the lane's vpc-relative y changes.**
-> Do not copy 0.14 as a universal value.
-
-**Multiple DB icons in the same subnet (e.g. RDS + DocumentDB):**
-When EKS/ECS connects to two icons in the same db subnet:
-- Primary (e.g. RDS Writer): use the computed `exitY` fraction → enters db icon left side.
-- Secondary (e.g. DocumentDB): enter from the **top** (`entryX=0.5 entryY=0`) using a
-  separate edge with `exitY=0` from the lane top + horizontal waypoints to avoid piercing
-  the VPC border. Or: exit the lane right at a different `exitY` so the two edges leave
-  at visually distinct y-positions.
-Never route two edges from the identical exit point to adjacent icons — the router bends one through the other.
-
----
-
-## CloudFront → IGW edge routing
-
-CF and IGW share the same absolute y-centre — the edge should be **horizontal** with no jog.
-
-```
-exitX=1;exitY=0.5; entryX=0;entryY=0.5; no waypoints needed.
-```
-
-> CloudFront is always inline with IGW (same y-centre). These waypoints are only needed if CF is deliberately placed above the IGW row in an exceptional layout:
-CF left and travelling down the left side of the cloud boundary:
-```
-exitX=0 exitY=1  entryX=0 entryY=0.5
-waypoints: x = cloud_abs_x - 40, y = cf_abs_y_centre
-           x = cloud_abs_x - 40, y = igw_abs_y_centre
-```
-
----
-
-
-**Inbound path without CloudFront** (the default when CF is not requested):
-`Users → IGW → ALB` — all at the same abs y-centre, straight horizontal, no waypoints.
-The horizontal Users→IGW segment **must not pass through any global-band icon** (Route 53,
-S3, IAM). If a global-band icon would sit on that y-level between Users and IGW, it belongs
-in the global band row (`cloud_rel_y=70`), not inline. Move the icon up — do not reroute the edge.
-
-
-## Baseline edges (ECR, Secrets) — routing rule
-
-**Never** source a baseline edge from a task icon inside a lane (`exitY=0` from a nested icon
-goes straight up through the lane and region, creating a vertical line).
-Source from the **lane border** itself:
-```
-source = "ecslane" or "ekslane"   (not the individual task icon)
-exitX=0.5  exitY=0                (exit lane top centre)
-```
-Then route horizontal waypoints **above** the vpc top before turning toward the target:
-```
-waypoint_y = midpoint between region_svc_abs_bottom and vpc_abs_top
-           = (region_abs_y + 65 + 120 + vpc_abs_y) / 2
-           ≈ 757  for the default scale (compute per topology)
-```
-Route: lane_top → up to waypoint_y → left to target_abs_x → up to target.
-
----
+- **Width:** `lane_w = 120 + 2×pad`, pad ≥ 60. Short label → 300 (single); label > 20 characters → 480 (then
+  `app_w = 535`); dual lanes 240 each (`app_w = 2×240 + 20 + 55 = 555`).
+- **Tasks are children of the lane** (`parent=<lane id>`): `task_x = (lane_w − 120)/2` (single 90, dual 60),
+  `task_y = az_y + 175 − 60 − lane_y` → 25 / 485 / 945. Keep the AWS Fargate stencil; do not draw arrows between replicas.
+- **Dual-lane label clearance:** add +60 to `task_y` (85 / 545 / 1005) **only when the lane label wraps** (label
+  > ~20 characters at fontSize 14 in a 240-wide lane). Short labels ("Amazon EKS") keep 25 / 485 / 945.
+- **Badge** 45×45, `parent=vpc`, at `x = lane_x + 8`, `y = lane_y + 8 = 178`.
+- The main request path connects to the **lane border** at the middle AZ row, not to each task.
 
 ## Lane label style (constant)
 
@@ -487,6 +156,41 @@ fontSize=14; spacingLeft=55; align=left; strokeWidth=3
 ```
 
 ---
+
+### Straight edges (lane → database, validator-enforced, |dy| ≤ 2px)
+
+```
+exitY = (db_abs_y_centre − lane_abs_top) / lane_h          # use 3 DECIMALS: 0.077, 0.491, 0.905
+db_abs_y_centre = 795 + az_y + 50 + 65 + 60 ; lane_abs_top = 795 + lane_y
+```
+
+`0.08` is a ~4px jog and `0.91` for AZ-3 a ~5px jog — always three decimals. Recompute whenever the DB's AZ row or
+the lane y changes. Two edges into the same db subnet must leave at different `exitY` (or the second enters from the
+top with waypoints); never route two edges from one exit point to adjacent icons.
+
+### Architecture page edges — allowed set
+
+1. Inbound path: Users → (CloudFront →) IGW → ALB → cluster lane (solid).
+2. ECR: lane → ECR (dashed, "pull image") for **every** ECS/EKS lane.
+3. Database: lane → primary DB (solid), primary → replica (dashed replication).
+
+Everything else (SQS, SNS, MSK, Bedrock, Transcribe, S3 data access, Secrets Manager, CloudWatch, KMS, Lambda
+invocations, Route 53, WAF) is a **Flow-page** edge. All edges `parent="1"`.
+
+### ECR / baseline edge waypoints
+
+Source the **lane border** (`exitX=0.5 exitY=0`), never a task icon. Route the horizontal run through the gap between
+the regional-row labels (they extend to y≈766) and the VPC top (795), 12px clear of the border:
+
+```
+vpc_abs_top = cloud_y + region_y + vpc_y = 250 + 285 + 260 = 795
+waypoint_y  = vpc_abs_top − 12 = 783
+lane_abs_xc = vpc_abs_x + lane_x + lane_w/2        (vpc_abs_x = 260 + 247 + 85 = 592)
+ecr_abs_xc  = region_abs_x + ecr_x + 60            (region_abs_x = 507)
+waypoints: (lane_abs_xc, 783), (ecr_abs_xc, 783)
+```
+
+Keep baseline edges unlabelled or use a short label ("pull").
 
 ## Icon style (copy verbatim — change only resIcon and fillColor)
 
@@ -498,9 +202,11 @@ Label HTML: `<font style="font-size:18px"><b>Service Name</b></font>`
 
 ---
 
+---
+
 ## ⚠️ Stencil names — always verify in shapes-aws.md
 
-Never guess a stencil name. Look it up in `references/shapes-aws.md` before writing `resIcon=`.
+Never guess. Look the key up in `references/shapes-aws.md` before writing `resIcon=`.
 
 | Wrong (blank box) | Correct |
 |-------------------|---------|
@@ -526,6 +232,8 @@ Never guess a stencil name. Look it up in `references/shapes-aws.md` before writ
 
 ---
 
+---
+
 ## Edge styles (constants — copy verbatim)
 
 **Solid (primary path):**
@@ -547,167 +255,66 @@ All edges: `parent="1"` (root).
 
 ---
 
-## Flow page (constants)
+---
+
+## Flow page (flat layout — constants)
+
+The Flow page is **flat**: every icon and edge is `parent="1"` with absolute coordinates. The Cloud / Region / VPC
+boxes are **decorative scope boxes** (`container=0`, parent `1`); they are never parents, so editing in draw.io
+cannot re-parent or drift a node. `validate-drawio.py` checks each node against the boxes by position.
 
 | Cell | x | y | w | h |
 |------|---|---|---|---|
 | border | 0 | 0 | 2500 | 1200 |
 | brand | 40 | 30 | 240.9 | 50 |
-| title | 300.9 | 0 | 440 | 120 |
+| title | 300.9 | 0 | 440 | 200 (name, subtitle, Version/Date/Creator/Reviewer) |
+| f-cloud (box) | 380 | 220 | 2040 | 920 |
+| f-region (box) | 680 | 390 | 1700 | 680 |
+| f-vpc (box) | 740 | 450 | 1000 | 560 |
 
-Flow nodes: 120×120, spine at y≈500, spacing = **320px** centre-to-centre (constant).
-Branch nodes (e.g. S3): same x as anchor, y = spine_y − 240.
+**Spine:** nodes 120×120, node top `y = 670` (centre 730) for every spine node, pitch **320** centre-to-centre,
+`x = 220 + 320k`:
+
+| k | scope | x | rule |
+|---|---|---|---|
+| 0 | Users (outside the cloud box) | 220 | `users_x = cloud_x − 40 − 120` |
+| 1 | cloud, left of the region box | 540 | CloudFront |
+| 2–4 | VPC box | 860 / 1180 / 1500 | IGW, ALB, compute, DB… (all VPC-bound) |
+| 5–6 | region box, right of the VPC | 1820 / 2140 | S3, Bedrock, Transcribe, SQS… |
+
+Scope map: **VPC box** — IGW, ALB/NLB, ECS/EKS/Fargate/EC2, RDS, Aurora, DocumentDB, MSK, ElastiCache, NAT, endpoints
+(they live in VPC subnets — same scope as the Architecture page). **Region box, outside the VPC** — S3, Bedrock,
+Transcribe, SQS, SNS, DynamoDB, Lambda (unless VPC-attached), CloudWatch, KMS, Secrets Manager, ECR, a WAF fronting an
+ALB. **Cloud box, outside the Region** — CloudFront, Route 53, IAM, a WAF fronting CloudFront.
+
+**Branch nodes** (240px off the spine: `y = 430` above, `y = 910` below) are **region-scope** services anchored to
+k=5/6 only. Never branch off a VPC node: 240px above/below leaves the 560px-high VPC box. Cloud scope (outside the region): WAF
+fronting CloudFront at `(540, 250)`, Route 53 at `(470, 910)`.
+
+**Edges:** Users → Route 53 (dashed "DNS query") → the public endpoint it resolves to (CloudFront, otherwise the
+ALB — **never the IGW**); WAF → its target (dashed "inspect"). Keep every edge off other icons; add waypoints if needed.
+The y-centre of nodes joined by a straight edge must be identical, or the router adds a bend.
 
 ---
 
-
-## Architecture page edges — allowed set
-
-**Only these edges belong on the Architecture page:**
-1. **Inbound path**: Users → (CloudFront →) IGW → ALB → cluster lane (solid)
-2. **ECR**: lane → ECR (dashed, "pull image")
-3. **Database**: lane → primary DB (solid), primary → replica (dashed replication)
-
-**Everything else goes on Flow page only:**
-- SQS, SNS, MSK, Kinesis (messaging/streaming)
-- Bedrock, Transcribe, Comprehend (AI/ML)
-- S3 (when used as data store)
-- Secrets Manager, CloudWatch, KMS (operational)
-- Lambda invocations, API calls, event triggers
-
-The Architecture page shows **where services are deployed** (containers, subnets, AZs).
-The Flow page shows **how requests flow through services** (numbered steps, branches).
-
-## ECR edge waypoints — formula
-
-Both EKS and ECS clusters must have a dashed `pull image` edge to ECR.
-Source: the lane container border (`exitY=0`). Use horizontal waypoints:
-
-```
-waypoint_y = pvpc_abs_top - 30
-           = cloud_y + region_cloud_y + pvpc_region_y - 30
-
-For each lane:
-  lane_abs_xc = pvpc_abs_x + lane_vpc_x + lane_w/2
-  ecr_abs_xc  = region_abs_x + ecr_region_x + 60
-
-Waypoints: (lane_abs_xc, waypoint_y), (ecr_abs_xc, waypoint_y)
-```
-
-Keep ECR edge unlabelled or use a short label like "pull" — verbose labels overlap container borders.
-
-
-## Flow page layout — containers and alignment
-
-Flow pages should show **AWS Cloud → Region → VPC** containers as context.
-All service icons have `parent` matching their actual AWS scope.
-
-### Container parents in flow diagrams
-
-| Service | Parent | Reason |
-|---------|--------|--------|
-| Users | root(1) | External, outside cloud |
-| Route 53, WAF, CloudFront | `f-cloud` | Global services |
-| S3, Bedrock, Transcribe, MSK, RDS, DocumentDB, Lambda | `f-region` | Regional, outside VPC |
-| IGW, ALB, ECS/EKS compute | `f-vpc` | VPC-bound |
-
-### Spine alignment (critical — prevents edge bends)
-
-All nodes on the main horizontal path MUST share the same abs y-centre.
-Compute a single `spine_abs_yc` and derive every y from it:
-
-```
-spine_abs_yc = vay + vpc_icon_y + 60
-  vpc_icon_y = vcy + (vch - 120) // 2   (centres 120px icon in VPC height)
-
-For nodes in VPC (parent=f-vpc):
-  node_y = vpc_icon_y
-
-For nodes in Region (parent=f-region):
-  node_y = spine_abs_yc - 60 - ray   (ray = cloud_y + region_cloud_y)
-
-For nodes parent=1:
-  node_y = spine_abs_yc - 60
-```
-
-If source and target y-centres differ by even 1px, orthogonal router adds a bend.
-
-### Flow page spine spacing
-
-Spine nodes are spaced **320px centre-to-centre** on the main horizontal path.
-Branch nodes (S3, WAF, RDS) sit 240px above or below the spine.
-
-```
-node_x_i = first_node_x + i * 280
-branch_y  = spine_abs_yc - 240 - 60   (above spine)
-```
-
-### WAF x-alignment in flow (must match ALB exactly)
-
-```
-alb_abs_xc  = vpc_abs_x + alb_vpc_rel_x + 60
-waf_cloud_x = alb_abs_xc - 60 - cloud_abs_x
-waf_cloud_y = region_cloud_y - 120 - 20   (20px gap above region top)
-```
-
-### Route 53 in flow page
-
-Route 53 is `parent=f-cloud`. Cloud-relative x equidistant between cloud and region:
-```
-r53_cloud_x = (region_cloud_x - 120) // 2
-r53_cloud_y = spine_abs_yc - 60 - cloud_abs_y
-```
-
-### S3 and regional services: must be RIGHT of VPC right border
-
-```
-min_region_rel_x = vpc_abs_right - region_abs_x + gap(40)
-                 = (vpc_region_rel_x + vpc_width) + gap
-```
-S3/Bedrock/Transcribe etc. must have `region_rel_x ≥ min_region_rel_x` or they
-visually appear inside the VPC.
-
-### Users x in flow
-
-```
-users_x = cloud_abs_x - gap(40) - 120
-```
-Default: cloud_x=380 → users_x=100, right=340, gap to cloud=40px.
-
-
-## Route 53 placement (conditional)
-
-## Route 53 placement — ALWAYS global band
-
-Route 53 is **DNS resolution**, not a network hop. It does NOT belong on the Architecture
-page inbound path.
-
-**Placement:** Always in the **global band** at `cloud_rel y=70`, centre-aligned with other
-global icons (IAM, S3).
-
-**Edges:** Route 53 edges (Users→R53→service) belong on the **Flow page only**.
-Do NOT draw Route 53 edges on the Architecture page.
-
-```
-cloud_rel_y = 70   (global band)
-cloud_rel_x = global-band centre formula: start_x + i × 180
-```
-
-## Common mistakes (constants that are often wrong)
+## Common mistakes
 
 | Wrong | Correct |
 |-------|---------|
-| AZ height 720 | **340** |
-| AZ y-spacing 820 | **460** |
+| containers left at the old 1640/2225/2395/2727 widths | wrap rule (rule 1); D1 = 1110/1695/1865/2197 |
+| rows not re-centred after a width change | rule 2 |
+| AZ height 720 / spacing 820 | **340** / **460** |
 | subnet height 580 | **250** |
-| public subnet w=300 with 2 icons | **380** |
-| lane w=480 each when 2 lanes | **240** each |
-| lane w=230 | **300–480** depending on content |
-| app w=650 with single lane | **lane_w + 55** (e.g. 355 for lane_w=300) |
+| public w=300 holding 2 icons | **380** |
+| app w=650 with a single lane | **lane_w + 55** (355 for lane_w=300) |
+| lane x copied from another layout | `az_x + app_x + 35` (D1 930, D3 1010) |
+| tasks parented to the subnet | children of the lane |
+| `exitY` rounded to 2 decimals | 3 decimals (0.077 / 0.491 / 0.905) |
 | lane label fontSize=20, align=center | **14, align=left, spacingLeft=55** |
 | icon size 60×60 | **120×120** |
 | border strokeWidth=2 | **3** |
 | fontSize=14 on icons | **18** |
-| `elastic_container_service` stencil | **`ecs`** |
-| `elastic_kubernetes_service` stencil | **`eks`** |
-| `certificate_manager` stencil | **`certificate_manager_3`** |
+| WAF with parent=1, or a WAF edge on the Architecture page | scope rule above; Flow-page edge only |
+| Route 53 inline / Route 53 → IGW | global band; DNS → CloudFront or ALB |
+| Flow nodes parented to the scope boxes | parent `1`, absolute coordinates |
+| `elastic_container_service` / `elastic_kubernetes_service` / `certificate_manager` stencils | `ecs` / `eks` / `certificate_manager_3` |

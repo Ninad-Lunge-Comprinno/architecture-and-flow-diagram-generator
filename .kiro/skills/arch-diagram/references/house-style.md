@@ -24,7 +24,7 @@ Every diagram page uses these `mxGraphModel` attributes:
 
 `pageWidth` / `pageHeight` are only the print-page hint — the actual canvas is
 much larger. All geometry coordinates are absolute in a coordinate space that
-starts at (0,0). Working diagrams span roughly **x: 0–3100, y: 0–2500** for
+starts at (0,0). Working diagrams span roughly **x: 0–border_w (2570 for the shipped skeleton), y: 0–2500** for
 architecture pages and **x: 0–2300, y: 0–1100** for flow pages.
 
 ---
@@ -41,14 +41,14 @@ an old/truncated blob — a broken blob renders as a blank or missing image. Cop
 Set the brand cell style to
 `shape=image;aspect=fixed;imageAspect=0;strokeColor=none;image=data:image/png,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;`
 Recommended logo geometry on an architecture page: `x=30 y=50 width=240.9 height=50`.
-The actual PNG is 1200×250 (~4.8:1); keep that aspect ratio when resizing.
+The embedded PNG is 159×33 (~4.8:1); keep that aspect ratio when resizing. A sharper logo needs a vector or ≥482×100 source from the brand owner.
 
 ```xml
 <!-- outer border — strokeWidth=3, fillColor=none, plain black -->
 <mxCell id="border" parent="1"
   style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
   vertex="1">
-  <mxGeometry x="0" y="-40" width="3100" height="2600" as="geometry"/>
+  <mxGeometry x="0" y="-40" width="2570" height="2600" as="geometry"/> <!-- width = cloud_x + cloud_w + 113; 2570 for the shipped skeleton -->
 </mxCell>
 
 <!-- Comprinno logo — real PNG, base64 copied from references/skeleton-3az.drawio.xml -->
@@ -63,7 +63,7 @@ The actual PNG is 1200×250 (~4.8:1); keep that aspect ratio when resizing.
   value="&lt;h1 style='text-align:left'&gt;&lt;b style='font-size:32px'&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style='text-align:left;font-size:20px'&gt;Version: 1.0&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Date: To be filled&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Creator: To be filled&lt;/div&gt;&lt;div style='text-align:left;font-size:20px'&gt;Reviewer: To be filled&lt;/div&gt;"
   style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
   vertex="1">
-  <mxGeometry x="290.9" y="0" width="440" height="200" as="geometry"/>
+  <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry"/>
 </mxCell>
 ```
 
@@ -86,53 +86,47 @@ parent=1 (root)
 ├── title           (absolute)
 ├── users           (absolute, outside AWS Cloud)
 │
-├── cloud           (absolute, e.g. x=260 y=250 w=2727 h=2115)
-│   ├── waf         (relative to cloud, global row y=70)
-│   ├── route53     (relative to cloud, global row y=70)
-│   ├── s3          (relative to cloud, global row y=70)
-│   ├── iam         (relative to cloud, global row y=70)
+├── cloud           (absolute, x=260 y=250; w from the wrap rule)
+│   ├── route53     (relative to cloud, global band y=70)
+│   ├── iam         (relative to cloud, global band y=70)
+│   ├── s3          (relative to cloud, global band y=70 — CloudFront origin only)
+│   ├── waf         (relative to cloud, global band y=70 — only when it fronts CloudFront)
 │   │
-│   ├── region      (relative to cloud — container=0 DECORATIVE BOX ONLY,
-│   │               NOT a parent. Children are parented to cloud directly.)
-│   │
-│   ├── secrets_manager  (relative to cloud, y≈350 — visually inside region)
-│   ├── cloudwatch       (relative to cloud, y≈350)
-│   ├── cloudtrail       (relative to cloud, y≈350)
-│   ├── kms              (relative to cloud, y≈350)
-│   ├── ecr              (relative to cloud, y≈350)
-│   │
-│   └── vpc   (relative to cloud — NOT child of region.
-│             vpc_cloud_x = region_cloud_x + vpc_region_x
-│             vpc_cloud_y = region_cloud_y + vpc_region_y)
-│       ├── igw           (relative to vpc)
-│       ├── alb           (relative to vpc)
+│   └── region      (relative to cloud, x=247 y=285 — container, parent of everything regional)
+│       ├── secrets_manager  (relative to region, services row y=65)
+│       ├── cloudwatch       (relative to region, services row)
+│       ├── cloudtrail       (relative to region, services row)
+│       ├── kms              (relative to region, services row)
+│       ├── ecr / acm / waf (ALB-fronting) / lambda  (relative to region, services row)
 │       │
-│       ├── az1           (relative to vpc, e.g. x=520 y=80  w=1640 h=340)
-│       │   ├── pub1      (relative to az1, e.g. x=35 y=50 w=300 h=250)
-│       │   │   └── nat1  (relative to pub1)
-│       │   ├── app1      (relative to az1, e.g. x=375 y=50 w=555 h=250)
-│       │   └── db1       (relative to az1, e.g. x=970 y=50 w=300 h=250)
-│       │       └── rds1  (relative to db1)
-│       │
-│       ├── az2           (relative to vpc, e.g. x=520 y=540 w=1640 h=340)
-│       │   └── ...same subnet structure...
-│       │
-│       └── lane   (relative to vpc, vertical lane spanning all AZs)
-│           ├── task-az1  (relative to lane)
-│           └── task-az2  (relative to lane)
+│       └── vpc   (relative to region, x=85 y=260)
+│           ├── igw           (relative to vpc)
+│           ├── alb           (relative to vpc)
+│           │
+│           ├── az1           (relative to vpc, x=520 y=80; w = content_right + 40)
+│           │   ├── pub1      (relative to az1, x=35 y=50 w=300 h=250)
+│           │   │   └── nat1  (relative to pub1)
+│           │   ├── app1      (relative to az1, x=pub_right+40, w=300 or lane_w+55)
+│           │   └── db1       (relative to az1, x=app_right+40)
+│           │       └── rds1  (relative to db1)
+│           │
+│           ├── az2           (relative to vpc, y=540)  └── ...same subnet structure...
+│           │
+│           └── lane   (relative to vpc, vertical lane spanning all AZs)
+│               ├── task-az1  (relative to lane)
+│               └── task-az2  (relative to lane)
 │
-└── edges           (all edges: parent=1 for cross-boundary edges;
-                    parent=vpc permitted for intra-VPC edges)
+└── edges           (all edges: parent=1, absolute coordinates for waypoints)
 ```
 
 **Critical rules:**
-- `region` uses **`container=0`** — it is a decorative boundary box, not a parent.
-  All services visually inside the region are actually parented to **`cloud`**.
-- `vpc` is a direct child of **`cloud`**, not of `region`.
+- The hierarchy is **nested and scope is the parent chain**: regional services `parent=region`, global services
+  `parent=cloud`, the VPC is a child of the Region. Do not flatten it (the validator also checks scope by absolute
+  position, so a mis-framed child fails).
 - Compute icons inside subnets have `parent` set to the subnet cell.
-- Compute icons inside cluster lanes have `parent` set to the lane cell.
-- **Cross-boundary edges** (e.g. Users→IGW) have `parent="1"` (root).
-- **Intra-VPC edges** (IGW→ALB, ALB→lane, lane→DB) may use `parent="vpc"` for cleaner routing.
+- Compute icons (tasks) inside cluster lanes have `parent` set to the lane cell.
+- **All edges have `parent="1"`** (root) — never parent an edge to a container.
+- The **Flow page is the exception: flat** (every node `parent="1"`, decorative scope boxes) — see §11.
 
 ---
 
@@ -298,9 +292,8 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 
 | Scope | Container parent | Examples |
 |-------|-----------------|----------|
-| Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), **WAF** |
-| Cloud band global icon row | `cloud` | WAF — `parent=cloud`, `y=70` alongside Route53/IAM; **no edge to ALB on the Architecture page**. WAF's association with ALB/CF is shown on the Flow page only (dashed "inspect" edge). |
-| Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda |
+| Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), WAF fronting CloudFront |
+| Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda, WAF fronting an ALB |
 | VPC entry column | `vpc` | IGW, ALB |
 | Public subnet | inside AZ public-subnet container | NAT Gateway |
 | App subnet | inside AZ app-subnet container | (compute lives in the cluster/ASG lane over this column) |
@@ -313,9 +306,10 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 - **CloudFront is the entry point for web traffic**: place it in the `cloud`
   band inline with the IGW/ALB row (same y-centre), left of the VPC entry
   column. This keeps the inbound path a straight horizontal line
-  (Users → CloudFront → IGW → ALB). WAF, when
-  present, attaches to CloudFront there.
-- When there is NO CloudFront, the ALB (and WAF) is the entry point inside `vpc`.
+  (Users → CloudFront → IGW → ALB).
+- When there is NO CloudFront, the ALB is the entry point inside `vpc`.
+- **WAF follows what it protects** (regional unless attached to CloudFront): CloudFront web ACL → global band; ALB
+  web ACL → regional row. No WAF edge on the Architecture page; draw the dashed "inspect" edge on the Flow page.
 - IGW sits at the **left VPC border**: negative x (e.g. x=-60) relative to the
   vpc container so it straddles the VPC left edge.
 - **S3 as a CloudFront static-site origin** sits in the global/edge band next to
@@ -343,32 +337,28 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 
 ## 11. Flow page layout
 
-Flow pages use a simpler coordinate space (typically ~2500×1200):
+Flow pages are **flat**: every node and edge is `parent="1"` with absolute coordinates, on a 2500×1200 canvas.
+Numbers (boxes, spine, slots) are in the cheatsheet "Flow page" section.
 
 - Border: `x=0 y=0 w=2500 h=1200; rounded=0; strokeColor=#000000; strokeWidth=3`
-- Logo and title block: same style as the architecture page (real base64 logo).
-- Nodes: left-to-right, 280px spacing between icon centres (icon=120×120).
-- All nodes are children of `parent="1"` (root), NOT nested inside containers,
-  unless a container boundary is meaningful for the flow.
-- Branch nodes (e.g. S3 static assets, Secrets Manager) sit on a row ~220px
-  above the main left-to-right spine and connect with a short dashed arrow.
-- Edges: `parent="1"`, `strokeWidth=4`, use waypoints to avoid crossings.
-- Return/response edges use `dashed=1` and a lighter/category `strokeColor`.
-- Labels on edges: short verb phrases; number the main-path steps ①②③④.
+- Logo and title block: same style as the architecture page (real base64 logo); the title carries
+  Version / Date / Creator / Reviewer.
+- **Scope boxes** (`f-cloud`, `f-region`, `f-vpc`): required, decorative (`container=0`), parent `1`. They are never
+  parents; each node must sit inside the box that matches its AWS scope (the validator checks by position).
+- Nodes: left-to-right on one spine, 320px between icon centres (icon=120×120), identical y for every spine node.
+- Branch nodes (240px above/below the spine) are region-scope services only (S3, Bedrock, Secrets Manager…).
+- Edges: `strokeWidth=4`, use waypoints to avoid crossings. Return/response edges use `dashed=1` and a
+  lighter/category `strokeColor`. Labels are short verb phrases; number the main-path steps ①②③④.
+- Route 53: `Users → Route 53 → the public endpoint it resolves to` (CloudFront, otherwise the ALB; never the IGW).
+  WAF: dashed "inspect" edge to its target.
 
 ---
 
 ## 12. What the architecture page must NOT do
 
-- Do not shrink containers arbitrarily — but **do** apply the right-margin check: if
-  `AZ_w - content_right > 0.2 × AZ_w` (i.e. dead space > 20%), trim the four containers
-  with the **inset-preserving formula** (NOT a proportional `×new_AZ_w/1640` scale — that
-  scales the fixed AZ inset and is geometrically wrong):
-  `new_AZ_w = content_right + 40`; `new_VPC_w = 520 + new_AZ_w + 65`;
-  `new_Region_w = 85 + new_VPC_w + 85`; `new_Cloud_w = 247 + new_Region_w + 85`.
-  Then re-centre the regional/global rows in the new widths. The full formula, worked
-  examples, and the flattened dual-lane validated table live in `coords-cheatsheet.md`
-  (single source). Dead space exceeding 20% must be corrected.
+- Do not leave containers at stale default widths — they always wrap their content (wrap rule in the cheatsheet,
+  `az_w = content_right + 40` and the fixed insets), and the regional row and global band are re-centred after
+  every change. No proportional scaling.
 - Do not set `container=0` on subnets or AZ cells.
 - Do not use `fillColor=default` on the outer border; use `fillColor=none` + black stroke, `strokeWidth=3`.
 - Do not reuse a stale/truncated logo blob — copy a fresh base64 blob from `references/skeleton-3az.drawio.xml`.
@@ -407,12 +397,12 @@ style="fillColor=none;strokeColor=#ED7100;verticalAlign=top;fontStyle=1;
 style="sketch=0;...shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;"
 ```
 Use `resIcon=mxgraph.aws4.ecs` for ECS, `resIcon=mxgraph.aws4.eks` for EKS.
-Never use `ecs` or `eks` — those produce blank boxes.
+Never use `elastic_container_service` or `elastic_kubernetes_service` — those produce blank boxes.
 
 **Checklist before saving:**
 - [ ] Lane parent is `vpc` (not `az` or `subnet`)
-- [ ] Badge resIcon is `ecs` or `eks` (NOT `ecs`)
-- [ ] Task icon parent is the lane cell
+- [ ] Badge resIcon is `ecs` or `eks` (NOT `elastic_container_service` / `elastic_kubernetes_service`)
+- [ ] Task icon parent is the lane cell; lane inside the app column with 35px left / 20px right gap
 - [ ] Lane label: `fontSize=14; spacingLeft=55; align=left; strokeWidth=3`
 - [ ] Two lanes side by side: w=240 each (not 480 each — overflows app column)
 
@@ -433,7 +423,7 @@ All edges must pass these checks before the file is saved:
       `source="ecslane"` / `source="ekslane"` and add explicit horizontal
       waypoints to route below the regional services row.
       **Every baseline edge that exits a lane top MUST use horizontal waypoints**
-      at `y = pvpc_abs_top − 30` — no exceptions. This applies to ECR, Secrets
+      at `y = vpc_abs_top − 12` (783 at default scale) — no exceptions. This applies to ECR, Secrets
       Manager, Bedrock, Transcribe, MSK, S3, and any other service above the VPC.
       **Prefer removing non-essential baseline edges.** Only ECR (image pull) and
       optionally Secrets Manager are required on the architecture page. Bedrock,
