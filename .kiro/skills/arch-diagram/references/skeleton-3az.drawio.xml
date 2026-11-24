@@ -58,7 +58,7 @@
 
         <!-- OUTER BORDER — strokeWidth=3, plain black, fillColor=none -->
         <mxCell id="border" parent="1"
-          style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
+          style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;strokeWidth=3;"
           vertex="1">
           <mxGeometry x="0" y="-40" width="2570" height="2600" as="geometry" />
         </mxCell>
@@ -72,7 +72,7 @@
 
         <!-- TITLE BLOCK — replace PROJECT_NAME and fill in metadata -->
         <mxCell id="title" parent="1"
-          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
+          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME Architecture Diagram&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
           style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
           vertex="1">
           <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry" />
@@ -380,7 +380,7 @@
 
         <!-- OUTER BORDER -->
         <mxCell id="f-border" parent="1"
-          style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;strokeWidth=3;"
+          style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;strokeWidth=3;"
           vertex="1">
           <mxGeometry x="0" y="0" width="2500" height="1200" as="geometry" />
         </mxCell>
@@ -394,7 +394,7 @@
 
         <!-- TITLE BLOCK — replace PROJECT_NAME -->
         <mxCell id="f-title" parent="1"
-          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
+          value="&lt;h1 style=&quot;text-align:left&quot;&gt;&lt;b style=&quot;font-size:32px;&quot;&gt;PROJECT_NAME Flow Diagram&lt;/b&gt;&lt;/h1&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Primary Request Flow&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Version: 1.0&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Date: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Creator: To be filled&lt;/div&gt;&lt;div style=&quot;text-align:left;font-size:20px;&quot;&gt;Reviewer: To be filled&lt;/div&gt;"
           style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;"
           vertex="1">
           <mxGeometry x="300.9" y="0" width="440" height="200" as="geometry" />

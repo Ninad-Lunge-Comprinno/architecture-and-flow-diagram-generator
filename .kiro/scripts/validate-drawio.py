@@ -102,7 +102,17 @@ def check_canvas_and_frame(model, issues, page_name="Architecture"):
         if 'strokeColor=#0066CC' in style:
             issues.append(f"[{page_name}] Border cell uses strokeColor=#0066CC (template chrome); use strokeColor=#000000")
         if 'fillColor=default' in style:
-            issues.append(f"[{page_name}] Border cell uses fillColor=default; use fillColor=none")
+            issues.append(f"[{page_name}] Border cell uses fillColor=default; use fillColor=#FFFFFF")
+        elif 'fillcolor=#ffffff' not in style.lower():
+            issues.append(f"[{page_name}] Border cell must be filled white (fillColor=#FFFFFF)")
+        first_id = next((c.get('id') for c in cells if c.get('id') not in ('0', '1')), None)
+        if first_id != border.get('id'):
+            issues.append(f"[{page_name}] Border cell must be the first cell on the page (z-order), "
+                          f"found '{first_id}' before it - it would hide content")
+    for tc in [c for c in cells if c.get('id') in ('title', 'f-title')]:
+        want = 'Flow Diagram' if tc.get('id') == 'f-title' else 'Architecture Diagram'
+        if want not in tc.get('value', ''):
+            issues.append(f"[{page_name}] title '{tc.get('id')}' must read '<Project> {want}'")
 
     # Check logo blob is not a truncated placeholder
     for cell in cells:

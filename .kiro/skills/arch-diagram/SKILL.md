@@ -159,7 +159,7 @@ decorative, inferred, and all-to-all arrows.
 1. Copy `references/skeleton-3az.drawio.xml` to the output path. The skeleton is
    committed at `.kiro/skills/arch-diagram/references/skeleton-3az.drawio.xml`. If
    it is missing, stop and tell the user — never rebuild the containers by hand.
-2. Replace `PROJECT_NAME` on both pages and fill in the metadata. The skeleton ships the baseline
+2. Replace `PROJECT_NAME` on both pages (the title reads `<Project> Architecture Diagram` on the Architecture page and `<Project> Flow Diagram` on the Flow page) and fill in the metadata. The skeleton ships the baseline
    (CloudWatch, CloudTrail, KMS in the regional row; IAM in the global band) live; Secrets Manager, ACM and ECR
    are commented optional slots — uncomment only what is requested or required (ECR whenever there is an
    ECS/EKS lane). For Scenario B/D (no VPC / non-AWS) delete the VPC, AZ, IGW and ALB cells.
@@ -208,7 +208,7 @@ genuinely excludes them (e.g. "Lane geometry" is N/A for a Lambda+S3 diagram).
 
 #### A. Canvas and frame
 1. **Canvas** — `mxGraphModel` has `pageWidth="850" pageHeight="1100"`. Outer
-   border: `rounded=0; strokeColor=#000000; strokeWidth=3; fillColor=none`.
+   border: `rounded=0; strokeColor=#000000; strokeWidth=3; fillColor=#FFFFFF` (white, first cell on the page).
    NOT `strokeColor=#0066CC` or `fillColor=default`. Architecture border: width `cloud_x + cloud_w + 113` (2570 for the shipped skeleton), height 2600; Flow border 2500×1200.
 2. **Logo** — brand/f-brand style includes `strokeColor=none`. Base64 blob is the
    full Comprinno logo copied from the skeleton. No truncated placeholder blob, never re-encoded from a local file.

@@ -64,9 +64,9 @@ N-AZ values: `igw_y = 190 + 230×(N−1)`, `users_y = 795 + igw_y`, `cf_cloud_y 
 
 | Cell | x | y | w | h | Notes |
 |------|---|---|---|---|-------|
-| border | 0 | -40 | `cloud_x + cloud_w + 113` (2570 for D1) | 2600 | `strokeWidth=3; fillColor=none; strokeColor=#000000` |
+| border | 0 | -40 | `cloud_x + cloud_w + 113` (2570 for D1) | 2600 | `strokeWidth=3; fillColor=#FFFFFF; strokeColor=#000000` (white, first cell: nothing is hidden) |
 | brand (logo) | 30 | 50 | 240.9 | 50 | copy the cell from the skeleton (embedded blob, `strokeColor=none`) |
-| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1: name, subtitle, Version / Date / Creator / Reviewer |
+| title block | 300.9 | 0 | 440 | 200 | text cell, parent=1: `<Project> Architecture Diagram` (Flow page: `<Project> Flow Diagram`), subtitle, Version / Date / Creator / Reviewer |
 
 ## Container hierarchy (x/y/h constants; widths from the wrap rule)
 
@@ -103,6 +103,13 @@ For other AZ counts use `igw_y = 190 + 230×(N−1)`.
 compute" (the old w=650 default is wrong). Gaps between subnet columns are 40.
 
 Icons inside subnets: 120×120, **y=65**, `x = (subnet_w − n×120 − (n−1)×40) / 2` (w=300, n=1 → 90; w=380, n=2 → 40 / 200).
+
+## Second regional row (more than ~12 regional services)
+
+A row holds `floor((region_w + 60) / 180)` icons. For more, add row 2 at region-relative `y = 65 + D` with `D = 230`
+and shift everything below the rows by D: `vpc.y = 260 + D`, region h `+ D`, cloud h `+ D`, border h `+ D`,
+`users_y`, CloudFront cloud-y and `vpc_abs_top` (ECR waypoint) all `+ D`. Both rows are centred with rule 2 (the
+validator checks the y=65 row; centre row 2 by the same formula). Put the services the lane edges target (ECR) in row 2.
 
 ## Users, CloudFront and the global band
 

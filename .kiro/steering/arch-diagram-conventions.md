@@ -51,6 +51,21 @@ make a diagram pass.
 - **Lambda is regional:** place it in the regional services row (`parent=region`). Only a VPC-attached Lambda
   (explicitly modelled, with its subnet ENI) belongs in a subnet.
 - **No orphan compute icons:** every EC2/ECS/EKS icon sits inside a subnet or lane, never floating as a VPC child.
+- **Title and frame:** the title is `<Project> Architecture Diagram` on the Architecture page and `<Project> Flow Diagram` on the Flow
+  page (page tabs stay `Architecture` and `Flow`). The saved file is `outputs/<project>/<project>-architecture-diagram.drawio.xml`. The outer border is filled white (`fillColor=#FFFFFF`) and is the first cell on the page, so nothing sits
+  behind it and nothing is hidden by it.
+- **Network Firewall** endpoints live in dedicated **firewall subnets** (`fw1..fw3`), the left-most column
+  (`fw | public | app | db`, cheatsheet rule 3), never in a public subnet. The public subnet holds NAT only.
+- **Node groups:** separate node groups in one EKS/ECS lane (for example general and GPU) are dashed Auto Scaling
+  group boxes nested in the lane, one stripe per group spanning every AZ the group uses; tasks are children of
+  their group (cheatsheet "Cluster lanes").
+- **Databases are Multi-AZ by default for production:** Aurora = Writer in db1 + Readers in db2/db3; ElastiCache =
+  Primary in db1 + Replicas in db2/db3 (dashed async replication). When the source estimate lists fewer instances,
+  say so in the summary: the extra instances are not costed.
+- **OpenSearch** is drawn as a regional service (regional row) unless the user says it runs in VPC mode, in which
+  case it goes in the db subnets.
+- **Regional row overflow:** the row holds at most `floor((region_w + 60) / 180)` icons. Beyond that, add a second
+  row and shift the VPC and everything below it down (cheatsheet "Second regional row"); do not drop services.
 - **S3 placement:** S3 as a CloudFront static-site origin goes in the global band. S3 as the primary
   object/document store used by EKS/ECS/Lambda goes in the regional row beside the compute, positioned to reflect
   its importance. The baseline row is for monitoring/security services only.
