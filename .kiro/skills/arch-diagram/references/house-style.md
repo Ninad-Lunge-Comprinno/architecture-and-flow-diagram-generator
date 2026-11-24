@@ -295,6 +295,7 @@ Use `<Array as="points">` with absolute coordinates to route around icons.
 | Global / edge (above Region) | `cloud` | CloudFront, Route 53, IAM, S3 (CloudFront static-site origin), WAF fronting CloudFront |
 | Regional services row | `region` | S3 (app data bucket), ACM, Secrets Manager, KMS, CloudWatch, CloudTrail, ECR, Lambda, WAF fronting an ALB |
 | VPC entry column | `vpc` | IGW, ALB |
+| Firewall subnet (optional) | inside AZ `fw` subnet container, left of the public subnet | Network Firewall endpoint |
 | Public subnet | inside AZ public-subnet container | NAT Gateway |
 | App subnet | inside AZ app-subnet container | (compute lives in the cluster/ASG lane over this column) |
 | DB subnet | inside AZ db-subnet container | RDS, Aurora, ElastiCache |

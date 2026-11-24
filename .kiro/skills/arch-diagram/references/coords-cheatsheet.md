@@ -18,7 +18,10 @@
    proportionally. No rounding of widths; the only rounding is `round_half_up` for centred rows.
 2. **Rows stay centred:** `start_x = round_half_up((container_w − (n×120 + (n−1)×60)) / 2)`, pitch 180 —
    regional row inside the Region (y=65), global band inside the Cloud (y=70). Recompute after every add/delete.
-3. **Subnet columns:** `public x=35 | 40 | app | 40 | db`, same in every AZ row. Width by icon count: 1 → 300,
+3. **Subnet columns:** `public x=35 | 40 | app | 40 | db`, same in every AZ row. **Optional firewall column**
+   (only when AWS Network Firewall is in scope): `fw x=35 w=300 | 40 | public | 40 | app | 40 | db`, subnet ids `fw1..fw3`,
+   endpoints are children of the `fw` subnet (never the public subnet); everything right of it shifts by 340 and the wrap
+   rule applies unchanged (`content_right` is still the right-most subnet edge). Width by icon count: 1 → 300,
    2 → 380, 3 → 520. **Lane exception:** `app_w = lane_w + 55` (35px left / 20px right gap), single or dual lanes.
 4. **Hierarchy (nested, scope = parent chain):** `cloud → region → vpc → az → subnet → icon`. Regional services
    `parent=region`; global services `parent=cloud`; the VPC is a child of the Region. All edges `parent="1"`.
@@ -93,6 +96,7 @@ For other AZ counts use `igw_y = 190 + 230×(N−1)`.
 |--------|--------|---|---|---|---|-------|
 | public | azN | 35 | 50 | 300 (1 icon) / 380 (2) | 250 | fill `#E9F3E6` stroke `#248814` |
 | app | azN | pub_x + pub_w + 40 | 50 | 300 (1 icon) / lane_w+55 (lane) | 250 | fill `#E6F2F8` stroke `#147EBA` |
+| fw (optional, Network Firewall endpoints) | azN | 35 | 50 | 300 | 250 | fill `#FCE9EB` stroke `#DD344C`; public/app/db x shift by 340 |
 | db | azN | app_x + app_w + 40 | 50 | 300 (1) / 380 (2) | 250 | fill `#CCE5FF` stroke `#147EBA` |
 
 **Consistency:** if public, app and db each hold one icon, all three are w=300. Never widen app "because it's
@@ -141,7 +145,10 @@ lane_h = (az3_y + 50 + 250 − 20) − lane_y = 1110   [N=3]
 
 - **Width:** `lane_w = 120 + 2×pad`, pad ≥ 60. Short label → 300 (single); label > 20 characters → 480 (then
   `app_w = 535`); dual lanes 240 each (`app_w = 2×240 + 20 + 55 = 555`).
-- **Tasks are children of the lane** (`parent=<lane id>`): `task_x = (lane_w − 120)/2` (single 90, dual 60),
+- **Node groups:** to separate node groups in one EKS/ECS lane, add dashed Auto Scaling group boxes
+  (`group_auto_scaling_group`, house-style §6) as children of the lane, one stripe per group, and parent the task icons to
+  the group (the validator accepts a node group nested in a lane as a task parent). Leave ~40px under the group header.
+- **Tasks are children of the lane (or of a node group inside it)** (`parent=<lane id>`): `task_x = (lane_w − 120)/2` (single 90, dual 60),
   `task_y = az_y + 175 − 60 − lane_y` → 25 / 485 / 945. Keep the AWS Fargate stencil; do not draw arrows between replicas.
 - **Dual-lane label clearance:** add +60 to `task_y` (85 / 545 / 1005) **only when the lane label wraps** (label
   > ~20 characters at fontSize 14 in a 240-wide lane). Short labels ("Amazon EKS") keep 25 / 485 / 945.

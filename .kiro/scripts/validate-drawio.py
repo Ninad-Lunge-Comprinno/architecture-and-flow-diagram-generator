@@ -12,6 +12,24 @@ from urllib.parse import unquote
 
 SHAPES_MD = Path(__file__).resolve().parents[1] / "skills/arch-diagram/references/shapes-aws.md"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# VALIDATOR THRESHOLDS  (change here, not scattered through the functions)
+# ─────────────────────────────────────────────────────────────────────────────
+MAX_EDGES = 15                      # check_edge_density: warn above this total
+MAX_EDGE_LABEL_CHARS = 30           # check_edge_labels: warn above this length
+ICON_MIN_GAP_PX = 20                # check_icon_overlaps: minimum gap between icons
+ROW_CENTRE_TOLERANCE_PX = 1.5       # check_container_wrap: row-centre deviation limit
+EDGE_STRAIGHT_TOLERANCE_PX = 2.0    # check_straight_edges: maximum jog before warning
+MIN_LOGO_BLOB_LEN = 100             # check_canvas_and_frame: truncated blob detection
+
+# Compute stencil substrings that must always be children of a lane
+TASK_STENCILS = (
+    "mxgraph.aws4.fargate",
+    "mxgraph.aws4.ec2",
+    "mxgraph.aws4.eks",
+    "mxgraph.aws4.ecs",
+)
+
 
 def load_valid_stencils():
     """Collect stencil names from the shapes-aws.md 'stencil' column."""
@@ -94,7 +112,7 @@ def check_canvas_and_frame(model, issues, page_name="Architecture"):
             m = re.search(r'image=data:image/png,([^;]+)', style)
             if m:
                 blob = m.group(1)
-                if len(blob) < 100:
+                if len(blob) < MIN_LOGO_BLOB_LEN:
                     issues.append(f"[{page_name}] Logo cell '{cell.get('id')}' has a truncated base64 blob "
                                   f"(len={len(blob)}) — copy from skeleton-3az.drawio.xml")
             if 'strokeColor=none' not in style:
@@ -129,7 +147,7 @@ def check_edge_density(model, issues, page_name="Architecture"):
         return
     edges = [c for c in model.iter('mxCell') if c.get('edge') == '1']
     solid = [e for e in edges if 'dashed=1' not in e.get('style', '')]
-    if len(edges) > 15:
+    if len(edges) > MAX_EDGES:
         issues.append(f"[{page_name}] High edge count: {len(edges)} edges ({len(solid)} solid, "
                       f"{len(edges)-len(solid)} dashed). Consider removing decorative edges.")
 
@@ -144,7 +162,7 @@ def check_edge_labels(model, issues, page_name="Architecture"):
         val = cell.get('value', '')
         # Strip HTML
         text = re.sub(r'<[^>]+>', '', val).strip()
-        if len(text) > 30:
+        if len(text) > MAX_EDGE_LABEL_CHARS:
             issues.append(f"[{page_name}] Edge '{cell.get('id')}' label is long ({len(text)} chars): "
                           f"'{text[:40]}…' — keep ≤4 words")
 
@@ -283,10 +301,6 @@ def check_flow_page(model, issues, page_name="Flow"):
     # (see check_scope_boxes), so editing in draw.io can never re-parent or drift them.
     by_id = {c.get('id'): c for c in cells}
 
-    def _g(c):
-        g = c.find('mxGeometry')
-        return None if g is None else {k: float(g.get(k) or 0) for k in ('x', 'y', 'width', 'height')}
-
     boxes = {}
     for cid in ('f-cloud', 'f-region', 'f-vpc'):
         c = by_id.get(cid)
@@ -297,7 +311,7 @@ def check_flow_page(model, issues, page_name="Flow"):
             issues.append(f"[{page_name}] scope box '{cid}' must be decorative (container=0), not a parent")
         if c.get('parent') != '1':
             issues.append(f"[{page_name}] scope box '{cid}' must have parent '1' (flat layout)")
-        boxes[cid] = _g(c)
+        boxes[cid] = _geo(c)
 
     def _inside(i, o):
         return i and o and i['x'] >= o['x'] and i['y'] >= o['y'] \
@@ -307,7 +321,7 @@ def check_flow_page(model, issues, page_name="Flow"):
             issues.append(f"[{page_name}] 'f-region' is not inside 'f-cloud'")
         if not _inside(boxes['f-vpc'], boxes['f-region']):
             issues.append(f"[{page_name}] 'f-vpc' is not inside 'f-region'")
-    t = _g(by_id['f-title']) if 'f-title' in by_id else None
+    t = _geo(by_id['f-title']) if 'f-title' in by_id else None
     if t and boxes.get('f-cloud') and t['y'] + t['height'] > boxes['f-cloud']['y']:
         issues.append(f"[{page_name}] title block overlaps 'f-cloud'")
     for c in cells:
@@ -317,38 +331,15 @@ def check_flow_page(model, issues, page_name="Flow"):
 
 
 def check_page_name_consistency(diagrams, issues):
-    """Checklist I37: Service names should be consistent across pages."""
-    # Collect service labels per page
-    page_labels = {}
-    for diag_name, model in diagrams.items():
-        if model is None:
-            continue
-        labels = set()
-        for cell in model.iter('mxCell'):
-            val = cell.get('value', '')
-            if val and 'resourceIcon' in cell.get('style', ''):
-                text = re.sub(r'<[^>]+>', '', val).strip()
-                if text:
-                    labels.add(text.lower())
-        page_labels[diag_name] = labels
+    """Checklist I37: Service names should be consistent across pages.
 
-    # NOTE: Consistency check disabled for now.
-    # Rule #15 says task icons should be "Fargate Task"/"EC2 Node" (task type).
-    # Rule #37 says service labels should be identical on both pages.
-    # These rules conflict: Architecture has task icons inside lanes with task-type labels,
-    # but Flow page has the cluster as a single icon (e.g., "EKS" or "ECS Fargate").
-    # Until this is clarified, we skip the consistency check to avoid false positives.
-    #
-    # if len(page_labels) == 2 and 'Architecture' in page_labels and 'Flow' in page_labels:
-    #     arch_labels = page_labels.get('Architecture', set())
-    #     flow_labels = page_labels.get('Flow', set())
-    #     compute_in_arch_not_flow = {
-    #         l for l in arch_labels if any(k in l for k in ['eks', 'ecs', 'fargate', 'lambda'])
-    #         and l not in flow_labels
-    #     }
-    #     if compute_in_arch_not_flow:
-    #         issues.append(f"[Consistency] Compute services on Architecture page not found on Flow page: "
-    #                       f"{compute_in_arch_not_flow}. Verify both pages are consistent.")
+    TODO: This check is intentionally disabled (design conflict).
+    Rule #15 says task icons should use task-type labels ("Fargate Task"/"EC2 Node").
+    Rule #37 says service labels should be identical on both pages.
+    These conflict: Architecture has task icons inside lanes with task-type labels,
+    but Flow has the cluster as a single icon (e.g. "ECS Fargate").
+    Re-enable once the labelling convention is resolved.
+    """
 
 
 def check_icon_overlaps(model, issues, page_name="Architecture"):
@@ -358,30 +349,6 @@ def check_icon_overlaps(model, issues, page_name="Architecture"):
 
     # Build parent hierarchy to compute absolute coords
     cells = {c.get('id'): c for c in model.iter('mxCell')}
-
-    def get_abs_coords(cell_id, visited=None):
-        """Recursively compute absolute x,y from parent chain."""
-        if visited is None:
-            visited = set()
-        if cell_id in visited:
-            return (0, 0)
-        visited.add(cell_id)
-
-        cell = cells.get(cell_id)
-        if cell is None:
-            return (0, 0)
-
-        geo = cell.find('mxGeometry')
-        x = float(geo.get('x', 0)) if geo is not None else 0
-        y = float(geo.get('y', 0)) if geo is not None else 0
-
-        parent_id = cell.get('parent')
-        if parent_id and parent_id != '1' and parent_id != '0':
-            px, py = get_abs_coords(parent_id, visited)
-            x += px
-            y += py
-
-        return (x, y)
 
     # Collect icons with their absolute bounding boxes
     # EXCLUDE badges (45x45) — they intentionally overlap lane borders
@@ -404,7 +371,7 @@ def check_icon_overlaps(model, issues, page_name="Architecture"):
         if is_badge:
             continue
 
-        abs_x, abs_y = get_abs_coords(cell_id)
+        abs_x, abs_y = _abs_xy(cells, cell)
 
         icons.append({
             'id': cell_id,
@@ -417,7 +384,7 @@ def check_icon_overlaps(model, issues, page_name="Architecture"):
         })
 
     # Check for overlaps (any two icons)
-    min_gap = 20  # Minimum gap between icons
+    min_gap = ICON_MIN_GAP_PX  # Minimum gap between icons
     for i, icon1 in enumerate(icons):
         for icon2 in icons[i+1:]:
             # Check if bounding boxes overlap (with minimum gap)
@@ -549,12 +516,19 @@ def check_unique_ids_and_parents(model, issues, page_name):
             issues.append(f"[{page_name}] Cell '{c.get('id')}' has dangling parent '{p}'")
 
 
-def _abs_xy(cells, c):
+def _abs_xy(cells, c, _visited=None):
     x = y = 0.0
+    if _visited is None:
+        _visited = set()
     while c is not None and c.get("id") not in ("0", "1"):
+        cid = c.get("id")
+        if cid in _visited:
+            break
+        _visited.add(cid)
         g = c.find("mxGeometry")
         if g is not None:
-            x += float(g.get("x") or 0); y += float(g.get("y") or 0)
+            x += float(g.get("x") or 0)
+            y += float(g.get("y") or 0)
         c = cells.get(c.get("parent"))
     return x, y
 
@@ -578,7 +552,7 @@ def check_container_wrap(model, issues, page_name="Architecture"):
     right = 0.0
     for c in cells.values():
         par = cells.get(c.get("parent"))
-        if par is not None and par in azs and _geo(c) and (c.get("id") or "").startswith(("pub", "app", "db")):
+        if par is not None and par in azs and _geo(c) and (c.get("id") or "").startswith(("fw", "pub", "app", "db")):
             right = max(right, _geo(c)["x"] + _geo(c)["width"])
     if right == 0:
         return
@@ -605,7 +579,7 @@ def check_container_wrap(model, issues, page_name="Architecture"):
         icons = row(parent, y)
         if icons:
             mid = (min(i["x"] for i in icons) + max(i["x"] + 120 for i in icons)) / 2
-            if abs(mid - cw / 2) > 1.5:
+            if abs(mid - cw / 2) > ROW_CENTRE_TOLERANCE_PX:
                 issues.append(f"[{page_name}] {label} is not centred: group centre {mid:.1f} vs container centre "
                               f"{cw / 2:.1f}; start_x must be round_half_up((width - (n*120 + (n-1)*60))/2)")
 
@@ -640,26 +614,52 @@ def check_lane_geometry(model, issues, page_name="Architecture"):
                 issues.append(f"[{page_name}] lane gaps inside the app subnet are {gl:.0f}px left / {gr:.0f}px right; "
                               f"rule is 35 / 20 (app_w = lane_w + 55; dual lanes: 2*240 + 20 + 55)")
     lane_ids = {l.get("id") for l in lanes}
+    # Node groups: an Auto Scaling group box nested inside a lane (e.g. a general and a GPU node group in one
+    # EKS lane) is a valid parent for task icons. It is not a lane itself, so it is not part of the gap check.
+    def _in_lane(c):
+        p = cells.get(c.get("parent"))
+        while p is not None and p.get("id") not in ("1", "0"):
+            if p.get("id") in lane_ids:
+                return True
+            p = cells.get(p.get("parent"))
+        return False
+    task_parents = lane_ids | {c.get("id") for c in cells.values()
+                               if "group_auto_scaling_group" in (c.get("style") or "") and _in_lane(c)}
     for c in cells.values():
-        if "mxgraph.aws4.fargate" in (c.get("style") or "") and c.get("parent") not in lane_ids:
-            issues.append(f"[{page_name}] task icon '{c.get('id')}' has parent '{c.get('parent')}'; "
-                          f"tasks must be children of the lane ({sorted(lane_ids)})")
+        if not any(s in (c.get("style") or "") for s in TASK_STENCILS):
+            continue
+        if c.get("parent") in task_parents:
+            continue
+        # Exclude badges: 45x45 icons that intentionally sit on lane borders
+        cid = c.get("id") or ""
+        geo = _geo(c)
+        is_badge = "badge" in cid.lower() or (geo is not None and geo["width"] <= 50 and geo["height"] <= 50)
+        if is_badge:
+            continue
+        issues.append(f"[{page_name}] task icon '{cid}' has parent '{c.get('parent')}'; "
+                      f"tasks must be children of the lane or a node group in it ({sorted(task_parents)})")
 
 
 def check_subnet_columns(model, issues, page_name="Architecture"):
-    """pub | 40 | app | 40 | db columns, identical in every AZ row."""
+    """[fw | 40 |] pub | 40 | app | 40 | db columns, identical in every AZ row. The optional firewall column
+    (AWS Network Firewall endpoint subnets) is the left-most column: fw x=35, then pub at fw_right+40."""
     cells = {c.get("id"): c for c in model.iter("mxCell")}
     rows = {}
     for c in cells.values():
         par = cells.get(c.get("parent"))
         if par is None or "group_availability_zone" not in (par.get("style") or ""):
             continue
-        kind = next((k for k in ("pub", "app", "db") if (c.get("id") or "").startswith(k)), None)
+        kind = next((k for k in ("fw", "pub", "app", "db") if (c.get("id") or "").startswith(k)), None)
         if kind and _geo(c):
             rows.setdefault(par.get("id"), {})[kind] = (_geo(c)["x"], _geo(c)["width"])
     first = None
     for az, r in sorted(rows.items()):
         if {"pub", "app", "db"} <= set(r):
+            if "fw" in r:
+                if abs(r["fw"][0] - 35) > 1:
+                    issues.append(f"[{page_name}] {az}: firewall subnet x must be 35 (left-most column)")
+                if abs(r["pub"][0] - (r["fw"][0] + r["fw"][1] + 40)) > 1:
+                    issues.append(f"[{page_name}] {az}: public subnet x must be fw_right+40")
             if abs(r["app"][0] - (r["pub"][0] + r["pub"][1] + 40)) > 1:
                 issues.append(f"[{page_name}] {az}: app subnet x must be pub_right+40")
             if abs(r["db"][0] - (r["app"][0] + r["app"][1] + 40)) > 1:
@@ -690,7 +690,7 @@ def check_straight_edges(model, issues, page_name="Architecture"):
         sh, th = _geo(src)["height"], _geo(tgt)["height"]
         y1 = sy + (0.5 if ey is None else ey) * sh
         y2 = ty + (0.5 if ny is None else ny) * th
-        if abs(y1 - y2) > 2:
+        if abs(y1 - y2) > EDGE_STRAIGHT_TOLERANCE_PX:
             issues.append(f"[{page_name}] edge '{e.get('id')}' is not straight: exit y {y1:.1f} vs entry y {y2:.1f} "
                           f"(dy {y1 - y2:+.1f}px). Use exitY={(y2 - sy) / sh:.3f} (3 decimals).")
 
@@ -839,7 +839,8 @@ def main():
         issues.append("[Flow] Could not parse mxGraphModel from Flow page")
 
     # 5. Cross-page consistency checks
-    check_page_name_consistency(page_models, issues)
+    # TODO: cross-page label consistency check is disabled (design conflict: arch uses
+    #        task-type labels, flow uses service-type labels). See check_page_name_consistency.
 
     # 6. Report results
     warned = [f for f in issues if any(a in f.lower() for a in allow)]

@@ -6,7 +6,10 @@ optional WAF / Lambda / NAT). Expected numbers come from the skeleton's own geom
 re-implemented here, so the tests stay valid if constants change.
 Usage: python3 .kiro/scripts/test-validator.py
 """
-import re, subprocess, sys, tempfile
+import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +48,11 @@ def uncomment_lane(xml):
     lines = xml.split("\n")
     i = next(n for n, l in enumerate(lines) if 'id="ecslane"' in l)
     a = i - 1
-    assert lines[a].strip() == "<!--", "lane block comment start not found"
+    if lines[a].strip() != "<!--":
+        raise ValueError(
+            f"skeleton-3az.drawio.xml: expected '<!--' on line {a + 1} before ecslane, "
+            f"found: {lines[a]!r}. Test fixture is out of sync with the skeleton."
+        )
     b = next(n for n in range(i, len(lines)) if lines[n].strip() == "-->")
     return "\n".join(lines[:a] + lines[a + 1:b] + lines[b + 1:])
 
@@ -94,6 +101,42 @@ def relayout(xml, pub_w=300, app_w=355, db_w=300):
     return set_geom(xml, "iam", x=rhu((cld_w - 120) / 2))
 
 
+def with_fw(xml, rewrap=True, pub_x=None):
+    """Add the optional firewall-subnet column (fw | pub | app | db): fw x=35 w=300, everything else shifts by 340."""
+    shift = 340
+    for n in (1, 2, 3):
+        blk = re.search(r'<mxCell id="pub%d".*?</mxCell>' % n, xml, re.S).group(0)
+        fw = blk.replace('id="pub%d"' % n, 'id="fw%d"' % n).replace("public-subnet-%d" % n, "firewall-subnet-%d" % n)
+        xml = xml.replace(blk, fw + "\n        " + blk, 1)
+        xml = set_geom(xml, f"pub{n}", x=pub_x if pub_x is not None else 35 + shift)
+        for k in ("app", "db"):
+            xml = set_geom(xml, f"{k}{n}", x=geom(f"{k}{n}", xml)[0] + shift)
+        if rewrap:
+            xml = set_geom(xml, f"az{n}", width=geom(f"az{n}", xml)[2] + shift)
+    if rewrap:
+        for cid in ("vpc", "region", "cloud", "border"):
+            xml = set_geom(xml, cid, width=geom(cid, xml)[2] + shift)
+        reg_w = geom("region", xml)[2]
+        for k, cid in enumerate(("cloudwatch", "cloudtrail", "kms")):
+            xml = set_geom(xml, cid, x=rhu((reg_w - 480) / 2) + 180 * k)
+        xml = set_geom(xml, "iam", x=rhu((geom("cloud", xml)[2] - 120) / 2))
+    if 'id="ecslane"' in xml:
+        xml = set_geom(xml, "ecslane", x=geom("ecslane", xml)[0] + shift)
+        xml = set_geom(xml, "ecsbadge", x=geom("ecsbadge", xml)[0] + shift)
+    return xml
+
+
+ASG = ('        <mxCell id="{i}" parent="{p}" value="Node Group" style="sketch=0;outlineConnect=0;html=1;container=1;'
+       'shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_auto_scaling_group;strokeColor=#D86613;fillColor=none;'
+       'dashed=1;" vertex="1"><mxGeometry x="{x}" y="60" width="200" height="1000" as="geometry" /></mxCell>\n')
+
+
+def with_node_group(xml, group_parent="ecslane"):
+    """Re-parent the Fargate tasks into an Auto Scaling group box nested in `group_parent`."""
+    xml = xml.replace("</root>", ASG.format(i="ng1", p=group_parent, x=20) + "    </root>", 1)
+    return re.sub(r'(id="ecs[123]" parent=")ecslane"', r'\1ng1"', xml)
+
+
 def with_regional_waf(xml, edge=False):
     """Add a regional WAF as the 4th regional-row icon and re-centre the row (start_x from the wrap rule)."""
     reg_w = geom("region", xml)[2]
@@ -129,10 +172,15 @@ def with_flow_slots(xml, move=None):
 
 
 def run(xml, *args):
+    import os
     with tempfile.NamedTemporaryFile("w", suffix=".drawio.xml", delete=False, encoding="utf-8") as f:
         f.write(xml)
-    r = subprocess.run([sys.executable, str(VALIDATOR), f.name, *args], capture_output=True, text=True)
-    return r.returncode, r.stdout
+        tmp = f.name
+    try:
+        r = subprocess.run([sys.executable, str(VALIDATOR), tmp, *args], capture_output=True, text=True)
+        return r.returncode, r.stdout
+    finally:
+        os.unlink(tmp)
 
 
 def main():
@@ -145,6 +193,11 @@ def main():
         ("D3 2-icon public subnet via the wrap rule passes", relayout(SKEL, pub_w=380), None, ()),
         ("D3 with the lane block re-based to app_x=455 passes", set_geom(relayout(LANE, pub_w=380), "ecslane", x=1010), None, ()),
         ("2-icon public subnet but containers not re-wrapped", set_geom(SKEL, "pub1", width=380), "app subnet x must be pub_right+40", ()),
+        ("firewall column (fw | pub | app | db) via the wrap rule passes", with_fw(ok), None, ()),
+        ("firewall column but containers not re-wrapped", with_fw(ok, rewrap=False), "wrap rule", ()),
+        ("public subnet not at fw_right+40", with_fw(ok, pub_x=400), "public subnet x must be fw_right+40", ()),
+        ("tasks in a node group nested in the lane pass", with_node_group(ok), None, ()),
+        ("tasks in a node group outside any lane fail", with_node_group(ok, group_parent="vpc"), "must be children of the lane", ()),
         ("exitY off by 0.005 (>2px jog)", fixture(3, y=f"{exit_y(3) + 0.005:.3f}"), "not straight", ()),
         ("exitY rounded to 2 decimals jogs", fixture(3, y=f"{exit_y(3) + 0.01:.3f}"), "not straight", ()),
         ("lane gaps 27/27 instead of 35/20", set_geom(ok, "ecslane", x=geom("ecslane", ok)[0] - 8, width=geom("ecslane", ok)[2] + 1), "lane gaps", ()),
