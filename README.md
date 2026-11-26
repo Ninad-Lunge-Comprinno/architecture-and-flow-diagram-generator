@@ -9,9 +9,10 @@ Diagrams are authored directly by Kiro's reasoning — no code is run at
 generation time. The agent reads the requirements, references, and template,
 then writes valid Draw.io XML.
 
-**Validation:** A Python validator (`.kiro/scripts/validate-drawio.py`) is
-available to check generated diagrams for common issues. The agent does not
-run this automatically — it's a manual QA tool:
+**Validation:** A Python validator (`.kiro/scripts/validate-drawio.py`) checks
+generated diagrams for structural issues. The agent runs it automatically as the
+last step of its workflow (step 8 in SKILL.md), and CI runs it on every push.
+To run it manually:
 ```bash
 python3 .kiro/scripts/validate-drawio.py outputs/<project>/<project>.drawio.xml
 ```
@@ -35,12 +36,13 @@ flow diagram examples/           # reference flow-page examples
 ├── skills/arch-diagram/
 │   ├── SKILL.md                 # procedure the agent follows
 │   └── references/
+│       ├── coords-cheatsheet.md # geometry constants — single source of truth for all coordinates
 │       ├── house-style.md       # hierarchy, colours, title block, edges
 │       ├── shapes-aws.md        # AWS service catalog
 │       ├── shapes-azure.md      # Azure starter catalog
 │       ├── shapes-gcp.md        # GCP starter catalog
-│       ├── spec-schema.md       # YAML spec format (reference only)
-│       └── mcp-options.md       # optional MCP integrations
+│       ├── mcp-options.md       # optional MCP integrations
+│       └── skeleton-3az.drawio.xml  # blank 3-AZ template; agent copies this to start every diagram
 └── steering/
     └── arch-diagram-conventions.md   # always-on rules + pointer to skill
 ```
@@ -119,11 +121,12 @@ All steering is in `.kiro/skills/arch-diagram/references/`:
 
 | File | Purpose |
 |---|---|
+| `coords-cheatsheet.md` | Geometry constants and formulas — the only authoritative source for all coordinate values |
+| `skeleton-3az.drawio.xml` | Blank 3-AZ template; the agent copies this to start every diagram |
 | `house-style.md` | Colour palette, boundary hierarchy, edge rules, title block |
 | `shapes-aws.md` | AWS icon keys and stencil names |
 | `shapes-azure.md` | Azure starter icon catalog |
 | `shapes-gcp.md` | GCP starter icon catalog |
-| `spec-schema.md` | YAML spec format — used when a spec is supplied as input |
 | `mcp-options.md` | How to use optional Draw.io or AWS MCPs |
 
 To add a service to the catalog, add a row to the relevant `shapes-*.md` file.
@@ -134,16 +137,12 @@ The stencil naming convention is:
 
 ## Custom agent setup
 
-For a custom agent that needs access to this skill, add to its config:
-
-```json
-{
-  "resources": [
-    "skill://.kiro/skills/*/SKILL.md",
-    "file://.kiro/steering/**/*.md"
-  ]
-}
-```
+To wire up a new agent that uses this skill, use `arch-diagram.json` as a
+starting point — it already declares the correct tools, permissions, and
+resources (SKILL.md, coords-cheatsheet.md, skeleton-3az.drawio.xml, and the
+steering conventions). At minimum a custom agent needs those four resources;
+omitting `coords-cheatsheet.md` or `skeleton-3az.drawio.xml` will leave the
+agent without the geometry constants and the blank template it builds from.
 
 ---
 

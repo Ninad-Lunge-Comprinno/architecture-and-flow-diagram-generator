@@ -39,9 +39,9 @@ def set_geom(xml, cid, **kw):
     def fix(m):
         blk = m.group(0)
         for k, v in kw.items():
-            blk = re.sub(r'(<mxGeometry[^>]*?\b%s=")[-\d.]+(")' % k, r'\g<1>%s\2' % v, blk, 1)
+            blk = re.sub(r'(<mxGeometry[^>]*?\b%s=")[-\d.]+(")' % k, r'\g<1>%s\2' % v, blk, count=1)
         return blk
-    return re.sub(r'<mxCell id="%s".*?</mxCell>' % cid, fix, xml, 1, flags=re.S)
+    return re.sub(r'<mxCell id="%s".*?</mxCell>' % cid, fix, xml, count=1, flags=re.S)
 
 
 def uncomment_lane(xml):
@@ -210,7 +210,7 @@ def main():
         ("regional row not re-centred", set_geom(ok, "kms", x=geom("kms", ok)[0] + 120), "regional services row is not centred", ()),
         ("global band not re-centred", set_geom(ok, "iam", x=geom("iam", ok)[0] + 200), "global band is not centred", ()),
         ("flow VPC box missing", re.sub(r'<mxCell id="f-vpc".*?</mxCell>\n', "", ok, flags=re.S), "missing scope box 'f-vpc'", ()),
-        ("flow scope box is a container", re.sub(r'(<mxCell id="f-region".*?style="[^"]*)container=0', r'\1container=1', ok, 1, flags=re.S), "must be decorative", ()),
+        ("flow scope box is a container", re.sub(r'(<mxCell id="f-region".*?style="[^"]*)container=0', r'\1container=1', ok, count=1, flags=re.S), "must be decorative", ()),
         ("flow node parented to a box", ok.replace('id="f-task" parent="1"', 'id="f-task" parent="f-vpc"'), "Flow page is flat", ()),
         ("border not filled white", ok.replace('id="border" parent="1"\n          style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF', 'id="border" parent="1"\n          style="rounded=0;whiteSpace=wrap;html=1;fillColor=none', 1), "filled white", ()),
         ("title without 'Architecture Diagram'", ok.replace("PROJECT_NAME Architecture Diagram", "PROJECT_NAME", 1), "Architecture Diagram", ()),
@@ -225,10 +225,10 @@ def main():
         ("WAF fronting an ALB, regional row, passes", with_regional_waf(ok), None, ()),
         ("WAF with parent=1 fails", add_icon(ok, i="waf", p="1", l="AWS WAF", f="#DD344C", r="waf", x=1300, y=65), "WAF 'waf' has parent '1'", ()),
         ("WAF edge on the Architecture page", with_regional_waf(ok, edge=True), "Flow page only", ()),
-        ("VPC re-parented without shifting (drift)", re.sub(r'(<mxCell id="vpc" parent=")region"', r'\1cloud"', ok, 1), "not visually inside", ()),
-        ("KMS in the global band", re.sub(r'(<mxCell id="kms" parent=")region"', r'\1cloud"', ok, 1), "regional service", ()),
-        ("ALB outside the VPC", re.sub(r'(<mxCell id="alb" parent=")vpc"', r'\1cloud"', ok, 1), "VPC-bound but sits outside", ()),
-        ("IAM inside the Region box", re.sub(r'(<mxCell id="iam" parent=")cloud"', r'\1region"', ok, 1), "global service", ()),
+        ("VPC re-parented without shifting (drift)", re.sub(r'(<mxCell id="vpc" parent=")region"', r'\1cloud"', ok, count=1), "not visually inside", ()),
+        ("KMS in the global band", re.sub(r'(<mxCell id="kms" parent=")region"', r'\1cloud"', ok, count=1), "regional service", ()),
+        ("ALB outside the VPC", re.sub(r'(<mxCell id="alb" parent=")vpc"', r'\1cloud"', ok, count=1), "VPC-bound but sits outside", ()),
+        ("IAM inside the Region box", re.sub(r'(<mxCell id="iam" parent=")cloud"', r'\1region"', ok, count=1), "global service", ()),
     ]
     nv = no_entry(SKEL)          # VPC container kept, no IGW/ALB, no ECS tasks
     cases += [

@@ -21,3 +21,7 @@ outputs/
 # Stale working directories
 renderdir/
 render_out/
+
+# Dev artifacts (patch files, backup configs)
+*.patch
+*.bak

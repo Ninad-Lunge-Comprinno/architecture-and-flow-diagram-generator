@@ -6,8 +6,9 @@ Markdown steering files and visual references. This document covers the agent
 workflow, the house-style rules the agent applies, the emitted draw.io XML
 structure, and how the agent self-checks its output.
 
-A Python validator (`.kiro/scripts/validate-drawio.py`) is available for manual
-QA but is not run automatically during generation.
+A Python validator (`.kiro/scripts/validate-drawio.py`) checks generated diagrams
+for structural issues. The agent runs it automatically as the last step of its
+workflow, and CI runs it on every push.
 
 ---
 
